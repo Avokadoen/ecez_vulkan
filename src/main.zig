@@ -2,7 +2,7 @@ const std = @import("std");
 const ecez = @import("ecez");
 const glfw = @import("glfw");
 
-const vk_dispatch = @import("vk_dispatch.zig");
+const RenderContext = @import("RenderContext.zig");
 
 const PositionComp = struct {
     xyz: [3]f32,
@@ -24,8 +24,9 @@ pub fn main() !void {
             std.log.err("leak detected", .{});
         }
     }
+    const allocator = gpa.allocator();
 
-    var world = try ecez.WorldBuilder().WithArchetypes(.{MovableArch}).init(gpa.allocator(), .{});
+    var world = try ecez.WorldBuilder().WithArchetypes(.{MovableArch}).init(allocator, .{});
     defer world.deinit();
 
     // init glfw
@@ -33,8 +34,14 @@ pub fn main() !void {
     defer glfw.terminate();
 
     // Create our window
-    const window = try glfw.Window.create(640, 480, "ecez-vulkan", null, null, .{});
+    const window = try glfw.Window.create(640, 480, "ecez-vulkan", null, null, .{
+        .client_api = .no_api,
+        .resizable = false,
+    });
     defer window.destroy();
+
+    const context = try RenderContext.init(allocator);
+    defer context.deinit();
 
     // Wait for the user to close the window.
     while (!window.shouldClose()) {
