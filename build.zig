@@ -30,7 +30,7 @@ pub fn build(b: *std.build.Builder) void {
 
     // link glfw
     exe.addPackage(glfw.pkg);
-    glfw.link(b, exe, .{});
+    glfw.link(b, exe, .{}) catch unreachable;
 
     // Create a step that generates vk.zig (stored in zig-cache) from the provided vulkan registry.
     const gen = vkgen.VkGenerateStep.init(b, thisDir() ++ "/deps/vk.xml", "vk.zig");

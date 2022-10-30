@@ -12,11 +12,6 @@ const VelocityComp = struct {
     xyz: [3]f32,
 };
 
-const MovableArch = struct {
-    pos: PositionComp,
-    vel: VelocityComp,
-};
-
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer {
@@ -26,7 +21,7 @@ pub fn main() !void {
     }
     const allocator = gpa.allocator();
 
-    var world = try ecez.WorldBuilder().WithArchetypes(.{MovableArch}).init(allocator, .{});
+    var world = try ecez.WorldBuilder().WithComponents(.{ PositionComp, VelocityComp }).init(allocator, .{});
     defer world.deinit();
 
     // init glfw
@@ -46,7 +41,5 @@ pub fn main() !void {
     // Wait for the user to close the window.
     while (!window.shouldClose()) {
         try glfw.pollEvents();
-
-        try world.dispatch();
     }
 }
