@@ -8,6 +8,8 @@ const glfw = @import("glfw");
 
 const RenderContext = @This();
 
+const is_debug_build = builtin.mode == .Debug;
+
 vkb: BaseDispatch,
 vki: InstanceDispatch,
 
@@ -15,7 +17,10 @@ vki: InstanceDispatch,
 debug_messenger: ?vk.DebugUtilsMessengerEXT,
 
 instance: vk.Instance,
-// physical_device: vk.PhysicalDevice,
+physical_device: vk.PhysicalDevice,
+
+queue_family_indices: QueueFamilyIndices,
+
 // device: vk.Device,
 
 pub fn init(allocator: Allocator) !RenderContext {
@@ -49,7 +54,7 @@ pub fn init(allocator: Allocator) !RenderContext {
 
         const instance_info = vk.InstanceCreateInfo{
             .flags = .{},
-            .p_next = if (builtin.mode != .Debug) null else &debug_message_info,
+            .p_next = if (is_debug_build) null else &debug_message_info,
             .p_application_info = &application_info,
             .enabled_layer_count = @intCast(u32, validation_layers.len),
             .pp_enabled_layer_names = validation_layers.ptr,
@@ -63,17 +68,21 @@ pub fn init(allocator: Allocator) !RenderContext {
 
     // register message callback in debug
     const debug_messenger = try setupDebugMessenger(vki, instance);
+    const physical_device = try selectPhysicalDevice(allocator, instance, vki);
+    const queue_family_indices = try QueueFamilyIndices.init(allocator, vki, physical_device);
 
     return RenderContext{
         .vkb = vkb,
         .vki = vki,
         .debug_messenger = debug_messenger,
         .instance = instance,
+        .physical_device = physical_device,
+        .queue_family_indices = queue_family_indices,
     };
 }
 
 pub fn deinit(self: RenderContext) void {
-    if (builtin.mode == .Debug) {
+    if (is_debug_build) {
         // this is never null in debug builds so we can "safely" unwrap the value
         const debug_messenger = self.debug_messenger.?;
         self.vki.destroyDebugUtilsMessengerEXT(self.instance, debug_messenger, null);
@@ -82,6 +91,142 @@ pub fn deinit(self: RenderContext) void {
     self.vki.destroyInstance(self.instance, null);
 }
 
+// TODO: verify that it's sane to panic instead of error return
+inline fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki: InstanceDispatch) !vk.PhysicalDevice {
+    var device_count: u32 = undefined;
+    _ = try vki.enumeratePhysicalDevices(instance, &device_count, null);
+
+    if (device_count == 0) {
+        std.debug.panic("failed to find any GPU with vulkan support", .{});
+    }
+
+    const devices = try allocator.alloc(vk.PhysicalDevice, device_count);
+    defer allocator.free(devices);
+
+    _ = try vki.enumeratePhysicalDevices(instance, &device_count, devices.ptr);
+
+    var selected_index: usize = 0;
+    var selected_device = devices[selected_index];
+    var selected_queue_families = try QueueFamilyIndices.init(allocator, vki, selected_device);
+    while (selected_queue_families.is_complete() == false) {
+        selected_index += 1;
+        if (selected_index >= devices.len) {
+            std.debug.panic("failed to find GPU with required queues", .{});
+        }
+
+        selected_device = devices[selected_index];
+        selected_queue_families = try QueueFamilyIndices.init(allocator, vki, selected_device);
+    }
+
+    var selected_device_properties: vk.PhysicalDeviceProperties = vki.getPhysicalDeviceProperties(selected_device);
+    var selected_device_features: vk.PhysicalDeviceFeatures = vki.getPhysicalDeviceFeatures(selected_device);
+
+    device_search: for (devices[1..]) |current_device| {
+        var current_queue_families = try QueueFamilyIndices.init(allocator, vki, current_device);
+        if (current_queue_families.is_complete() == false) {
+            continue :device_search;
+        }
+
+        var current_device_properties: vk.PhysicalDeviceProperties = vki.getPhysicalDeviceProperties(current_device);
+        // if we have a discrete GPU and other GPU is not discrete then we do not select it
+        if (selected_device_properties.device_type == .discrete_gpu and current_device_properties.device_type != .discrete_gpu) {
+            continue :device_search;
+        }
+
+        {
+            var selected_limit_score: u32 = 0;
+            var current_limit_score: u32 = 0;
+
+            const limits_info = @typeInfo(vk.PhysicalDeviceLimits).Struct;
+            limit_grading: inline for (limits_info.fields) |field| {
+                // TODO: check arrays and flags as well
+                if (field.field_type != u32 and field.field_type != f32) {
+                    continue :limit_grading;
+                }
+
+                const selected_limit_field = @field(selected_device_properties.limits, field.name);
+                const current_limit_field = @field(current_device_properties.limits, field.name);
+
+                selected_limit_score += @intCast(u32, @boolToInt(selected_limit_field > current_limit_field));
+                current_limit_score += @intCast(u32, @boolToInt(selected_limit_field < current_limit_field));
+            }
+
+            if (current_limit_score < selected_limit_score) {
+                continue :device_search;
+            }
+        }
+
+        var current_device_features: vk.PhysicalDeviceFeatures = vki.getPhysicalDeviceFeatures(current_device);
+        var selected_feature_sum: u32 = 0;
+        var current_feature_sum: u32 = 0;
+        const feature_info = @typeInfo(vk.PhysicalDeviceFeatures).Struct;
+        inline for (feature_info.fields) |field| {
+            if (field.field_type != vk.Bool32) {
+                @compileError("unexpected field type"); // something has changed in vk wrapper
+            }
+
+            selected_feature_sum += @intCast(u32, @field(selected_device_features, field.name));
+            current_feature_sum += @intCast(u32, @field(current_device_features, field.name));
+        }
+
+        // if current should be selected
+        if (selected_feature_sum < current_feature_sum) {
+            selected_device = current_device;
+            selected_device_properties = current_device_properties;
+            selected_device_features = current_device_features;
+            selected_queue_families = current_queue_families;
+        }
+    }
+
+    if (is_debug_build) {
+        std.debug.print("\nselected gpu: {s}\n", .{selected_device_properties.device_name});
+    }
+
+    return selected_device;
+}
+
+pub const QueueFamilyIndices = struct {
+    graphics_family: ?u32,
+
+    pub fn init(allocator: Allocator, vki: InstanceDispatch, physical_device: vk.PhysicalDevice) !QueueFamilyIndices {
+        const queue_families_properties = blk: {
+            var family_count: u32 = undefined;
+            vki.getPhysicalDeviceQueueFamilyProperties(physical_device, &family_count, null);
+            if (family_count == 0) {
+                return error.FailedToRetrieveQueueFamilies;
+            }
+
+            // TODO: use inline switch here to avoid alloc and used stack memory instead :)
+            //       we need stage 2 to do this ...
+            //       we can then remove allocator from signature and error return!
+            const families = try allocator.alloc(vk.QueueFamilyProperties, family_count);
+            vki.getPhysicalDeviceQueueFamilyProperties(physical_device, &family_count, families.ptr);
+
+            break :blk families;
+        };
+        defer allocator.free(queue_families_properties);
+
+        var queues: QueueFamilyIndices = QueueFamilyIndices{
+            .graphics_family = null,
+        };
+
+        const graphics_bit = vk.QueueFlags{ .graphics_bit = true };
+        for (queue_families_properties) |property, i| {
+            if ((property.queue_flags.contains(graphics_bit))) {
+                queues.graphics_family = @intCast(u32, i);
+
+                if (queues.is_complete()) break;
+            }
+        }
+
+        return queues;
+    }
+
+    pub inline fn is_complete(self: QueueFamilyIndices) bool {
+        return self.graphics_family != null;
+    }
+};
+
 const BaseDispatch = vk.BaseWrapper(.{
     .createInstance = true,
     .enumerateInstanceLayerProperties = true,
@@ -89,8 +234,12 @@ const BaseDispatch = vk.BaseWrapper(.{
 
 const InstanceDispatch = vk.InstanceWrapper(.{
     .destroyInstance = true,
-    .createDebugUtilsMessengerEXT = builtin.mode == .Debug,
-    .destroyDebugUtilsMessengerEXT = builtin.mode == .Debug,
+    .enumeratePhysicalDevices = true,
+    .getPhysicalDeviceProperties = true,
+    .getPhysicalDeviceFeatures = true,
+    .getPhysicalDeviceQueueFamilyProperties = true,
+    .createDebugUtilsMessengerEXT = is_debug_build,
+    .destroyDebugUtilsMessengerEXT = is_debug_build,
 });
 
 const debug_message_info = vk.DebugUtilsMessengerCreateInfoEXT{
@@ -111,7 +260,7 @@ const debug_message_info = vk.DebugUtilsMessengerCreateInfoEXT{
 
 /// set up debug messenger if we are in a debug build
 inline fn setupDebugMessenger(vki: InstanceDispatch, instance: vk.Instance) !?vk.DebugUtilsMessengerEXT {
-    if (comptime (builtin.mode != .Debug)) {
+    if (comptime (is_debug_build == false)) {
         return null;
     }
 
@@ -119,7 +268,7 @@ inline fn setupDebugMessenger(vki: InstanceDispatch, instance: vk.Instance) !?vk
 }
 
 inline fn getValidationLayers(allocator: Allocator, vkb: BaseDispatch) ![]const [*:0]const u8 {
-    if (comptime (builtin.mode != .Debug)) {
+    if (comptime (is_debug_build == false)) {
         return &[0][*:0]const u8{};
     }
 
