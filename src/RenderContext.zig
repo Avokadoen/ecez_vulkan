@@ -178,7 +178,7 @@ inline fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki:
         }
     }
 
-    if (is_debug_build) {
+    if (comptime is_debug_build) {
         std.debug.print("\nselected gpu: {s}\n", .{selected_device_properties.device_name});
     }
 
@@ -187,6 +187,8 @@ inline fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki:
 
 pub const QueueFamilyIndices = struct {
     graphics_family: ?u32,
+    compute_family: ?u32,
+    transfer_family: ?u32,
 
     pub fn init(allocator: Allocator, vki: InstanceDispatch, physical_device: vk.PhysicalDevice) !QueueFamilyIndices {
         const queue_families_properties = blk: {
@@ -208,14 +210,29 @@ pub const QueueFamilyIndices = struct {
 
         var queues: QueueFamilyIndices = QueueFamilyIndices{
             .graphics_family = null,
+            .compute_family = null,
+            .transfer_family = null,
         };
 
-        const graphics_bit = vk.QueueFlags{ .graphics_bit = true };
+        // TODO: account for timestamp_valid_bits
         for (queue_families_properties) |property, i| {
-            if ((property.queue_flags.contains(graphics_bit))) {
-                queues.graphics_family = @intCast(u32, i);
+            const flags = property.queue_flags;
 
-                if (queues.is_complete()) break;
+            // graphics queue is usually the first and only one with this bit
+            if ((flags.contains(vk.QueueFlags{ .graphics_bit = true }))) {
+                queues.graphics_family = @intCast(u32, i);
+            }
+
+            // grab dedicated compute family index if any
+            const is_dedicated_compute = !flags.graphics_bit and flags.compute_bit;
+            if (is_dedicated_compute or (queues.compute_family == null and flags.contains(vk.QueueFlags{ .compute_bit = true }))) {
+                queues.compute_family = @intCast(u32, i);
+            }
+
+            // grab dedicated transfer family index if any
+            const is_dedicated_transfer = !flags.graphics_bit and !flags.compute_bit and flags.transfer_bit;
+            if (is_dedicated_transfer or (queues.transfer_family == null and flags.contains(vk.QueueFlags{ .transfer_bit = true }))) {
+                queues.transfer_family = @intCast(u32, i);
             }
         }
 
@@ -223,9 +240,11 @@ pub const QueueFamilyIndices = struct {
     }
 
     pub inline fn is_complete(self: QueueFamilyIndices) bool {
-        return self.graphics_family != null;
+        return self.graphics_family != null and self.compute_family != null and self.transfer_family != null;
     }
 };
+
+// inline fn createLogicalDevice(vki: InstanceDispatch, physical_device: vk.PhysicalDevice) vk.Device {}
 
 const BaseDispatch = vk.BaseWrapper(.{
     .createInstance = true,
