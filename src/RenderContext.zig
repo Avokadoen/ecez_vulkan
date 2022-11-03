@@ -6,6 +6,8 @@ const builtin = @import("builtin");
 const vk = @import("vulkan");
 const glfw = @import("glfw");
 
+const max_queue_families = 16;
+
 const RenderContext = @This();
 
 const is_debug_build = builtin.mode == .Debug;
@@ -69,7 +71,7 @@ pub fn init(allocator: Allocator) !RenderContext {
     // register message callback in debug
     const debug_messenger = try setupDebugMessenger(vki, instance);
     const physical_device = try selectPhysicalDevice(allocator, instance, vki);
-    const queue_family_indices = try QueueFamilyIndices.init(allocator, vki, physical_device);
+    const queue_family_indices = QueueFamilyIndices.init(vki, physical_device);
 
     return RenderContext{
         .vkb = vkb,
@@ -107,7 +109,7 @@ inline fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki:
 
     var selected_index: usize = 0;
     var selected_device = devices[selected_index];
-    var selected_queue_families = try QueueFamilyIndices.init(allocator, vki, selected_device);
+    var selected_queue_families = QueueFamilyIndices.init(vki, selected_device);
     while (selected_queue_families.is_complete() == false) {
         selected_index += 1;
         if (selected_index >= devices.len) {
@@ -115,14 +117,14 @@ inline fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki:
         }
 
         selected_device = devices[selected_index];
-        selected_queue_families = try QueueFamilyIndices.init(allocator, vki, selected_device);
+        selected_queue_families = QueueFamilyIndices.init(vki, selected_device);
     }
 
     var selected_device_properties: vk.PhysicalDeviceProperties = vki.getPhysicalDeviceProperties(selected_device);
     var selected_device_features: vk.PhysicalDeviceFeatures = vki.getPhysicalDeviceFeatures(selected_device);
 
     device_search: for (devices[1..]) |current_device| {
-        var current_queue_families = try QueueFamilyIndices.init(allocator, vki, current_device);
+        var current_queue_families = QueueFamilyIndices.init(vki, current_device);
         if (current_queue_families.is_complete() == false) {
             continue :device_search;
         }
@@ -190,28 +192,27 @@ pub const QueueFamilyIndices = struct {
     compute_family: ?u32,
     transfer_family: ?u32,
 
-    pub fn init(allocator: Allocator, vki: InstanceDispatch, physical_device: vk.PhysicalDevice) !QueueFamilyIndices {
-        const queue_families_properties = blk: {
-            var family_count: u32 = undefined;
-            vki.getPhysicalDeviceQueueFamilyProperties(physical_device, &family_count, null);
-            if (family_count == 0) {
-                return error.FailedToRetrieveQueueFamilies;
-            }
-
-            // TODO: use inline switch here to avoid alloc and used stack memory instead :)
-            //       we need stage 2 to do this ...
-            //       we can then remove allocator from signature and error return!
-            const families = try allocator.alloc(vk.QueueFamilyProperties, family_count);
-            vki.getPhysicalDeviceQueueFamilyProperties(physical_device, &family_count, families.ptr);
-
-            break :blk families;
-        };
-        defer allocator.free(queue_families_properties);
-
+    pub fn init(vki: InstanceDispatch, physical_device: vk.PhysicalDevice) QueueFamilyIndices {
         var queues: QueueFamilyIndices = QueueFamilyIndices{
             .graphics_family = null,
             .compute_family = null,
             .transfer_family = null,
+        };
+
+        var queue_arr: [max_queue_families]vk.QueueFamilyProperties = undefined;
+        const queue_families_properties = blk: {
+            var family_count: u32 = undefined;
+            vki.getPhysicalDeviceQueueFamilyProperties(physical_device, &family_count, null);
+            std.debug.assert(family_count <= max_queue_families);
+
+            if (family_count == 0) {
+                return queues;
+            }
+
+            // TODO: use inline switch here. We need stage 2 to do this ...
+            vki.getPhysicalDeviceQueueFamilyProperties(physical_device, &family_count, &queue_arr);
+
+            break :blk queue_arr[0..family_count];
         };
 
         // TODO: account for timestamp_valid_bits
