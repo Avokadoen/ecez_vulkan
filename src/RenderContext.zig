@@ -14,18 +14,20 @@ const is_debug_build = builtin.mode == .Debug;
 
 vkb: BaseDispatch,
 vki: InstanceDispatch,
+vkd: DeviceDispatch,
 
 // in debug builds this will be something, but in release this is null
 debug_messenger: ?vk.DebugUtilsMessengerEXT,
 
 instance: vk.Instance,
+surface: vk.SurfaceKHR,
 physical_device: vk.PhysicalDevice,
+device: vk.Device,
 
 queue_family_indices: QueueFamilyIndices,
+graphics_queue: vk.Queue,
 
-// device: vk.Device,
-
-pub fn init(allocator: Allocator) !RenderContext {
+pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     // bind the glfw instance proc pointer
     const vk_proc = @ptrCast(fn (instance: vk.Instance, procname: [*:0]const u8) callconv(.C) vk.PfnVoidFunction, glfw.getInstanceProcAddress);
     const vkb = try BaseDispatch.load(vk_proc);
@@ -65,25 +67,54 @@ pub fn init(allocator: Allocator) !RenderContext {
         };
         break :blk (try vkb.createInstance(&instance_info, null));
     };
-
     const vki = try InstanceDispatch.load(instance, vk_proc);
+
+    errdefer vki.destroyInstance(instance, null);
+
+    const surface = blk: {
+        var s: vk.SurfaceKHR = undefined;
+        const result = try glfw.createWindowSurface(instance, window, null, &s);
+        if (@intToEnum(vk.Result, result) != vk.Result.success) {
+            return error.FailedToCreateSurface;
+        }
+        break :blk s;
+    };
+    errdefer vki.destroySurfaceKHR(instance, surface, null);
 
     // register message callback in debug
     const debug_messenger = try setupDebugMessenger(vki, instance);
-    const physical_device = try selectPhysicalDevice(allocator, instance, vki);
-    const queue_family_indices = QueueFamilyIndices.init(vki, physical_device);
+    errdefer {
+        if (is_debug_build) {
+            vki.destroyDebugUtilsMessengerEXT(instance, debug_messenger.?, null);
+        }
+    }
+
+    const physical_device = try selectPhysicalDevice(allocator, instance, vki, surface);
+    const queue_family_indices = try QueueFamilyIndices.init(vki, physical_device, surface);
+    const device = try createLogicalDevice(vki, physical_device, queue_family_indices);
+    const vkd = try DeviceDispatch.load(device, vki.dispatch.vkGetDeviceProcAddr);
+    errdefer vkd.destroyDevice(device);
+
+    const graphics_queue = vkd.getDeviceQueue(device, queue_family_indices.graphics.?.index, 0);
 
     return RenderContext{
         .vkb = vkb,
         .vki = vki,
+        .vkd = vkd,
         .debug_messenger = debug_messenger,
         .instance = instance,
+        .surface = surface,
         .physical_device = physical_device,
+        .device = device,
         .queue_family_indices = queue_family_indices,
+        .graphics_queue = graphics_queue,
     };
 }
 
 pub fn deinit(self: RenderContext) void {
+    self.vki.destroySurfaceKHR(self.instance, self.surface, null);
+    self.vkd.destroyDevice(self.device, null);
+
     if (is_debug_build) {
         // this is never null in debug builds so we can "safely" unwrap the value
         const debug_messenger = self.debug_messenger.?;
@@ -94,7 +125,7 @@ pub fn deinit(self: RenderContext) void {
 }
 
 // TODO: verify that it's sane to panic instead of error return
-inline fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki: InstanceDispatch) !vk.PhysicalDevice {
+inline fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki: InstanceDispatch, surface: vk.SurfaceKHR) !vk.PhysicalDevice {
     var device_count: u32 = undefined;
     _ = try vki.enumeratePhysicalDevices(instance, &device_count, null);
 
@@ -109,7 +140,7 @@ inline fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki:
 
     var selected_index: usize = 0;
     var selected_device = devices[selected_index];
-    var selected_queue_families = QueueFamilyIndices.init(vki, selected_device);
+    var selected_queue_families = try QueueFamilyIndices.init(vki, selected_device, surface);
     while (selected_queue_families.is_complete() == false) {
         selected_index += 1;
         if (selected_index >= devices.len) {
@@ -117,14 +148,14 @@ inline fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki:
         }
 
         selected_device = devices[selected_index];
-        selected_queue_families = QueueFamilyIndices.init(vki, selected_device);
+        selected_queue_families = try QueueFamilyIndices.init(vki, selected_device, surface);
     }
 
     var selected_device_properties: vk.PhysicalDeviceProperties = vki.getPhysicalDeviceProperties(selected_device);
     var selected_device_features: vk.PhysicalDeviceFeatures = vki.getPhysicalDeviceFeatures(selected_device);
 
     device_search: for (devices[1..]) |current_device| {
-        var current_queue_families = QueueFamilyIndices.init(vki, current_device);
+        var current_queue_families = try QueueFamilyIndices.init(vki, current_device, surface);
         if (current_queue_families.is_complete() == false) {
             continue :device_search;
         }
@@ -188,15 +219,20 @@ inline fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki:
 }
 
 pub const QueueFamilyIndices = struct {
-    graphics_family: ?u32,
-    compute_family: ?u32,
-    transfer_family: ?u32,
+    pub const FamilyEntry = struct {
+        index: u32,
+        support_present: bool,
+    };
 
-    pub fn init(vki: InstanceDispatch, physical_device: vk.PhysicalDevice) QueueFamilyIndices {
+    graphics: ?FamilyEntry,
+    compute: ?FamilyEntry,
+    transfer: ?FamilyEntry,
+
+    pub fn init(vki: InstanceDispatch, physical_device: vk.PhysicalDevice, surface: vk.SurfaceKHR) !QueueFamilyIndices {
         var queues: QueueFamilyIndices = QueueFamilyIndices{
-            .graphics_family = null,
-            .compute_family = null,
-            .transfer_family = null,
+            .graphics = null,
+            .compute = null,
+            .transfer = null,
         };
 
         var queue_arr: [max_queue_families]vk.QueueFamilyProperties = undefined;
@@ -221,19 +257,25 @@ pub const QueueFamilyIndices = struct {
 
             // graphics queue is usually the first and only one with this bit
             if ((flags.contains(vk.QueueFlags{ .graphics_bit = true }))) {
-                queues.graphics_family = @intCast(u32, i);
+                const index = @intCast(u32, i);
+                const support_present = (try vki.getPhysicalDeviceSurfaceSupportKHR(physical_device, index, surface)) != 0;
+                queues.graphics = FamilyEntry{ .index = index, .support_present = support_present };
             }
 
             // grab dedicated compute family index if any
             const is_dedicated_compute = !flags.graphics_bit and flags.compute_bit;
-            if (is_dedicated_compute or (queues.compute_family == null and flags.contains(vk.QueueFlags{ .compute_bit = true }))) {
-                queues.compute_family = @intCast(u32, i);
+            if (is_dedicated_compute or (queues.compute == null and flags.contains(vk.QueueFlags{ .compute_bit = true }))) {
+                const index = @intCast(u32, i);
+                const support_present = (try vki.getPhysicalDeviceSurfaceSupportKHR(physical_device, index, surface)) != 0;
+                queues.compute = FamilyEntry{ .index = index, .support_present = support_present };
             }
 
             // grab dedicated transfer family index if any
             const is_dedicated_transfer = !flags.graphics_bit and !flags.compute_bit and flags.transfer_bit;
-            if (is_dedicated_transfer or (queues.transfer_family == null and flags.contains(vk.QueueFlags{ .transfer_bit = true }))) {
-                queues.transfer_family = @intCast(u32, i);
+            if (is_dedicated_transfer or (queues.transfer == null and flags.contains(vk.QueueFlags{ .transfer_bit = true }))) {
+                const index = @intCast(u32, i);
+                const support_present = (try vki.getPhysicalDeviceSurfaceSupportKHR(physical_device, index, surface)) != 0;
+                queues.transfer = FamilyEntry{ .index = index, .support_present = support_present };
             }
         }
 
@@ -241,11 +283,40 @@ pub const QueueFamilyIndices = struct {
     }
 
     pub inline fn is_complete(self: QueueFamilyIndices) bool {
-        return self.graphics_family != null and self.compute_family != null and self.transfer_family != null;
+        if (self.graphics == null or self.compute == null or self.transfer == null) {
+            return false;
+        }
+
+        return self.graphics.?.support_present;
     }
 };
 
-// inline fn createLogicalDevice(vki: InstanceDispatch, physical_device: vk.PhysicalDevice) vk.Device {}
+inline fn createLogicalDevice(
+    vki: InstanceDispatch,
+    physical_device: vk.PhysicalDevice,
+    queue_families: QueueFamilyIndices,
+) InstanceDispatch.CreateDeviceError!vk.Device {
+    const queue_priorities = [_]f32{1};
+    const queue_create_info = [1]vk.DeviceQueueCreateInfo{.{
+        .flags = .{},
+        .queue_family_index = queue_families.graphics.?.index,
+        .queue_count = 1,
+        .p_queue_priorities = &queue_priorities,
+    }};
+
+    const device_features = vk.PhysicalDeviceFeatures{};
+    const create_info = vk.DeviceCreateInfo{
+        .flags = .{},
+        .queue_create_info_count = queue_create_info.len,
+        .p_queue_create_infos = &queue_create_info,
+        .enabled_layer_count = if (is_debug_build) desired_layers.len else 0,
+        .pp_enabled_layer_names = &desired_layers,
+        .enabled_extension_count = 0,
+        .pp_enabled_extension_names = undefined,
+        .p_enabled_features = &device_features,
+    };
+    return vki.createDevice(physical_device, &create_info, null);
+}
 
 const BaseDispatch = vk.BaseWrapper(.{
     .createInstance = true,
@@ -253,13 +324,22 @@ const BaseDispatch = vk.BaseWrapper(.{
 });
 
 const InstanceDispatch = vk.InstanceWrapper(.{
+    .createDevice = true,
     .destroyInstance = true,
     .enumeratePhysicalDevices = true,
     .getPhysicalDeviceProperties = true,
     .getPhysicalDeviceFeatures = true,
     .getPhysicalDeviceQueueFamilyProperties = true,
+    .getPhysicalDeviceSurfaceSupportKHR = true,
+    .getDeviceProcAddr = true,
     .createDebugUtilsMessengerEXT = is_debug_build,
     .destroyDebugUtilsMessengerEXT = is_debug_build,
+    .destroySurfaceKHR = true,
+});
+
+const DeviceDispatch = vk.DeviceWrapper(.{
+    .getDeviceQueue = true,
+    .destroyDevice = true,
 });
 
 const debug_message_info = vk.DebugUtilsMessengerCreateInfoEXT{
@@ -278,6 +358,10 @@ const debug_message_info = vk.DebugUtilsMessengerCreateInfoEXT{
     .p_user_data = null,
 };
 
+const desired_layers = [_][*:0]const u8{
+    "VK_LAYER_KHRONOS_validation",
+};
+
 /// set up debug messenger if we are in a debug build
 inline fn setupDebugMessenger(vki: InstanceDispatch, instance: vk.Instance) !?vk.DebugUtilsMessengerEXT {
     if (comptime (is_debug_build == false)) {
@@ -291,10 +375,6 @@ inline fn getValidationLayers(allocator: Allocator, vkb: BaseDispatch) ![]const 
     if (comptime (is_debug_build == false)) {
         return &[0][*:0]const u8{};
     }
-
-    const desired_layers = [_][*:0]const u8{
-        "VK_LAYER_KHRONOS_validation",
-    };
 
     var layer_count: u32 = undefined;
     _ = try vkb.enumerateInstanceLayerProperties(&layer_count, null);
