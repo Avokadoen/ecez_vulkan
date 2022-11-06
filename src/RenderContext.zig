@@ -10,6 +10,8 @@ const max_queue_families = 16;
 
 const RenderContext = @This();
 
+// TODO: reduce debug assert, replace with errors
+
 const is_debug_build = builtin.mode == .Debug;
 
 vkb: BaseDispatch,
@@ -125,7 +127,7 @@ pub fn deinit(self: RenderContext) void {
 }
 
 // TODO: verify that it's sane to panic instead of error return
-inline fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki: InstanceDispatch, surface: vk.SurfaceKHR) !vk.PhysicalDevice {
+fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki: InstanceDispatch, surface: vk.SurfaceKHR) !vk.PhysicalDevice {
     var device_count: u32 = undefined;
     _ = try vki.enumeratePhysicalDevices(instance, &device_count, null);
 
@@ -211,7 +213,7 @@ inline fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki:
         }
     }
 
-    if (comptime is_debug_build) {
+    if (is_debug_build) {
         std.debug.print("\nselected gpu: {s}\n", .{selected_device_properties.device_name});
     }
 
@@ -234,6 +236,10 @@ pub const QueueFamilyIndices = struct {
             .compute = null,
             .transfer = null,
         };
+
+        if ((try checkDeviceExtensionSupport(vki, physical_device)) == false) {
+            return queues;
+        }
 
         var queue_arr: [max_queue_families]vk.QueueFamilyProperties = undefined;
         const queue_families_properties = blk: {
@@ -291,6 +297,34 @@ pub const QueueFamilyIndices = struct {
     }
 };
 
+inline fn checkDeviceExtensionSupport(vki: InstanceDispatch, physical_device: vk.PhysicalDevice) !bool {
+    var available_extensions: [1024]vk.ExtensionProperties = undefined;
+
+    const extension_count: u32 = blk: {
+        var count: u32 = undefined;
+        var result = try vki.enumerateDeviceExtensionProperties(physical_device, null, &count, null);
+        std.debug.assert(count < available_extensions.len);
+        std.debug.assert(result == .success);
+
+        result = try vki.enumerateDeviceExtensionProperties(physical_device, null, &count, &available_extensions);
+        std.debug.assert(result == .success);
+
+        break :blk count;
+    };
+
+    var matched_extensions: u8 = 0;
+    for (required_extensions) |required_extension| {
+        for (available_extensions[0..extension_count]) |available_extension| {
+            if (std.cstr.cmp(required_extension, @ptrCast([*:0]const u8, &available_extension.extension_name)) == 0) {
+                matched_extensions += 1;
+                break;
+            }
+        }
+    }
+
+    return matched_extensions == required_extensions.len;
+}
+
 inline fn createLogicalDevice(
     vki: InstanceDispatch,
     physical_device: vk.PhysicalDevice,
@@ -311,8 +345,8 @@ inline fn createLogicalDevice(
         .p_queue_create_infos = &queue_create_info,
         .enabled_layer_count = if (is_debug_build) desired_layers.len else 0,
         .pp_enabled_layer_names = &desired_layers,
-        .enabled_extension_count = 0,
-        .pp_enabled_extension_names = undefined,
+        .enabled_extension_count = required_extensions_cstr.len,
+        .pp_enabled_extension_names = &required_extensions_cstr,
         .p_enabled_features = &device_features,
     };
     return vki.createDevice(physical_device, &create_info, null);
@@ -327,6 +361,7 @@ const InstanceDispatch = vk.InstanceWrapper(.{
     .createDevice = true,
     .destroyInstance = true,
     .enumeratePhysicalDevices = true,
+    .enumerateDeviceExtensionProperties = true,
     .getPhysicalDeviceProperties = true,
     .getPhysicalDeviceFeatures = true,
     .getPhysicalDeviceQueueFamilyProperties = true,
@@ -356,6 +391,14 @@ const debug_message_info = vk.DebugUtilsMessengerCreateInfoEXT{
     },
     .pfn_user_callback = messageCallback,
     .p_user_data = null,
+};
+
+const required_extensions = [_][:0]const u8{
+    vk.extension_info.khr_swapchain.name,
+};
+
+const required_extensions_cstr = [_][*:0]const u8{
+    vk.extension_info.khr_swapchain.name,
 };
 
 const desired_layers = [_][*:0]const u8{
