@@ -29,6 +29,7 @@ surface: vk.SurfaceKHR,
 swapchain_support_details: SwapchainSupportDetails,
 swapchain: vk.SwapchainKHR,
 swapchain_images: []vk.Image,
+swapchain_image_views: []vk.ImageView,
 
 queue_family_indices: QueueFamilyIndices,
 graphics_queue: vk.Queue,
@@ -120,6 +121,14 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     };
     errdefer allocator.free(swapchain_images);
 
+    const swapchain_image_views = try createImageViews(
+        allocator,
+        vkd,
+        device,
+        swapchain_images,
+        swapchain_support_details.preferredFormatIndex().format,
+    );
+
     return RenderContext{
         .vkb = vkb,
         .vki = vki,
@@ -132,12 +141,17 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         .swapchain_support_details = swapchain_support_details,
         .swapchain = swapchain,
         .swapchain_images = swapchain_images,
+        .swapchain_image_views = swapchain_image_views,
         .queue_family_indices = queue_family_indices,
         .graphics_queue = graphics_queue,
     };
 }
 
 pub fn deinit(self: RenderContext, allocator: Allocator) void {
+    for (self.swapchain_image_views) |image_view| {
+        self.vkd.destroyImageView(self.device, image_view, null);
+    }
+    allocator.free(self.swapchain_image_views);
     allocator.free(self.swapchain_images);
     self.swapchain_support_details.deinit(allocator);
 
@@ -355,7 +369,11 @@ pub const QueueFamilyIndices = struct {
 
 pub const SwapchainSupportDetails = struct {
     capabilities: vk.SurfaceCapabilitiesKHR,
+
+    preferred_format_index: usize,
     formats: []vk.SurfaceFormatKHR,
+
+    preferred_present_mode: vk.PresentModeKHR,
     present_modes: []vk.PresentModeKHR,
 
     pub fn init(allocator: Allocator, vki: InstanceDispatch, physical_device: vk.PhysicalDevice, surface: vk.SurfaceKHR) !SwapchainSupportDetails {
@@ -377,6 +395,15 @@ pub const SwapchainSupportDetails = struct {
         };
         errdefer allocator.free(formats);
 
+        const preferred_format_index = blk: {
+            for (formats) |format, i| {
+                if (format.format == .r8g8b8a8_srgb and format.color_space == .srgb_nonlinear_khr) {
+                    break :blk i;
+                }
+            }
+            break :blk 0;
+        };
+
         const present_modes = blk: {
             var present_count: u32 = undefined;
             _ = try vki.getPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &present_count, null);
@@ -393,10 +420,21 @@ pub const SwapchainSupportDetails = struct {
         };
         errdefer allocator.free(present_modes);
 
+        const preferred_present_mode = blk: {
+            for (present_modes) |present_mode| {
+                if (present_mode == .mailbox_khr) {
+                    break :blk present_mode;
+                }
+            }
+            break :blk .fifo_khr;
+        };
+
         return SwapchainSupportDetails{
             .capabilities = capabilities,
             .formats = formats,
+            .preferred_format_index = preferred_format_index,
             .present_modes = present_modes,
+            .preferred_present_mode = preferred_present_mode,
         };
     }
 
@@ -405,22 +443,8 @@ pub const SwapchainSupportDetails = struct {
         allocator.free(self.present_modes);
     }
 
-    pub inline fn chooseSurfaceFormat(self: SwapchainSupportDetails) vk.SurfaceFormatKHR {
-        for (self.formats) |format| {
-            if (format.format == .r8g8b8a8_srgb and format.color_space == .srgb_nonlinear_khr) {
-                return format;
-            }
-        }
-        return self.formats[0];
-    }
-
-    pub inline fn choosePresentMode(self: SwapchainSupportDetails) vk.PresentModeKHR {
-        for (self.present_modes) |present_mode| {
-            if (present_mode == .mailbox_khr) {
-                return present_mode;
-            }
-        }
-        return .fifo_khr;
+    pub inline fn preferredFormatIndex(self: SwapchainSupportDetails) vk.SurfaceFormatKHR {
+        return self.formats[self.preferred_format_index];
     }
 
     pub inline fn chooseExtent(self: SwapchainSupportDetails, window: glfw.Window) !vk.Extent2D {
@@ -450,6 +474,46 @@ pub const SwapchainSupportDetails = struct {
     }
 };
 
+inline fn createImageViews(allocator: Allocator, vkd: DeviceDispatch, device: vk.Device, swapchain_images: []vk.Image, swapchain_image_format: vk.Format) ![]vk.ImageView {
+    var image_views = try allocator.alloc(vk.ImageView, swapchain_images.len);
+    errdefer allocator.free(image_views);
+
+    var views_created: usize = 0;
+    errdefer {
+        for (image_views[0..views_created]) |image_view| {
+            vkd.destroyImageView(device, image_view, null);
+        }
+    }
+
+    const identity = vk.ComponentSwizzle.identity;
+    for (swapchain_images) |swapchain_image, i| {
+        const create_info = vk.ImageViewCreateInfo{
+            .flags = .{},
+            .image = swapchain_image,
+            .view_type = .@"2d",
+            .format = swapchain_image_format,
+            .components = .{
+                .r = identity,
+                .g = identity,
+                .b = identity,
+                .a = identity,
+            },
+            .subresource_range = .{
+                .aspect_mask = .{ .color_bit = true },
+                .base_mip_level = 0,
+                .level_count = 1,
+                .base_array_layer = 0,
+                .layer_count = 1,
+            },
+        };
+
+        image_views[i] = try vkd.createImageView(device, &create_info, null);
+        views_created = i;
+    }
+
+    return image_views;
+}
+
 inline fn createSwapchain(
     vkd: DeviceDispatch,
     swapchain_support_details: SwapchainSupportDetails,
@@ -457,8 +521,8 @@ inline fn createSwapchain(
     device: vk.Device,
     window: glfw.Window,
 ) !vk.SwapchainKHR {
-    const surface_format = swapchain_support_details.chooseSurfaceFormat();
-    const present_mode = swapchain_support_details.choosePresentMode();
+    const surface_format = swapchain_support_details.formats[swapchain_support_details.preferred_format_index];
+    const present_mode = swapchain_support_details.preferred_present_mode;
     const extent = try swapchain_support_details.chooseExtent(window);
 
     const image_count = blk: {
@@ -544,6 +608,8 @@ const InstanceDispatch = vk.InstanceWrapper(.{
 
 const DeviceDispatch = vk.DeviceWrapper(.{
     .createSwapchainKHR = true,
+    .createImageView = true,
+    .destroyImageView = true,
     .destroyDevice = true,
     .destroySwapchainKHR = true,
     .getDeviceQueue = true,
