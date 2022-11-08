@@ -36,7 +36,7 @@ pub fn main() !void {
     defer window.destroy();
 
     const context = try RenderContext.init(allocator, window);
-    defer context.deinit();
+    defer context.deinit(allocator);
 
     // Wait for the user to close the window.
     while (!window.shouldClose()) {
