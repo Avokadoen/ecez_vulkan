@@ -31,6 +31,10 @@ swapchain: vk.SwapchainKHR,
 swapchain_images: []vk.Image,
 swapchain_image_views: []vk.ImageView,
 
+render_pass: vk.RenderPass,
+pipeline_layout: vk.PipelineLayout,
+pipeline: vk.Pipeline,
+
 queue_family_indices: QueueFamilyIndices,
 graphics_queue: vk.Queue,
 
@@ -57,8 +61,10 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         const glfw_extensions = try glfw.getRequiredInstanceExtensions();
         try extensions.appendSlice(glfw_extensions);
 
-        // add the debug utils extension
-        try extensions.append(vk.extension_info.ext_debug_utils.name);
+        if (is_debug_build) {
+            // add the debug utils extension
+            try extensions.append(vk.extension_info.ext_debug_utils.name);
+        }
 
         // get validation layers if we are in debug mode
         const validation_layers = try getValidationLayers(allocator, vkb);
@@ -126,8 +132,26 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         vkd,
         device,
         swapchain_images,
-        swapchain_support_details.preferredFormatIndex().format,
+        swapchain_support_details.preferredFormat().format,
     );
+
+    const render_pass = try createRenderPass(vkd, device, swapchain_support_details.preferredFormat().format);
+    errdefer vkd.destroyRenderPass(device, render_pass, null);
+
+    const pipeline_layout = blk: {
+        const pipeline_layout_info = vk.PipelineLayoutCreateInfo{
+            .flags = .{},
+            .set_layout_count = 0,
+            .p_set_layouts = undefined,
+            .push_constant_range_count = 0,
+            .p_push_constant_ranges = undefined,
+        };
+        break :blk try vkd.createPipelineLayout(device, &pipeline_layout_info, null);
+    };
+    errdefer vkd.destroyPipelineLayout(device, pipeline_layout, null);
+
+    const swapchain_extent = try swapchain_support_details.chooseExtent(window);
+    const pipeline = try createGraphicsPipeline(allocator, vkd, device, swapchain_extent, render_pass, pipeline_layout);
 
     return RenderContext{
         .vkb = vkb,
@@ -142,12 +166,19 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         .swapchain = swapchain,
         .swapchain_images = swapchain_images,
         .swapchain_image_views = swapchain_image_views,
+        .render_pass = render_pass,
+        .pipeline_layout = pipeline_layout,
+        .pipeline = pipeline,
         .queue_family_indices = queue_family_indices,
         .graphics_queue = graphics_queue,
     };
 }
 
 pub fn deinit(self: RenderContext, allocator: Allocator) void {
+    self.vkd.destroyPipeline(self.device, self.pipeline, null);
+    self.vkd.destroyPipelineLayout(self.device, self.pipeline_layout, null);
+    self.vkd.destroyRenderPass(self.device, self.render_pass, null);
+
     for (self.swapchain_image_views) |image_view| {
         self.vkd.destroyImageView(self.device, image_view, null);
     }
@@ -443,7 +474,7 @@ pub const SwapchainSupportDetails = struct {
         allocator.free(self.present_modes);
     }
 
-    pub inline fn preferredFormatIndex(self: SwapchainSupportDetails) vk.SurfaceFormatKHR {
+    pub inline fn preferredFormat(self: SwapchainSupportDetails) vk.SurfaceFormatKHR {
         return self.formats[self.preferred_format_index];
     }
 
@@ -583,39 +614,6 @@ inline fn createLogicalDevice(
     return vki.createDevice(physical_device, &create_info, null);
 }
 
-const BaseDispatch = vk.BaseWrapper(.{
-    .createInstance = true,
-    .enumerateInstanceLayerProperties = true,
-});
-
-const InstanceDispatch = vk.InstanceWrapper(.{
-    .createDevice = true,
-    .destroyInstance = true,
-    .enumeratePhysicalDevices = true,
-    .enumerateDeviceExtensionProperties = true,
-    .getPhysicalDeviceProperties = true,
-    .getPhysicalDeviceFeatures = true,
-    .getPhysicalDeviceQueueFamilyProperties = true,
-    .getPhysicalDeviceSurfaceSupportKHR = true,
-    .getPhysicalDeviceSurfaceCapabilitiesKHR = true,
-    .getPhysicalDeviceSurfaceFormatsKHR = true,
-    .getPhysicalDeviceSurfacePresentModesKHR = true,
-    .getDeviceProcAddr = true,
-    .createDebugUtilsMessengerEXT = is_debug_build,
-    .destroyDebugUtilsMessengerEXT = is_debug_build,
-    .destroySurfaceKHR = true,
-});
-
-const DeviceDispatch = vk.DeviceWrapper(.{
-    .createSwapchainKHR = true,
-    .createImageView = true,
-    .destroyImageView = true,
-    .destroyDevice = true,
-    .destroySwapchainKHR = true,
-    .getDeviceQueue = true,
-    .getSwapchainImagesKHR = true,
-});
-
 const debug_message_info = vk.DebugUtilsMessengerCreateInfoEXT{
     .flags = .{},
     .message_severity = .{
@@ -712,3 +710,294 @@ fn messageCallback(
 
     return vk.FALSE;
 }
+
+inline fn createRenderPass(vkd: DeviceDispatch, device: vk.Device, swapchain_format: vk.Format) !vk.RenderPass {
+    const color_attachment = vk.AttachmentDescription{
+        .flags = .{},
+        .format = swapchain_format,
+        .samples = .{ .@"1_bit" = true },
+        .load_op = .dont_care,
+        .store_op = .dont_care,
+        .stencil_load_op = .dont_care,
+        .stencil_store_op = .dont_care,
+        .initial_layout = .@"undefined",
+        .final_layout = .present_src_khr,
+    };
+    const color_attachment_ref = vk.AttachmentReference{
+        .attachment = 0,
+        .layout = .color_attachment_optimal,
+    };
+    const subpass = vk.SubpassDescription{
+        .flags = .{},
+        .pipeline_bind_point = .graphics,
+        .input_attachment_count = 0,
+        .p_input_attachments = undefined,
+        .color_attachment_count = 1,
+        .p_color_attachments = @ptrCast([*]const vk.AttachmentReference, &color_attachment_ref),
+        .p_resolve_attachments = null,
+        .p_depth_stencil_attachment = null,
+        .preserve_attachment_count = 0,
+        .p_preserve_attachments = undefined,
+    };
+
+    const render_pass_info = vk.RenderPassCreateInfo{
+        .flags = .{},
+        .attachment_count = 1,
+        .p_attachments = @ptrCast([*]const vk.AttachmentDescription, &color_attachment),
+        .subpass_count = 1,
+        .p_subpasses = @ptrCast([*]const vk.SubpassDescription, &subpass),
+        .dependency_count = 0,
+        .p_dependencies = undefined,
+    };
+    return vkd.createRenderPass(device, &render_pass_info, null);
+}
+
+const AssetHandler = struct {
+    exe_path: []const u8,
+
+    pub fn init(allocator: Allocator) !AssetHandler {
+        const exe_path = try std.fs.selfExePathAlloc(allocator);
+        return AssetHandler{
+            .exe_path = exe_path,
+        };
+    }
+
+    pub fn deinit(self: AssetHandler, allocator: Allocator) void {
+        allocator.free(self.exe_path);
+    }
+
+    pub inline fn getShaderPath(self: AssetHandler, allocator: Allocator, shader_name: []const u8) ![]const u8 {
+        const join_path = [_][]const u8{ self.exe_path, "../../", shader_name };
+        return std.fs.path.resolve(allocator, join_path[0..]);
+    }
+};
+
+/// caller must deinit returned memory
+pub fn readFile(allocator: Allocator, absolute_path: []const u8) ![]u8 {
+    const file = try std.fs.openFileAbsolute(absolute_path, .{ .mode = .read_only });
+    defer file.close();
+
+    var reader = file.reader();
+    const file_size = (try reader.context.stat()).size;
+
+    var buffer = try allocator.alloc(u8, file_size);
+    errdefer allocator.free(buffer);
+
+    const read = try reader.readAll(buffer);
+    std.debug.assert(read == file_size);
+
+    return buffer;
+}
+
+inline fn createGraphicsPipeline(
+    allocator: Allocator,
+    vkd: DeviceDispatch,
+    device: vk.Device,
+    swapchain_extent: vk.Extent2D,
+    render_pass: vk.RenderPass,
+    pipeline_layout: vk.PipelineLayout,
+) !vk.Pipeline {
+    const asset_handler = try AssetHandler.init(allocator);
+    defer asset_handler.deinit(allocator);
+
+    const vert_bytes = blk: {
+        const path = try asset_handler.getShaderPath(allocator, "shader.vert.spv");
+        defer allocator.free(path);
+        const bytes = try readFile(allocator, path);
+        break :blk bytes;
+    };
+    defer allocator.free(vert_bytes);
+
+    const vert_module = try createShaderModule(vkd, device, vert_bytes);
+    defer vkd.destroyShaderModule(device, vert_module, null);
+
+    const vert_stage_info = vk.PipelineShaderStageCreateInfo{
+        .flags = .{},
+        .stage = .{ .vertex_bit = true },
+        .module = vert_module,
+        .p_name = "main",
+        .p_specialization_info = null,
+    };
+
+    const frag_bytes = blk: {
+        const path = try asset_handler.getShaderPath(allocator, "shader.frag.spv");
+        defer allocator.free(path);
+        const bytes = try readFile(allocator, path);
+        break :blk bytes;
+    };
+    defer allocator.free(frag_bytes);
+
+    const frag_module = try createShaderModule(vkd, device, frag_bytes);
+    defer vkd.destroyShaderModule(device, frag_module, null);
+
+    const frag_stage_info = vk.PipelineShaderStageCreateInfo{
+        .flags = .{},
+        .stage = .{ .fragment_bit = true },
+        .module = frag_module,
+        .p_name = "main",
+        .p_specialization_info = null,
+    };
+
+    const shader_stages_info = [_]vk.PipelineShaderStageCreateInfo{
+        vert_stage_info,
+        frag_stage_info,
+    };
+
+    const vertex_input_info = vk.PipelineVertexInputStateCreateInfo{
+        .flags = .{},
+        .vertex_binding_description_count = 0,
+        .p_vertex_binding_descriptions = undefined,
+        .vertex_attribute_description_count = 0,
+        .p_vertex_attribute_descriptions = undefined,
+    };
+
+    const input_assembly = vk.PipelineInputAssemblyStateCreateInfo{
+        .flags = .{},
+        .topology = .triangle_list,
+        .primitive_restart_enable = vk.FALSE,
+    };
+
+    const viewport = vk.Viewport{
+        .x = 0,
+        .y = 0,
+        .width = @intToFloat(f32, swapchain_extent.width),
+        .height = @intToFloat(f32, swapchain_extent.height),
+        .min_depth = 0,
+        .max_depth = 1,
+    };
+    const scissor = vk.Rect2D{
+        .offset = vk.Offset2D{ .x = 0, .y = 0 },
+        .extent = swapchain_extent,
+    };
+
+    const dynamic_state = [_]vk.DynamicState{ .viewport, .scissor };
+    const dynamic_state_info = vk.PipelineDynamicStateCreateInfo{
+        .flags = .{},
+        .dynamic_state_count = dynamic_state.len,
+        .p_dynamic_states = &dynamic_state,
+    };
+
+    const viewport_state_info = vk.PipelineViewportStateCreateInfo{
+        .flags = .{},
+        .viewport_count = 1,
+        .p_viewports = @ptrCast([*]const vk.Viewport, &viewport),
+        .scissor_count = 1,
+        .p_scissors = @ptrCast([*]const vk.Rect2D, &scissor),
+    };
+
+    const rasterization_state_info = vk.PipelineRasterizationStateCreateInfo{
+        .flags = .{},
+        .depth_clamp_enable = vk.FALSE,
+        .rasterizer_discard_enable = vk.FALSE,
+        .polygon_mode = .fill,
+        .cull_mode = .{ .back_bit = true },
+        .front_face = .clockwise,
+        .depth_bias_enable = vk.FALSE,
+        .depth_bias_constant_factor = 0,
+        .depth_bias_clamp = 0,
+        .depth_bias_slope_factor = 0,
+        .line_width = 1,
+    };
+
+    const color_blend_attachment = vk.PipelineColorBlendAttachmentState{
+        .blend_enable = vk.FALSE,
+        .src_color_blend_factor = .one,
+        .dst_color_blend_factor = .zero,
+        .color_blend_op = .add,
+        .src_alpha_blend_factor = .one,
+        .dst_alpha_blend_factor = .zero,
+        .alpha_blend_op = .add,
+        .color_write_mask = .{},
+    };
+
+    const color_blend_info = vk.PipelineColorBlendStateCreateInfo{
+        .flags = .{},
+        .logic_op_enable = vk.FALSE,
+        .logic_op = .copy,
+        .attachment_count = 1,
+        .p_attachments = @ptrCast([*]const vk.PipelineColorBlendAttachmentState, &color_blend_attachment),
+        .blend_constants = [4]f32{ 0, 0, 0, 0 },
+    };
+
+    const pipeline_info = vk.GraphicsPipelineCreateInfo{
+        .flags = .{},
+        .stage_count = shader_stages_info.len,
+        .p_stages = &shader_stages_info,
+        .p_vertex_input_state = &vertex_input_info,
+        .p_input_assembly_state = &input_assembly,
+        .p_tessellation_state = null,
+        .p_viewport_state = &viewport_state_info,
+        .p_rasterization_state = &rasterization_state_info,
+        .p_multisample_state = null,
+        .p_depth_stencil_state = null,
+        .p_color_blend_state = &color_blend_info,
+        .p_dynamic_state = &dynamic_state_info,
+        .layout = pipeline_layout,
+        .render_pass = render_pass,
+        .subpass = 0,
+        .base_pipeline_handle = .null_handle,
+        .base_pipeline_index = -1,
+    };
+    var pipeline: vk.Pipeline = undefined;
+    _ = try vkd.createGraphicsPipelines(
+        device,
+        .null_handle,
+        1,
+        @ptrCast([*]const vk.GraphicsPipelineCreateInfo, &pipeline_info),
+        null,
+        @ptrCast([*]vk.Pipeline, &pipeline),
+    );
+
+    return pipeline;
+}
+
+inline fn createShaderModule(vkd: DeviceDispatch, device: vk.Device, shader_code: []const u8) !vk.ShaderModule {
+    std.debug.assert(@mod(shader_code.len, 4) == 0);
+    const create_info = vk.ShaderModuleCreateInfo{
+        .flags = .{},
+        .code_size = shader_code.len,
+        .p_code = @ptrCast([*]const u32, @alignCast(@alignOf(u32), shader_code.ptr)),
+    };
+    return vkd.createShaderModule(device, &create_info, null);
+}
+
+const BaseDispatch = vk.BaseWrapper(.{
+    .createInstance = true,
+    .enumerateInstanceLayerProperties = true,
+});
+
+const InstanceDispatch = vk.InstanceWrapper(.{
+    .createDebugUtilsMessengerEXT = is_debug_build,
+    .createDevice = true,
+    .destroyDebugUtilsMessengerEXT = is_debug_build,
+    .destroyInstance = true,
+    .destroySurfaceKHR = true,
+    .enumerateDeviceExtensionProperties = true,
+    .enumeratePhysicalDevices = true,
+    .getDeviceProcAddr = true,
+    .getPhysicalDeviceFeatures = true,
+    .getPhysicalDeviceProperties = true,
+    .getPhysicalDeviceQueueFamilyProperties = true,
+    .getPhysicalDeviceSurfaceCapabilitiesKHR = true,
+    .getPhysicalDeviceSurfaceFormatsKHR = true,
+    .getPhysicalDeviceSurfacePresentModesKHR = true,
+    .getPhysicalDeviceSurfaceSupportKHR = true,
+});
+
+const DeviceDispatch = vk.DeviceWrapper(.{
+    .createGraphicsPipelines = true,
+    .createImageView = true,
+    .createPipelineLayout = true,
+    .createRenderPass = true,
+    .createShaderModule = true,
+    .createSwapchainKHR = true,
+    .destroyDevice = true,
+    .destroyImageView = true,
+    .destroyPipeline = true,
+    .destroyPipelineLayout = true,
+    .destroyRenderPass = true,
+    .destroyShaderModule = true,
+    .destroySwapchainKHR = true,
+    .getDeviceQueue = true,
+    .getSwapchainImagesKHR = true,
+});
