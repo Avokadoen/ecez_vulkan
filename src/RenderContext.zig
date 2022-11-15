@@ -32,8 +32,12 @@ swapchain_images: []vk.Image,
 swapchain_image_views: []vk.ImageView,
 
 render_pass: vk.RenderPass,
+framebuffers: []vk.Framebuffer,
 pipeline_layout: vk.PipelineLayout,
 pipeline: vk.Pipeline,
+
+command_pools: []vk.CommandPool,
+command_buffers: []vk.CommandBuffer,
 
 queue_family_indices: QueueFamilyIndices,
 graphics_queue: vk.Queue,
@@ -109,7 +113,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     const vkd = try DeviceDispatch.load(device, vki.dispatch.vkGetDeviceProcAddr);
     errdefer vkd.destroyDevice(device, null);
 
-    const graphics_queue = vkd.getDeviceQueue(device, queue_family_indices.graphics.?.index, 0);
+    const graphics_queue = vkd.getDeviceQueue(device, queue_family_indices.graphicsIndex(), 0);
 
     const swapchain = try createSwapchain(vkd, swapchain_support_details, surface, device, window);
     errdefer vkd.destroySwapchainKHR(device, swapchain, null);
@@ -138,6 +142,15 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     const render_pass = try createRenderPass(vkd, device, swapchain_support_details.preferredFormat().format);
     errdefer vkd.destroyRenderPass(device, render_pass, null);
 
+    const swapchain_extent = try swapchain_support_details.chooseExtent(window);
+    const framebuffers = try createFramebuffer(allocator, vkd, device, render_pass, swapchain_extent, swapchain_image_views);
+    errdefer {
+        allocator.free(framebuffers);
+        for (framebuffers) |framebuffer| {
+            vkd.destroyFramebuffer(device, framebuffer, null);
+        }
+    }
+
     const pipeline_layout = blk: {
         const pipeline_layout_info = vk.PipelineLayoutCreateInfo{
             .flags = .{},
@@ -150,8 +163,44 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     };
     errdefer vkd.destroyPipelineLayout(device, pipeline_layout, null);
 
-    const swapchain_extent = try swapchain_support_details.chooseExtent(window);
     const pipeline = try createGraphicsPipeline(allocator, vkd, device, swapchain_extent, render_pass, pipeline_layout);
+    errdefer vkd.destroyPipeline(device, pipeline, null);
+
+    // TODO: spawn pools according to how many threads we have
+    const command_pools = blk: {
+        var pools = try allocator.alloc(vk.CommandPool, swapchain_images.len);
+        errdefer allocator.free(pools);
+
+        var pools_initiated: usize = 0;
+        errdefer {
+            var i: usize = 0;
+            while (i < pools_initiated) : (i += 1) {
+                vkd.destroyCommandPool(device, pools[i], null);
+            }
+        }
+
+        for (pools) |*pool| {
+            pool.* = try createCommandPool(vkd, device, queue_family_indices.graphicsIndex());
+        }
+        break :blk pools;
+    };
+    errdefer {
+        for (command_pools) |pool| {
+            vkd.destroyCommandPool(device, pool, null);
+        }
+        allocator.free(command_pools);
+    }
+
+    const command_buffers = blk: {
+        var buffers = try allocator.alloc(vk.CommandBuffer, swapchain_images.len);
+        errdefer allocator.free(buffers);
+
+        for (buffers) |*cmd_buffer, i| {
+            cmd_buffer.* = try createCommandBuffer(vkd, device, command_pools[i]);
+        }
+        break :blk buffers;
+    };
+    errdefer allocator.free(command_buffers);
 
     return RenderContext{
         .vkb = vkb,
@@ -167,16 +216,31 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         .swapchain_images = swapchain_images,
         .swapchain_image_views = swapchain_image_views,
         .render_pass = render_pass,
+        .framebuffers = framebuffers,
         .pipeline_layout = pipeline_layout,
         .pipeline = pipeline,
+        .command_pools = command_pools,
+        .command_buffers = command_buffers,
         .queue_family_indices = queue_family_indices,
         .graphics_queue = graphics_queue,
     };
 }
 
 pub fn deinit(self: RenderContext, allocator: Allocator) void {
+    for (self.command_pools) |pool| {
+        self.vkd.destroyCommandPool(self.device, pool, null);
+    }
+    allocator.free(self.command_pools);
+    allocator.free(self.command_buffers);
+
     self.vkd.destroyPipeline(self.device, self.pipeline, null);
     self.vkd.destroyPipelineLayout(self.device, self.pipeline_layout, null);
+
+    for (self.framebuffers) |framebuffer| {
+        self.vkd.destroyFramebuffer(self.device, framebuffer, null);
+    }
+    allocator.free(self.framebuffers);
+
     self.vkd.destroyRenderPass(self.device, self.render_pass, null);
 
     for (self.swapchain_image_views) |image_view| {
@@ -216,7 +280,7 @@ inline fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki:
     var selected_index: usize = 0;
     var selected_device = devices[selected_index];
     var selected_queue_families = try QueueFamilyIndices.init(vki, selected_device, surface);
-    while (selected_queue_families.is_complete() == false) {
+    while (selected_queue_families.isComplete() == false) {
         selected_index += 1;
         if (selected_index >= devices.len) {
             std.debug.panic("failed to find GPU with required queues", .{});
@@ -231,7 +295,7 @@ inline fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki:
 
     device_search: for (devices[1..]) |current_device| {
         var current_queue_families = try QueueFamilyIndices.init(vki, current_device, surface);
-        if (current_queue_families.is_complete() == false) {
+        if (current_queue_families.isComplete() == false) {
             continue :device_search;
         }
 
@@ -361,7 +425,11 @@ pub const QueueFamilyIndices = struct {
         return queues;
     }
 
-    pub inline fn is_complete(self: QueueFamilyIndices) bool {
+    pub inline fn graphicsIndex(self: QueueFamilyIndices) u32 {
+        return self.graphics.?.index;
+    }
+
+    pub inline fn isComplete(self: QueueFamilyIndices) bool {
         if (self.graphics == null or self.compute == null or self.transfer == null) {
             return false;
         }
@@ -961,6 +1029,64 @@ inline fn createShaderModule(vkd: DeviceDispatch, device: vk.Device, shader_code
     return vkd.createShaderModule(device, &create_info, null);
 }
 
+inline fn createFramebuffer(
+    allocator: Allocator,
+    vkd: DeviceDispatch,
+    device: vk.Device,
+    render_pass: vk.RenderPass,
+    swapchain_extent: vk.Extent2D,
+    swapchain_image_views: []vk.ImageView,
+) ![]vk.Framebuffer {
+    var framebuffers = try allocator.alloc(vk.Framebuffer, swapchain_image_views.len);
+    errdefer allocator.free(framebuffers);
+
+    var created_framebuffers: usize = 0;
+    errdefer {
+        var i: usize = 0;
+        while (i < created_framebuffers) : (i += 1) {
+            vkd.destroyFramebuffer(device, framebuffers[i], null);
+        }
+    }
+
+    for (framebuffers) |*framebuffer, i| {
+        const attachments = [_]vk.ImageView{swapchain_image_views[i]};
+        const framebuffer_info = vk.FramebufferCreateInfo{
+            .flags = .{},
+            .render_pass = render_pass,
+            .attachment_count = attachments.len,
+            .p_attachments = &attachments,
+            .width = swapchain_extent.width,
+            .height = swapchain_extent.height,
+            .layers = 1,
+        };
+
+        framebuffer.* = try vkd.createFramebuffer(device, &framebuffer_info, null);
+        created_framebuffers = i;
+    }
+
+    return framebuffers;
+}
+
+inline fn createCommandPool(vkd: DeviceDispatch, device: vk.Device, queue_family_index: u32) !vk.CommandPool {
+    const pool_info = vk.CommandPoolCreateInfo{
+        .flags = .{ .reset_command_buffer_bit = true },
+        .queue_family_index = queue_family_index,
+    };
+
+    return vkd.createCommandPool(device, &pool_info, null);
+}
+
+inline fn createCommandBuffer(vkd: DeviceDispatch, device: vk.Device, command_pool: vk.CommandPool) !vk.CommandBuffer {
+    const cmd_buffer_info = vk.CommandBufferAllocateInfo{
+        .command_pool = command_pool,
+        .level = .primary,
+        .command_buffer_count = 1,
+    };
+    var command_buffer: vk.CommandBuffer = undefined;
+    try vkd.allocateCommandBuffers(device, &cmd_buffer_info, @ptrCast([*]vk.CommandBuffer, &command_buffer));
+    return command_buffer;
+}
+
 const BaseDispatch = vk.BaseWrapper(.{
     .createInstance = true,
     .enumerateInstanceLayerProperties = true,
@@ -985,13 +1111,18 @@ const InstanceDispatch = vk.InstanceWrapper(.{
 });
 
 const DeviceDispatch = vk.DeviceWrapper(.{
+    .allocateCommandBuffers = true,
+    .createCommandPool = true,
+    .createFramebuffer = true,
     .createGraphicsPipelines = true,
     .createImageView = true,
     .createPipelineLayout = true,
     .createRenderPass = true,
     .createShaderModule = true,
     .createSwapchainKHR = true,
+    .destroyCommandPool = true,
     .destroyDevice = true,
+    .destroyFramebuffer = true,
     .destroyImageView = true,
     .destroyPipeline = true,
     .destroyPipelineLayout = true,
