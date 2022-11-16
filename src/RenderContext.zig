@@ -7,6 +7,7 @@ const vk = @import("vulkan");
 const glfw = @import("glfw");
 
 const max_queue_families = 16;
+const max_frames_in_flight = 2;
 
 const RenderContext = @This();
 
@@ -25,8 +26,11 @@ instance: vk.Instance,
 physical_device: vk.PhysicalDevice,
 device: vk.Device,
 
+// TODO: abstraction: a "frame"? (all types that are slices here)
+
 surface: vk.SurfaceKHR,
 swapchain_support_details: SwapchainSupportDetails,
+swapchain_extent: vk.Extent2D,
 swapchain: vk.SwapchainKHR,
 swapchain_images: []vk.Image,
 swapchain_image_views: []vk.ImageView,
@@ -38,6 +42,14 @@ pipeline: vk.Pipeline,
 
 command_pools: []vk.CommandPool,
 command_buffers: []vk.CommandBuffer,
+
+// used solely for memory management
+all_semaphores: []vk.Semaphore,
+image_available_semaphores: []vk.Semaphore,
+render_finished_semaphores: []vk.Semaphore,
+in_flight_fences: []vk.Fence,
+
+current_frame: usize,
 
 queue_family_indices: QueueFamilyIndices,
 graphics_queue: vk.Queue,
@@ -168,7 +180,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
 
     // TODO: spawn pools according to how many threads we have
     const command_pools = blk: {
-        var pools = try allocator.alloc(vk.CommandPool, swapchain_images.len);
+        var pools = try allocator.alloc(vk.CommandPool, max_frames_in_flight);
         errdefer allocator.free(pools);
 
         var pools_initiated: usize = 0;
@@ -192,7 +204,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     }
 
     const command_buffers = blk: {
-        var buffers = try allocator.alloc(vk.CommandBuffer, swapchain_images.len);
+        var buffers = try allocator.alloc(vk.CommandBuffer, max_frames_in_flight);
         errdefer allocator.free(buffers);
 
         for (buffers) |*cmd_buffer, i| {
@@ -201,6 +213,61 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         break :blk buffers;
     };
     errdefer allocator.free(command_buffers);
+
+    // create all sempahores we need which we can slice later
+    const all_semaphores = blk: {
+        var semaphores = try allocator.alloc(vk.Semaphore, max_frames_in_flight * 2);
+
+        var initialized_semaphores: usize = 0;
+        errdefer {
+            var i: usize = 0;
+            while (i < initialized_semaphores) : (i += 1) {
+                vkd.destroySemaphore(device, semaphores[i], null);
+            }
+            allocator.free(semaphores);
+        }
+
+        for (semaphores) |*semaphore| {
+            semaphore.* = try createSemaphore(vkd, device);
+            initialized_semaphores += 1;
+        }
+
+        break :blk semaphores;
+    };
+    errdefer {
+        for (all_semaphores) |semaphore| {
+            vkd.destroySemaphore(device, semaphore, null);
+        }
+        allocator.free(all_semaphores);
+    }
+    const image_available_semaphores = all_semaphores[0..max_frames_in_flight];
+    const render_finished_semaphores = all_semaphores[max_frames_in_flight .. max_frames_in_flight * 2];
+
+    const in_flight_fences = blk: {
+        var fences = try allocator.alloc(vk.Fence, max_frames_in_flight);
+
+        var initialized_fences: usize = 0;
+        errdefer {
+            var i: usize = 0;
+            while (i < initialized_fences) : (i += 1) {
+                vkd.destroyFence(device, fences[i], null);
+            }
+            allocator.free(fences);
+        }
+
+        for (fences) |*fence| {
+            fence.* = try createFence(vkd, device, true);
+            initialized_fences += 1;
+        }
+
+        break :blk fences;
+    };
+    errdefer {
+        for (in_flight_fences) |fence| {
+            vkd.destroyFence(device, fence, null);
+        }
+        allocator.free(in_flight_fences);
+    }
 
     return RenderContext{
         .vkb = vkb,
@@ -212,6 +279,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         .physical_device = physical_device,
         .device = device,
         .swapchain_support_details = swapchain_support_details,
+        .swapchain_extent = swapchain_extent,
         .swapchain = swapchain,
         .swapchain_images = swapchain_images,
         .swapchain_image_views = swapchain_image_views,
@@ -221,12 +289,32 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         .pipeline = pipeline,
         .command_pools = command_pools,
         .command_buffers = command_buffers,
+        .all_semaphores = all_semaphores,
+        .image_available_semaphores = image_available_semaphores,
+        .render_finished_semaphores = render_finished_semaphores,
+        .in_flight_fences = in_flight_fences,
+        .current_frame = 0,
         .queue_family_indices = queue_family_indices,
         .graphics_queue = graphics_queue,
     };
 }
 
 pub fn deinit(self: RenderContext, allocator: Allocator) void {
+    for (self.in_flight_fences) |fence| {
+        // try to wait for fences, continue if it fails for any reason
+        _ = self.vkd.waitForFences(self.device, 1, @ptrCast([*]const vk.Fence, &fence), vk.TRUE, std.time.ns_per_s) catch {};
+    }
+
+    for (self.in_flight_fences) |fence| {
+        self.vkd.destroyFence(self.device, fence, null);
+    }
+    allocator.free(self.in_flight_fences);
+
+    for (self.all_semaphores) |semaphore| {
+        self.vkd.destroySemaphore(self.device, semaphore, null);
+    }
+    allocator.free(self.all_semaphores);
+
     for (self.command_pools) |pool| {
         self.vkd.destroyCommandPool(self.device, pool, null);
     }
@@ -261,6 +349,52 @@ pub fn deinit(self: RenderContext, allocator: Allocator) void {
     }
 
     self.vki.destroyInstance(self.instance, null);
+}
+
+pub fn drawFrame(self: *RenderContext) !void {
+    _ = try self.vkd.waitForFences(self.device, 1, @ptrCast([*]const vk.Fence, &self.in_flight_fences[self.current_frame]), vk.TRUE, std.math.maxInt(u64));
+    try self.vkd.resetFences(self.device, 1, @ptrCast([*]const vk.Fence, &self.in_flight_fences[self.current_frame]));
+
+    const image_index = blk: {
+        const result = try self.vkd.acquireNextImageKHR(self.device, self.swapchain, std.math.maxInt(u64), self.image_available_semaphores[self.current_frame], .null_handle);
+        std.debug.assert(result.result == .success);
+        break :blk result.image_index;
+    };
+
+    try self.vkd.resetCommandPool(self.device, self.command_pools[self.current_frame], .{});
+    try recordGraphicsCommandBuffer(
+        self.vkd,
+        self.command_buffers[self.current_frame],
+        self.render_pass,
+        self.framebuffers[image_index],
+        self.swapchain_extent,
+        self.pipeline,
+    );
+
+    const wait_dst_stage_mask = vk.PipelineStageFlags{ .color_attachment_output_bit = true };
+    const render_finish_semaphore = @ptrCast([*]const vk.Semaphore, &self.render_finished_semaphores[self.current_frame]);
+    const submit_info = vk.SubmitInfo{
+        .wait_semaphore_count = 1,
+        .p_wait_semaphores = @ptrCast([*]const vk.Semaphore, &self.image_available_semaphores[self.current_frame]),
+        .p_wait_dst_stage_mask = @ptrCast([*]const vk.PipelineStageFlags, &wait_dst_stage_mask),
+        .command_buffer_count = 1,
+        .p_command_buffers = @ptrCast([*]const vk.CommandBuffer, &self.command_buffers[self.current_frame]),
+        .signal_semaphore_count = 1,
+        .p_signal_semaphores = render_finish_semaphore,
+    };
+    try self.vkd.queueSubmit(self.graphics_queue, 1, @ptrCast([*]const vk.SubmitInfo, &submit_info), self.in_flight_fences[self.current_frame]);
+
+    const present_info = vk.PresentInfoKHR{
+        .wait_semaphore_count = 1,
+        .p_wait_semaphores = render_finish_semaphore,
+        .swapchain_count = 1,
+        .p_swapchains = @ptrCast([*]const vk.SwapchainKHR, &self.swapchain),
+        .p_image_indices = @ptrCast([*]const u32, &image_index),
+        .p_results = null,
+    };
+    _ = try self.vkd.queuePresentKHR(self.graphics_queue, &present_info);
+
+    self.current_frame = (self.current_frame + 1) % max_frames_in_flight;
 }
 
 // TODO: verify that it's sane to panic instead of error return
@@ -785,7 +919,7 @@ inline fn createRenderPass(vkd: DeviceDispatch, device: vk.Device, swapchain_for
         .format = swapchain_format,
         .samples = .{ .@"1_bit" = true },
         .load_op = .dont_care,
-        .store_op = .dont_care,
+        .store_op = .store,
         .stencil_load_op = .dont_care,
         .stencil_store_op = .dont_care,
         .initial_layout = .@"undefined",
@@ -808,14 +942,24 @@ inline fn createRenderPass(vkd: DeviceDispatch, device: vk.Device, swapchain_for
         .p_preserve_attachments = undefined,
     };
 
+    const subpass_dependency = vk.SubpassDependency{
+        .src_subpass = vk.SUBPASS_EXTERNAL,
+        .dst_subpass = 0,
+        .src_stage_mask = .{ .color_attachment_output_bit = true },
+        .dst_stage_mask = .{ .color_attachment_output_bit = true },
+        .src_access_mask = .{},
+        .dst_access_mask = .{ .color_attachment_write_bit = true },
+        .dependency_flags = .{},
+    };
+
     const render_pass_info = vk.RenderPassCreateInfo{
         .flags = .{},
         .attachment_count = 1,
         .p_attachments = @ptrCast([*]const vk.AttachmentDescription, &color_attachment),
         .subpass_count = 1,
         .p_subpasses = @ptrCast([*]const vk.SubpassDescription, &subpass),
-        .dependency_count = 0,
-        .p_dependencies = undefined,
+        .dependency_count = 1,
+        .p_dependencies = @ptrCast([*]const vk.SubpassDependency, &subpass_dependency),
     };
     return vkd.createRenderPass(device, &render_pass_info, null);
 }
@@ -967,6 +1111,16 @@ inline fn createGraphicsPipeline(
         .line_width = 1,
     };
 
+    const multisampling = vk.PipelineMultisampleStateCreateInfo{
+        .flags = .{},
+        .rasterization_samples = .{ .@"1_bit" = true },
+        .sample_shading_enable = vk.FALSE,
+        .min_sample_shading = 1,
+        .p_sample_mask = null,
+        .alpha_to_coverage_enable = vk.FALSE,
+        .alpha_to_one_enable = vk.FALSE,
+    };
+
     const color_blend_attachment = vk.PipelineColorBlendAttachmentState{
         .blend_enable = vk.FALSE,
         .src_color_blend_factor = .one,
@@ -975,7 +1129,12 @@ inline fn createGraphicsPipeline(
         .src_alpha_blend_factor = .one,
         .dst_alpha_blend_factor = .zero,
         .alpha_blend_op = .add,
-        .color_write_mask = .{},
+        .color_write_mask = .{
+            .r_bit = true,
+            .g_bit = true,
+            .b_bit = true,
+            .a_bit = true,
+        },
     };
 
     const color_blend_info = vk.PipelineColorBlendStateCreateInfo{
@@ -996,7 +1155,7 @@ inline fn createGraphicsPipeline(
         .p_tessellation_state = null,
         .p_viewport_state = &viewport_state_info,
         .p_rasterization_state = &rasterization_state_info,
-        .p_multisample_state = null,
+        .p_multisample_state = &multisampling,
         .p_depth_stencil_state = null,
         .p_color_blend_state = &color_blend_info,
         .p_dynamic_state = &dynamic_state_info,
@@ -1087,6 +1246,67 @@ inline fn createCommandBuffer(vkd: DeviceDispatch, device: vk.Device, command_po
     return command_buffer;
 }
 
+inline fn recordGraphicsCommandBuffer(
+    vkd: DeviceDispatch,
+    command_buffer: vk.CommandBuffer,
+    render_pass: vk.RenderPass,
+    framebuffer: vk.Framebuffer,
+    swapchain_extent: vk.Extent2D,
+    pipeline: vk.Pipeline,
+) !void {
+    const begin_info = vk.CommandBufferBeginInfo{
+        .flags = .{},
+        .p_inheritance_info = null,
+    };
+    try vkd.beginCommandBuffer(command_buffer, &begin_info);
+
+    const clear_values = [1]vk.ClearValue{.{
+        .color = .{
+            .float_32 = [_]f32{ 0, 0, 0, 1 },
+        },
+    }};
+    const render_area = vk.Rect2D{
+        .offset = .{ .x = 0, .y = 0 },
+        .extent = swapchain_extent,
+    };
+    const render_pass_info = vk.RenderPassBeginInfo{
+        .render_pass = render_pass,
+        .framebuffer = framebuffer,
+        .render_area = render_area,
+        .clear_value_count = clear_values.len,
+        .p_clear_values = &clear_values,
+    };
+    vkd.cmdBeginRenderPass(command_buffer, &render_pass_info, .@"inline");
+    vkd.cmdBindPipeline(command_buffer, .graphics, pipeline);
+
+    const viewport = vk.Viewport{
+        .x = 0,
+        .y = 0,
+        .width = @intToFloat(f32, swapchain_extent.width),
+        .height = @intToFloat(f32, swapchain_extent.height),
+        .min_depth = 0,
+        .max_depth = 1,
+    };
+    vkd.cmdSetViewport(command_buffer, 0, 1, @ptrCast([*]const vk.Viewport, &viewport));
+    vkd.cmdSetScissor(command_buffer, 0, 1, @ptrCast([*]const vk.Rect2D, &render_area));
+    vkd.cmdDraw(command_buffer, 3, 1, 0, 0);
+
+    vkd.cmdEndRenderPass(command_buffer);
+    try vkd.endCommandBuffer(command_buffer);
+}
+
+inline fn createSemaphore(vkd: DeviceDispatch, device: vk.Device) !vk.Semaphore {
+    const semaphore_create_info = vk.SemaphoreCreateInfo{ .flags = .{} };
+    return vkd.createSemaphore(device, &semaphore_create_info, null);
+}
+
+inline fn createFence(vkd: DeviceDispatch, device: vk.Device, signaled: bool) !vk.Fence {
+    const fence_create_info = vk.FenceCreateInfo{
+        .flags = .{ .signaled_bit = signaled },
+    };
+    return vkd.createFence(device, &fence_create_info, null);
+}
+
 const BaseDispatch = vk.BaseWrapper(.{
     .createInstance = true,
     .enumerateInstanceLayerProperties = true,
@@ -1111,24 +1331,42 @@ const InstanceDispatch = vk.InstanceWrapper(.{
 });
 
 const DeviceDispatch = vk.DeviceWrapper(.{
+    .acquireNextImageKHR = true,
     .allocateCommandBuffers = true,
+    .beginCommandBuffer = true,
+    .cmdBeginRenderPass = true,
+    .cmdBindPipeline = true,
+    .cmdDraw = true,
+    .cmdEndRenderPass = true,
+    .cmdSetScissor = true,
+    .cmdSetViewport = true,
     .createCommandPool = true,
+    .createFence = true,
     .createFramebuffer = true,
     .createGraphicsPipelines = true,
     .createImageView = true,
     .createPipelineLayout = true,
     .createRenderPass = true,
+    .createSemaphore = true,
     .createShaderModule = true,
     .createSwapchainKHR = true,
     .destroyCommandPool = true,
     .destroyDevice = true,
+    .destroyFence = true,
     .destroyFramebuffer = true,
     .destroyImageView = true,
     .destroyPipeline = true,
     .destroyPipelineLayout = true,
     .destroyRenderPass = true,
+    .destroySemaphore = true,
     .destroyShaderModule = true,
     .destroySwapchainKHR = true,
+    .endCommandBuffer = true,
     .getDeviceQueue = true,
     .getSwapchainImagesKHR = true,
+    .queuePresentKHR = true,
+    .queueSubmit = true,
+    .resetCommandPool = true,
+    .resetFences = true,
+    .waitForFences = true,
 });
