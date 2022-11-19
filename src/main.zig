@@ -31,16 +31,19 @@ pub fn main() !void {
     // Create our window
     const window = try glfw.Window.create(640, 480, "ecez-vulkan", null, null, .{
         .client_api = .no_api,
-        .resizable = false,
+        .resizable = true,
     });
     defer window.destroy();
 
     var context = try RenderContext.init(allocator, window);
     defer context.deinit(allocator);
 
+    context.handleFramebufferResize(window);
+
     // Wait for the user to close the window.
     while (!window.shouldClose()) {
         try glfw.pollEvents();
-        try context.drawFrame();
+
+        try context.drawFrame(window);
     }
 }
