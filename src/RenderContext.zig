@@ -5,6 +5,7 @@ const builtin = @import("builtin");
 
 const vk = @import("vulkan");
 const glfw = @import("glfw");
+const zm = @import("zmath");
 
 const max_queue_families = 16;
 const max_frames_in_flight = 2;

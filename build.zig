@@ -8,6 +8,7 @@ const ArrayList = std.ArrayList;
 
 const ecez = @import("deps/ecez/build.zig");
 const glfw = @import("deps/mach-glfw/build.zig");
+const zmath = @import("deps/zmath/build.zig");
 
 const vkgen = @import("deps/vulkan-zig/generator/index.zig");
 
@@ -59,6 +60,9 @@ pub fn build(b: *std.build.Builder) void {
     // link glfw
     exe.addPackage(glfw.pkg);
     glfw.link(b, exe, .{}) catch unreachable;
+
+    // link zmath
+    exe.addPackage(zmath.pkg);
 
     // Create a step that generates vk.zig (stored in zig-cache) from the provided vulkan registry.
     const gen = vkgen.VkGenerateStep.init(b, thisDir() ++ "/deps/vk.xml", "vk.zig");
