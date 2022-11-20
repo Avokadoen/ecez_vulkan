@@ -13,6 +13,44 @@ const max_frames_in_flight = 2;
 const RenderContext = @This();
 
 // TODO: reduce debug assert, replace with errors
+// TODO: use sync2
+
+// TODO: placeholder
+const Vertex = struct {
+    pos: [2]f32,
+    color: [3]f32,
+
+    pub fn getBindingDescription() vk.VertexInputBindingDescription {
+        return vk.VertexInputBindingDescription{
+            .binding = 0,
+            .stride = @sizeOf(Vertex),
+            .input_rate = .vertex,
+        };
+    }
+
+    pub fn getAttributeDescriptions() [2]vk.VertexInputAttributeDescription {
+        return [2]vk.VertexInputAttributeDescription{
+            .{
+                .location = 0,
+                .binding = 0,
+                .format = .r32g32_sfloat,
+                .offset = @offsetOf(Vertex, "pos"),
+            },
+            .{
+                .location = 1,
+                .binding = 0,
+                .format = .r32g32b32_sfloat,
+                .offset = @offsetOf(Vertex, "color"),
+            },
+        };
+    }
+};
+
+const vertices = [_]Vertex{
+    .{ .pos = .{ 0, -0.5 }, .color = .{ 1, 0, 0 } },
+    .{ .pos = .{ 0.5, 0.5 }, .color = .{ 0, 1, 0 } },
+    .{ .pos = .{ -0.5, 0.5 }, .color = .{ 0, 0, 1 } },
+};
 
 const is_debug_build = builtin.mode == .Debug;
 
@@ -25,6 +63,7 @@ debug_messenger: ?vk.DebugUtilsMessengerEXT,
 
 instance: vk.Instance,
 physical_device: vk.PhysicalDevice,
+device_properties: vk.PhysicalDeviceProperties,
 device: vk.Device,
 
 // TODO: abstraction: a "frame"? (all types that are slices here)
@@ -51,6 +90,9 @@ render_finished_semaphores: []vk.Semaphore,
 in_flight_fences: []vk.Fence,
 
 current_frame: usize,
+
+vertex_buffer: vk.Buffer,
+vertex_memory: vk.DeviceMemory,
 
 queue_family_indices: QueueFamilyIndices,
 graphics_queue: vk.Queue,
@@ -120,7 +162,11 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     }
 
     const physical_device = try selectPhysicalDevice(allocator, instance, vki, surface);
+    const device_properties = vki.getPhysicalDeviceProperties(physical_device);
+
     const swapchain_support_details = try SwapchainSupportDetails.init(allocator, vki, physical_device, surface);
+    errdefer swapchain_support_details.deinit(allocator);
+
     const queue_family_indices = try QueueFamilyIndices.init(vki, physical_device, surface);
     const device = try createLogicalDevice(vki, physical_device, queue_family_indices);
     const vkd = try DeviceDispatch.load(device, vki.dispatch.vkGetDeviceProcAddr);
@@ -287,6 +333,14 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         allocator.free(in_flight_fences);
     }
 
+    // create device memory and transfer vertices to host
+    const vertex_buffer = try createVertexBuffer(vkd, device, device_properties.limits.non_coherent_atom_size);
+    errdefer vkd.destroyBuffer(device, vertex_buffer, null);
+    const vertex_memory = try createVertexDeviceMemory(vkd, device, vki, physical_device, vertex_buffer);
+    errdefer vkd.freeMemory(device, vertex_memory, null);
+    try vkd.bindBufferMemory(device, vertex_buffer, vertex_memory, 0);
+    try transferMemoryToDevice(vkd, device, vertex_memory, device_properties.limits.non_coherent_atom_size, Vertex, &vertices);
+
     return RenderContext{
         .vkb = vkb,
         .vki = vki,
@@ -295,6 +349,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         .instance = instance,
         .surface = surface,
         .physical_device = physical_device,
+        .device_properties = device_properties,
         .device = device,
         .swapchain_support_details = swapchain_support_details,
         .swapchain_extent = swapchain_extent,
@@ -312,6 +367,8 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         .render_finished_semaphores = render_finished_semaphores,
         .in_flight_fences = in_flight_fences,
         .current_frame = 0,
+        .vertex_buffer = vertex_buffer,
+        .vertex_memory = vertex_memory,
         .queue_family_indices = queue_family_indices,
         .graphics_queue = graphics_queue,
     };
@@ -374,6 +431,9 @@ pub fn deinit(self: RenderContext, allocator: Allocator) void {
         // try to wait for fences, continue if it fails for any reason
         _ = self.vkd.waitForFences(self.device, 1, @ptrCast([*]const vk.Fence, &fence), vk.TRUE, std.time.ns_per_s) catch {};
     }
+
+    self.vkd.freeMemory(self.device, self.vertex_memory, null);
+    self.vkd.destroyBuffer(self.device, self.vertex_buffer, null);
 
     for (self.framebuffers) |framebuffer| {
         self.vkd.destroyFramebuffer(self.device, framebuffer, null);
@@ -447,6 +507,7 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window) !void {
         self.framebuffers[image_index],
         self.swapchain_extent,
         self.pipeline,
+        self.vertex_buffer,
     );
 
     const wait_dst_stage_mask = vk.PipelineStageFlags{ .color_attachment_output_bit = true };
@@ -1138,12 +1199,14 @@ inline fn createGraphicsPipeline(
         frag_stage_info,
     };
 
+    const vertex_binding_description = Vertex.getBindingDescription();
+    const vertex_attribute_description = Vertex.getAttributeDescriptions();
     const vertex_input_info = vk.PipelineVertexInputStateCreateInfo{
         .flags = .{},
-        .vertex_binding_description_count = 0,
-        .p_vertex_binding_descriptions = undefined,
-        .vertex_attribute_description_count = 0,
-        .p_vertex_attribute_descriptions = undefined,
+        .vertex_binding_description_count = 1,
+        .p_vertex_binding_descriptions = @ptrCast([*]const vk.VertexInputBindingDescription, &vertex_binding_description),
+        .vertex_attribute_description_count = vertex_attribute_description.len,
+        .p_vertex_attribute_descriptions = &vertex_attribute_description,
     };
 
     const input_assembly = vk.PipelineInputAssemblyStateCreateInfo{
@@ -1372,6 +1435,7 @@ inline fn recordGraphicsCommandBuffer(
     framebuffer: vk.Framebuffer,
     swapchain_extent: vk.Extent2D,
     pipeline: vk.Pipeline,
+    vertex_buffer: vk.Buffer,
 ) !void {
     const begin_info = vk.CommandBufferBeginInfo{
         .flags = .{},
@@ -1408,7 +1472,17 @@ inline fn recordGraphicsCommandBuffer(
     };
     vkd.cmdSetViewport(command_buffer, 0, 1, @ptrCast([*]const vk.Viewport, &viewport));
     vkd.cmdSetScissor(command_buffer, 0, 1, @ptrCast([*]const vk.Rect2D, &render_area));
-    vkd.cmdDraw(command_buffer, 3, 1, 0, 0);
+
+    const vertex_offsets = [_]vk.DeviceSize{0};
+    vkd.cmdBindVertexBuffers(
+        command_buffer,
+        0,
+        1,
+        @ptrCast([*]const vk.Buffer, &vertex_buffer),
+        @ptrCast([*]const vk.DeviceSize, &vertex_offsets),
+    );
+
+    vkd.cmdDraw(command_buffer, @intCast(u32, vertices.len), 1, 0, 0);
 
     vkd.cmdEndRenderPass(command_buffer);
     try vkd.endCommandBuffer(command_buffer);
@@ -1426,6 +1500,90 @@ inline fn createFence(vkd: DeviceDispatch, device: vk.Device, signaled: bool) !v
     return vkd.createFence(device, &fence_create_info, null);
 }
 
+inline fn createVertexBuffer(vkd: DeviceDispatch, device: vk.Device, non_coherent_atom_size: vk.DeviceSize) !vk.Buffer {
+    const buffer_info = vk.BufferCreateInfo{
+        .flags = .{},
+        .size = getAlignedDeviceSize(non_coherent_atom_size, @sizeOf(Vertex) * vertices.len),
+        .usage = .{ .vertex_buffer_bit = true },
+        .sharing_mode = .exclusive,
+        .queue_family_index_count = 0,
+        .p_queue_family_indices = undefined,
+    };
+    return vkd.createBuffer(device, &buffer_info, null);
+}
+
+inline fn createVertexDeviceMemory(
+    vkd: DeviceDispatch,
+    device: vk.Device,
+    vki: InstanceDispatch,
+    physical_device: vk.PhysicalDevice,
+    vertex_buffer: vk.Buffer,
+) !vk.DeviceMemory {
+    const memory_requirements = vkd.getBufferMemoryRequirements(device, vertex_buffer);
+    // TODO: better memory ..
+    const memory_type_index = try findMemoryTypeIndex(
+        vki,
+        physical_device,
+        memory_requirements.memory_type_bits,
+        .{ .host_visible_bit = true, .device_local_bit = true },
+    );
+
+    const allocation_info = vk.MemoryAllocateInfo{
+        .allocation_size = memory_requirements.size,
+        .memory_type_index = memory_type_index,
+    };
+    return vkd.allocateMemory(device, &allocation_info, null);
+}
+
+inline fn findMemoryTypeIndex(vki: InstanceDispatch, physical_device: vk.PhysicalDevice, type_filter: u32, property_flags: vk.MemoryPropertyFlags) !u32 {
+    const properties = vki.getPhysicalDeviceMemoryProperties(physical_device);
+    for (properties.memory_types[0..properties.memory_type_count]) |memory_type, i| {
+        std.debug.assert(i < 32);
+
+        const u5_i = @intCast(u5, i);
+        const type_match = (type_filter & (@as(u32, 1) << u5_i)) != 0;
+        const property_match = memory_type.property_flags.contains(property_flags);
+        if (type_match and property_match) {
+            return @intCast(u32, i);
+        }
+    }
+
+    return error.NotFound;
+}
+
+fn transferMemoryToDevice(
+    vkd: DeviceDispatch,
+    device: vk.Device,
+    memory: vk.DeviceMemory,
+    non_coherent_atom_size: vk.DeviceSize,
+    comptime T: type,
+    data: []const T,
+) !void {
+    const raw_data = std.mem.sliceAsBytes(data);
+
+    const aligned_memory_size = getAlignedDeviceSize(non_coherent_atom_size, @intCast(vk.DeviceSize, raw_data.len));
+
+    var device_data = blk: {
+        var raw_device_ptr = try vkd.mapMemory(device, memory, 0, aligned_memory_size, .{});
+        break :blk @ptrCast([*]u8, raw_device_ptr)[0..raw_data.len];
+    };
+    defer vkd.unmapMemory(device, memory);
+
+    std.mem.copy(u8, device_data, raw_data);
+
+    // TODO: defer flush
+    const mapped_range = vk.MappedMemoryRange{
+        .memory = memory,
+        .offset = 0,
+        .size = aligned_memory_size,
+    };
+    try vkd.flushMappedMemoryRanges(device, 1, @ptrCast([*]const vk.MappedMemoryRange, &mapped_range));
+}
+
+inline fn getAlignedDeviceSize(non_coherent_atom_size: vk.DeviceSize, size: vk.DeviceSize) vk.DeviceSize {
+    return (size + non_coherent_atom_size - 1) & ~(non_coherent_atom_size - 1);
+}
+
 const BaseDispatch = vk.BaseWrapper(.{
     .createInstance = true,
     .enumerateInstanceLayerProperties = true,
@@ -1441,6 +1599,7 @@ const InstanceDispatch = vk.InstanceWrapper(.{
     .enumeratePhysicalDevices = true,
     .getDeviceProcAddr = true,
     .getPhysicalDeviceFeatures = true,
+    .getPhysicalDeviceMemoryProperties = true,
     .getPhysicalDeviceProperties = true,
     .getPhysicalDeviceQueueFamilyProperties = true,
     .getPhysicalDeviceSurfaceCapabilitiesKHR = true,
@@ -1452,13 +1611,17 @@ const InstanceDispatch = vk.InstanceWrapper(.{
 const DeviceDispatch = vk.DeviceWrapper(.{
     .acquireNextImageKHR = true,
     .allocateCommandBuffers = true,
+    .allocateMemory = true,
     .beginCommandBuffer = true,
+    .bindBufferMemory = true,
     .cmdBeginRenderPass = true,
     .cmdBindPipeline = true,
+    .cmdBindVertexBuffers = true,
     .cmdDraw = true,
     .cmdEndRenderPass = true,
     .cmdSetScissor = true,
     .cmdSetViewport = true,
+    .createBuffer = true,
     .createCommandPool = true,
     .createFence = true,
     .createFramebuffer = true,
@@ -1469,6 +1632,7 @@ const DeviceDispatch = vk.DeviceWrapper(.{
     .createSemaphore = true,
     .createShaderModule = true,
     .createSwapchainKHR = true,
+    .destroyBuffer = true,
     .destroyCommandPool = true,
     .destroyDevice = true,
     .destroyFence = true,
@@ -1482,11 +1646,16 @@ const DeviceDispatch = vk.DeviceWrapper(.{
     .destroySwapchainKHR = true,
     .deviceWaitIdle = true,
     .endCommandBuffer = true,
+    .flushMappedMemoryRanges = true,
+    .freeMemory = true,
+    .getBufferMemoryRequirements = true,
     .getDeviceQueue = true,
     .getSwapchainImagesKHR = true,
+    .mapMemory = true,
     .queuePresentKHR = true,
     .queueSubmit = true,
     .resetCommandPool = true,
     .resetFences = true,
+    .unmapMemory = true,
     .waitForFences = true,
 });
