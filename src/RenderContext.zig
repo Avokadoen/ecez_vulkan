@@ -14,6 +14,8 @@ const DeviceDispatch = vk_dispatch.DeviceDispatch;
 
 const QueueFamilyIndices = @import("QueueFamilyIndices.zig");
 
+const command = @import("command.zig");
+const sync = @import("sync.zig");
 const dmem = @import("device_memory.zig");
 const application_ext_layers = @import("application_ext_layers.zig");
 
@@ -104,6 +106,7 @@ vertex_memory: vk.DeviceMemory,
 
 queue_family_indices: QueueFamilyIndices,
 graphics_queue: vk.Queue,
+transfer_queue: vk.Queue,
 
 pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     // bind the glfw instance proc pointer
@@ -181,6 +184,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     errdefer vkd.destroyDevice(device, null);
 
     const graphics_queue = vkd.getDeviceQueue(device, queue_family_indices.graphicsIndex(), 0);
+    const transfer_queue = vkd.getDeviceQueue(device, queue_family_indices.transferIndex(), 0);
 
     const swapchain = try createSwapchain(
         vkd,
@@ -264,7 +268,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         }
 
         for (pools) |*pool| {
-            pool.* = try createCommandPool(vkd, device, queue_family_indices.graphicsIndex());
+            pool.* = try command.createPool(vkd, device, queue_family_indices.graphicsIndex());
         }
         break :blk pools;
     };
@@ -280,7 +284,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         errdefer allocator.free(buffers);
 
         for (buffers) |*cmd_buffer, i| {
-            cmd_buffer.* = try createCommandBuffer(vkd, device, command_pools[i]);
+            cmd_buffer.* = try command.createBuffer(vkd, device, command_pools[i]);
         }
         break :blk buffers;
     };
@@ -300,7 +304,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         }
 
         for (semaphores) |*semaphore| {
-            semaphore.* = try createSemaphore(vkd, device);
+            semaphore.* = try sync.createSemaphore(vkd, device);
             initialized_semaphores += 1;
         }
 
@@ -328,7 +332,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         }
 
         for (fences) |*fence| {
-            fence.* = try createFence(vkd, device, true);
+            fence.* = try sync.createFence(vkd, device, true);
             initialized_fences += 1;
         }
 
@@ -356,7 +360,10 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         vki,
         physical_device,
         vertex_buffer,
-        .{ .device_local_bit = true, .host_visible_bit = true },
+        .{
+            .device_local_bit = true,
+            .host_visible_bit = true,
+        },
     );
     errdefer vkd.freeMemory(device, vertex_memory, null);
     try vkd.bindBufferMemory(device, vertex_buffer, vertex_memory, 0);
@@ -392,6 +399,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         .vertex_memory = vertex_memory,
         .queue_family_indices = queue_family_indices,
         .graphics_queue = graphics_queue,
+        .transfer_queue = transfer_queue,
     };
 }
 
@@ -850,18 +858,27 @@ inline fn createLogicalDevice(
     physical_device: vk.PhysicalDevice,
     queue_families: QueueFamilyIndices,
 ) InstanceDispatch.CreateDeviceError!vk.Device {
+    const one_index = queue_families.graphicsIndex() == queue_families.transferIndex();
     const queue_priorities = [_]f32{1};
-    const queue_create_info = [1]vk.DeviceQueueCreateInfo{.{
-        .flags = .{},
-        .queue_family_index = queue_families.graphics.?.index,
-        .queue_count = 1,
-        .p_queue_priorities = &queue_priorities,
-    }};
+    const queue_create_info = [_]vk.DeviceQueueCreateInfo{
+        .{
+            .flags = .{},
+            .queue_family_index = queue_families.graphicsIndex(),
+            .queue_count = 1,
+            .p_queue_priorities = &queue_priorities,
+        },
+        .{
+            .flags = .{},
+            .queue_family_index = queue_families.transferIndex(),
+            .queue_count = 1,
+            .p_queue_priorities = &queue_priorities,
+        },
+    };
 
     const device_features = vk.PhysicalDeviceFeatures{};
     const create_info = vk.DeviceCreateInfo{
         .flags = .{},
-        .queue_create_info_count = queue_create_info.len,
+        .queue_create_info_count = if (one_index) 1 else queue_create_info.len,
         .p_queue_create_infos = &queue_create_info,
         .enabled_layer_count = if (is_debug_build) application_ext_layers.desired_layers.len else 0,
         .pp_enabled_layer_names = &application_ext_layers.desired_layers,
@@ -1306,26 +1323,6 @@ inline fn instantiateFramebuffer(
     }
 }
 
-inline fn createCommandPool(vkd: DeviceDispatch, device: vk.Device, queue_family_index: u32) !vk.CommandPool {
-    const pool_info = vk.CommandPoolCreateInfo{
-        .flags = .{ .reset_command_buffer_bit = true },
-        .queue_family_index = queue_family_index,
-    };
-
-    return vkd.createCommandPool(device, &pool_info, null);
-}
-
-inline fn createCommandBuffer(vkd: DeviceDispatch, device: vk.Device, command_pool: vk.CommandPool) !vk.CommandBuffer {
-    const cmd_buffer_info = vk.CommandBufferAllocateInfo{
-        .command_pool = command_pool,
-        .level = .primary,
-        .command_buffer_count = 1,
-    };
-    var command_buffer: vk.CommandBuffer = undefined;
-    try vkd.allocateCommandBuffers(device, &cmd_buffer_info, @ptrCast([*]vk.CommandBuffer, &command_buffer));
-    return command_buffer;
-}
-
 inline fn recordGraphicsCommandBuffer(
     vkd: DeviceDispatch,
     command_buffer: vk.CommandBuffer,
@@ -1336,7 +1333,7 @@ inline fn recordGraphicsCommandBuffer(
     vertex_buffer: vk.Buffer,
 ) !void {
     const begin_info = vk.CommandBufferBeginInfo{
-        .flags = .{},
+        .flags = .{ .one_time_submit_bit = true },
         .p_inheritance_info = null,
     };
     try vkd.beginCommandBuffer(command_buffer, &begin_info);
@@ -1384,16 +1381,4 @@ inline fn recordGraphicsCommandBuffer(
 
     vkd.cmdEndRenderPass(command_buffer);
     try vkd.endCommandBuffer(command_buffer);
-}
-
-inline fn createSemaphore(vkd: DeviceDispatch, device: vk.Device) !vk.Semaphore {
-    const semaphore_create_info = vk.SemaphoreCreateInfo{ .flags = .{} };
-    return vkd.createSemaphore(device, &semaphore_create_info, null);
-}
-
-inline fn createFence(vkd: DeviceDispatch, device: vk.Device, signaled: bool) !vk.Fence {
-    const fence_create_info = vk.FenceCreateInfo{
-        .flags = .{ .signaled_bit = signaled },
-    };
-    return vkd.createFence(device, &fence_create_info, null);
 }

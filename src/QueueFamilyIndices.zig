@@ -83,6 +83,10 @@ pub inline fn graphicsIndex(self: QueueFamilyIndices) u32 {
     return self.graphics.?.index;
 }
 
+pub inline fn transferIndex(self: QueueFamilyIndices) u32 {
+    return self.transfer.?.index;
+}
+
 pub inline fn isComplete(self: QueueFamilyIndices) bool {
     if (self.graphics == null or self.compute == null or self.transfer == null) {
         return false;
