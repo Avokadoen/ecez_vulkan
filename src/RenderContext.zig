@@ -12,10 +12,12 @@ const BaseDispatch = vk_dispatch.BaseDispatch;
 const InstanceDispatch = vk_dispatch.InstanceDispatch;
 const DeviceDispatch = vk_dispatch.DeviceDispatch;
 
+const QueueFamilyIndices = @import("QueueFamilyIndices.zig");
+
 const dmem = @import("device_memory.zig");
+const application_ext_layers = @import("application_ext_layers.zig");
 
 const is_debug_build = builtin.mode == .Debug;
-const max_queue_families = 16;
 const max_frames_in_flight = 2;
 
 const RenderContext = @This();
@@ -662,115 +664,6 @@ inline fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki:
     return selected_device;
 }
 
-pub const QueueFamilyIndices = struct {
-    pub const FamilyEntry = struct {
-        index: u32,
-        support_present: bool,
-    };
-
-    graphics: ?FamilyEntry,
-    compute: ?FamilyEntry,
-    transfer: ?FamilyEntry,
-
-    pub fn init(vki: InstanceDispatch, physical_device: vk.PhysicalDevice, surface: vk.SurfaceKHR) !QueueFamilyIndices {
-        var queues: QueueFamilyIndices = QueueFamilyIndices{
-            .graphics = null,
-            .compute = null,
-            .transfer = null,
-        };
-
-        if ((try checkDeviceExtensionSupport(vki, physical_device)) == false) {
-            return queues;
-        }
-
-        var queue_arr: [max_queue_families]vk.QueueFamilyProperties = undefined;
-        const queue_families_properties = blk: {
-            var family_count: u32 = undefined;
-            vki.getPhysicalDeviceQueueFamilyProperties(physical_device, &family_count, null);
-            std.debug.assert(family_count <= max_queue_families);
-
-            if (family_count == 0) {
-                return queues;
-            }
-
-            // TODO: use inline switch here. We need stage 2 to do this ...
-            vki.getPhysicalDeviceQueueFamilyProperties(physical_device, &family_count, &queue_arr);
-
-            break :blk queue_arr[0..family_count];
-        };
-
-        // TODO: account for timestamp_valid_bits
-        for (queue_families_properties) |property, i| {
-            const flags = property.queue_flags;
-
-            // graphics queue is usually the first and only one with this bit
-            if ((flags.contains(vk.QueueFlags{ .graphics_bit = true }))) {
-                const index = @intCast(u32, i);
-                const support_present = (try vki.getPhysicalDeviceSurfaceSupportKHR(physical_device, index, surface)) != 0;
-                queues.graphics = FamilyEntry{ .index = index, .support_present = support_present };
-            }
-
-            // grab dedicated compute family index if any
-            const is_dedicated_compute = !flags.graphics_bit and flags.compute_bit;
-            if (is_dedicated_compute or (queues.compute == null and flags.contains(vk.QueueFlags{ .compute_bit = true }))) {
-                const index = @intCast(u32, i);
-                const support_present = (try vki.getPhysicalDeviceSurfaceSupportKHR(physical_device, index, surface)) != 0;
-                queues.compute = FamilyEntry{ .index = index, .support_present = support_present };
-            }
-
-            // grab dedicated transfer family index if any
-            const is_dedicated_transfer = !flags.graphics_bit and !flags.compute_bit and flags.transfer_bit;
-            if (is_dedicated_transfer or (queues.transfer == null and flags.contains(vk.QueueFlags{ .transfer_bit = true }))) {
-                const index = @intCast(u32, i);
-                const support_present = (try vki.getPhysicalDeviceSurfaceSupportKHR(physical_device, index, surface)) != 0;
-                queues.transfer = FamilyEntry{ .index = index, .support_present = support_present };
-            }
-        }
-
-        return queues;
-    }
-
-    pub inline fn graphicsIndex(self: QueueFamilyIndices) u32 {
-        return self.graphics.?.index;
-    }
-
-    pub inline fn isComplete(self: QueueFamilyIndices) bool {
-        if (self.graphics == null or self.compute == null or self.transfer == null) {
-            return false;
-        }
-
-        return self.graphics.?.support_present;
-    }
-
-    inline fn checkDeviceExtensionSupport(vki: InstanceDispatch, physical_device: vk.PhysicalDevice) !bool {
-        var available_extensions: [1024]vk.ExtensionProperties = undefined;
-
-        const extension_count: u32 = blk: {
-            var count: u32 = undefined;
-            var result = try vki.enumerateDeviceExtensionProperties(physical_device, null, &count, null);
-            std.debug.assert(count < available_extensions.len);
-            std.debug.assert(result == .success);
-
-            result = try vki.enumerateDeviceExtensionProperties(physical_device, null, &count, &available_extensions);
-            std.debug.assert(result == .success);
-
-            break :blk count;
-        };
-
-        var matched_extensions: u8 = 0;
-        for (required_extensions) |required_extension| {
-            for (available_extensions[0..extension_count]) |available_extension| {
-                if (std.cstr.cmp(required_extension, @ptrCast([*:0]const u8, &available_extension.extension_name)) == 0) {
-                    matched_extensions += 1;
-                    break;
-                }
-            }
-        }
-
-        return matched_extensions == required_extensions.len;
-    }
-};
-
 pub fn handleFramebufferResize(self: *RenderContext, window: glfw.Window) void {
     const callback = struct {
         pub fn func(_window: glfw.Window, width: u32, height: u32) void {
@@ -970,10 +863,10 @@ inline fn createLogicalDevice(
         .flags = .{},
         .queue_create_info_count = queue_create_info.len,
         .p_queue_create_infos = &queue_create_info,
-        .enabled_layer_count = if (is_debug_build) desired_layers.len else 0,
-        .pp_enabled_layer_names = &desired_layers,
-        .enabled_extension_count = required_extensions_cstr.len,
-        .pp_enabled_extension_names = &required_extensions_cstr,
+        .enabled_layer_count = if (is_debug_build) application_ext_layers.desired_layers.len else 0,
+        .pp_enabled_layer_names = &application_ext_layers.desired_layers,
+        .enabled_extension_count = application_ext_layers.required_extensions_cstr.len,
+        .pp_enabled_extension_names = &application_ext_layers.required_extensions_cstr,
         .p_enabled_features = &device_features,
     };
     return vki.createDevice(physical_device, &create_info, null);
@@ -993,20 +886,6 @@ const debug_message_info = vk.DebugUtilsMessengerCreateInfoEXT{
     },
     .pfn_user_callback = messageCallback,
     .p_user_data = null,
-};
-
-const required_extensions = [_][:0]const u8{
-    vk.extension_info.khr_swapchain.name,
-    vk.extension_info.khr_synchronization_2.name,
-};
-
-const required_extensions_cstr = [_][*:0]const u8{
-    vk.extension_info.khr_swapchain.name,
-    vk.extension_info.khr_synchronization_2.name,
-};
-
-const desired_layers = [_][*:0]const u8{
-    "VK_LAYER_KHRONOS_validation",
 };
 
 /// set up debug messenger if we are in a debug build
@@ -1031,7 +910,7 @@ inline fn getValidationLayers(allocator: Allocator, vkb: BaseDispatch) ![]const 
 
     _ = try vkb.enumerateInstanceLayerProperties(&layer_count, existing_layers.ptr);
 
-    inline for (desired_layers) |desired_layer| {
+    inline for (application_ext_layers.desired_layers) |desired_layer| {
         var found: bool = false;
 
         inner: for (existing_layers) |existing_layer| {
@@ -1046,7 +925,7 @@ inline fn getValidationLayers(allocator: Allocator, vkb: BaseDispatch) ![]const 
         }
     }
 
-    return &desired_layers;
+    return &application_ext_layers.desired_layers;
 }
 
 fn messageCallback(
