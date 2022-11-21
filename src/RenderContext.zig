@@ -7,6 +7,14 @@ const vk = @import("vulkan");
 const glfw = @import("glfw");
 const zm = @import("zmath");
 
+const vk_dispatch = @import("vk_dispatch.zig");
+const BaseDispatch = vk_dispatch.BaseDispatch;
+const InstanceDispatch = vk_dispatch.InstanceDispatch;
+const DeviceDispatch = vk_dispatch.DeviceDispatch;
+
+const dmem = @import("device_memory.zig");
+
+const is_debug_build = builtin.mode == .Debug;
 const max_queue_families = 16;
 const max_frames_in_flight = 2;
 
@@ -51,8 +59,6 @@ const vertices = [_]Vertex{
     .{ .pos = .{ 0.5, 0.5 }, .color = .{ 0, 1, 0 } },
     .{ .pos = .{ -0.5, 0.5 }, .color = .{ 0, 0, 1 } },
 };
-
-const is_debug_build = builtin.mode == .Debug;
 
 vkb: BaseDispatch,
 vki: InstanceDispatch,
@@ -334,12 +340,25 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     }
 
     // create device memory and transfer vertices to host
-    const vertex_buffer = try createVertexBuffer(vkd, device, device_properties.limits.non_coherent_atom_size);
+    const vertex_buffer = try dmem.createBuffer(
+        vkd,
+        device,
+        device_properties.limits.non_coherent_atom_size,
+        @sizeOf(Vertex) * vertices.len,
+        .{ .vertex_buffer_bit = true },
+    );
     errdefer vkd.destroyBuffer(device, vertex_buffer, null);
-    const vertex_memory = try createVertexDeviceMemory(vkd, device, vki, physical_device, vertex_buffer);
+    const vertex_memory = try dmem.createDeviceMemory(
+        vkd,
+        device,
+        vki,
+        physical_device,
+        vertex_buffer,
+        .{ .device_local_bit = true, .host_visible_bit = true },
+    );
     errdefer vkd.freeMemory(device, vertex_memory, null);
     try vkd.bindBufferMemory(device, vertex_buffer, vertex_memory, 0);
-    try transferMemoryToDevice(vkd, device, vertex_memory, device_properties.limits.non_coherent_atom_size, Vertex, &vertices);
+    try dmem.transferMemoryToDevice(vkd, device, vertex_memory, device_properties.limits.non_coherent_atom_size, Vertex, &vertices);
 
     return RenderContext{
         .vkb = vkb,
@@ -1499,163 +1518,3 @@ inline fn createFence(vkd: DeviceDispatch, device: vk.Device, signaled: bool) !v
     };
     return vkd.createFence(device, &fence_create_info, null);
 }
-
-inline fn createVertexBuffer(vkd: DeviceDispatch, device: vk.Device, non_coherent_atom_size: vk.DeviceSize) !vk.Buffer {
-    const buffer_info = vk.BufferCreateInfo{
-        .flags = .{},
-        .size = getAlignedDeviceSize(non_coherent_atom_size, @sizeOf(Vertex) * vertices.len),
-        .usage = .{ .vertex_buffer_bit = true },
-        .sharing_mode = .exclusive,
-        .queue_family_index_count = 0,
-        .p_queue_family_indices = undefined,
-    };
-    return vkd.createBuffer(device, &buffer_info, null);
-}
-
-inline fn createVertexDeviceMemory(
-    vkd: DeviceDispatch,
-    device: vk.Device,
-    vki: InstanceDispatch,
-    physical_device: vk.PhysicalDevice,
-    vertex_buffer: vk.Buffer,
-) !vk.DeviceMemory {
-    const memory_requirements = vkd.getBufferMemoryRequirements(device, vertex_buffer);
-    // TODO: better memory ..
-    const memory_type_index = try findMemoryTypeIndex(
-        vki,
-        physical_device,
-        memory_requirements.memory_type_bits,
-        .{ .host_visible_bit = true, .device_local_bit = true },
-    );
-
-    const allocation_info = vk.MemoryAllocateInfo{
-        .allocation_size = memory_requirements.size,
-        .memory_type_index = memory_type_index,
-    };
-    return vkd.allocateMemory(device, &allocation_info, null);
-}
-
-inline fn findMemoryTypeIndex(vki: InstanceDispatch, physical_device: vk.PhysicalDevice, type_filter: u32, property_flags: vk.MemoryPropertyFlags) !u32 {
-    const properties = vki.getPhysicalDeviceMemoryProperties(physical_device);
-    for (properties.memory_types[0..properties.memory_type_count]) |memory_type, i| {
-        std.debug.assert(i < 32);
-
-        const u5_i = @intCast(u5, i);
-        const type_match = (type_filter & (@as(u32, 1) << u5_i)) != 0;
-        const property_match = memory_type.property_flags.contains(property_flags);
-        if (type_match and property_match) {
-            return @intCast(u32, i);
-        }
-    }
-
-    return error.NotFound;
-}
-
-fn transferMemoryToDevice(
-    vkd: DeviceDispatch,
-    device: vk.Device,
-    memory: vk.DeviceMemory,
-    non_coherent_atom_size: vk.DeviceSize,
-    comptime T: type,
-    data: []const T,
-) !void {
-    const raw_data = std.mem.sliceAsBytes(data);
-
-    const aligned_memory_size = getAlignedDeviceSize(non_coherent_atom_size, @intCast(vk.DeviceSize, raw_data.len));
-
-    var device_data = blk: {
-        var raw_device_ptr = try vkd.mapMemory(device, memory, 0, aligned_memory_size, .{});
-        break :blk @ptrCast([*]u8, raw_device_ptr)[0..raw_data.len];
-    };
-    defer vkd.unmapMemory(device, memory);
-
-    std.mem.copy(u8, device_data, raw_data);
-
-    // TODO: defer flush
-    const mapped_range = vk.MappedMemoryRange{
-        .memory = memory,
-        .offset = 0,
-        .size = aligned_memory_size,
-    };
-    try vkd.flushMappedMemoryRanges(device, 1, @ptrCast([*]const vk.MappedMemoryRange, &mapped_range));
-}
-
-inline fn getAlignedDeviceSize(non_coherent_atom_size: vk.DeviceSize, size: vk.DeviceSize) vk.DeviceSize {
-    return (size + non_coherent_atom_size - 1) & ~(non_coherent_atom_size - 1);
-}
-
-const BaseDispatch = vk.BaseWrapper(.{
-    .createInstance = true,
-    .enumerateInstanceLayerProperties = true,
-});
-
-const InstanceDispatch = vk.InstanceWrapper(.{
-    .createDebugUtilsMessengerEXT = is_debug_build,
-    .createDevice = true,
-    .destroyDebugUtilsMessengerEXT = is_debug_build,
-    .destroyInstance = true,
-    .destroySurfaceKHR = true,
-    .enumerateDeviceExtensionProperties = true,
-    .enumeratePhysicalDevices = true,
-    .getDeviceProcAddr = true,
-    .getPhysicalDeviceFeatures = true,
-    .getPhysicalDeviceMemoryProperties = true,
-    .getPhysicalDeviceProperties = true,
-    .getPhysicalDeviceQueueFamilyProperties = true,
-    .getPhysicalDeviceSurfaceCapabilitiesKHR = true,
-    .getPhysicalDeviceSurfaceFormatsKHR = true,
-    .getPhysicalDeviceSurfacePresentModesKHR = true,
-    .getPhysicalDeviceSurfaceSupportKHR = true,
-});
-
-const DeviceDispatch = vk.DeviceWrapper(.{
-    .acquireNextImageKHR = true,
-    .allocateCommandBuffers = true,
-    .allocateMemory = true,
-    .beginCommandBuffer = true,
-    .bindBufferMemory = true,
-    .cmdBeginRenderPass = true,
-    .cmdBindPipeline = true,
-    .cmdBindVertexBuffers = true,
-    .cmdDraw = true,
-    .cmdEndRenderPass = true,
-    .cmdSetScissor = true,
-    .cmdSetViewport = true,
-    .createBuffer = true,
-    .createCommandPool = true,
-    .createFence = true,
-    .createFramebuffer = true,
-    .createGraphicsPipelines = true,
-    .createImageView = true,
-    .createPipelineLayout = true,
-    .createRenderPass = true,
-    .createSemaphore = true,
-    .createShaderModule = true,
-    .createSwapchainKHR = true,
-    .destroyBuffer = true,
-    .destroyCommandPool = true,
-    .destroyDevice = true,
-    .destroyFence = true,
-    .destroyFramebuffer = true,
-    .destroyImageView = true,
-    .destroyPipeline = true,
-    .destroyPipelineLayout = true,
-    .destroyRenderPass = true,
-    .destroySemaphore = true,
-    .destroyShaderModule = true,
-    .destroySwapchainKHR = true,
-    .deviceWaitIdle = true,
-    .endCommandBuffer = true,
-    .flushMappedMemoryRanges = true,
-    .freeMemory = true,
-    .getBufferMemoryRequirements = true,
-    .getDeviceQueue = true,
-    .getSwapchainImagesKHR = true,
-    .mapMemory = true,
-    .queuePresentKHR = true,
-    .queueSubmit = true,
-    .resetCommandPool = true,
-    .resetFences = true,
-    .unmapMemory = true,
-    .waitForFences = true,
-});
