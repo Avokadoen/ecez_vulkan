@@ -12,6 +12,7 @@ const BaseDispatch = vk_dispatch.BaseDispatch;
 const InstanceDispatch = vk_dispatch.InstanceDispatch;
 const DeviceDispatch = vk_dispatch.DeviceDispatch;
 
+const StagingBuffer = @import("StagingBuffer.zig");
 const QueueFamilyIndices = @import("QueueFamilyIndices.zig");
 
 const command = @import("command.zig");
@@ -100,6 +101,8 @@ render_finished_semaphores: []vk.Semaphore,
 in_flight_fences: []vk.Fence,
 
 current_frame: usize,
+
+staging_buffer: StagingBuffer,
 
 vertex_buffer: vk.Buffer,
 vertex_memory: vk.DeviceMemory,
@@ -345,13 +348,27 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         allocator.free(in_flight_fences);
     }
 
+    const non_coherent_atom_size = device_properties.limits.non_coherent_atom_size;
+
+    var staging_buffer = try StagingBuffer.init(
+        vki,
+        physical_device,
+        vkd,
+        device,
+        non_coherent_atom_size,
+        queue_family_indices.transferIndex(),
+        transfer_queue,
+        .{ .size = 64 * dmem.bytes_in_kilobyte },
+    );
+    errdefer staging_buffer.deinit(vkd, device);
+
     // create device memory and transfer vertices to host
     const vertex_buffer = try dmem.createBuffer(
         vkd,
         device,
-        device_properties.limits.non_coherent_atom_size,
+        non_coherent_atom_size,
         @sizeOf(Vertex) * vertices.len,
-        .{ .vertex_buffer_bit = true },
+        .{ .transfer_dst_bit = true, .vertex_buffer_bit = true },
     );
     errdefer vkd.destroyBuffer(device, vertex_buffer, null);
     const vertex_memory = try dmem.createDeviceMemory(
@@ -360,14 +377,13 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         vki,
         physical_device,
         vertex_buffer,
-        .{
-            .device_local_bit = true,
-            .host_visible_bit = true,
-        },
+        .{ .device_local_bit = true },
     );
     errdefer vkd.freeMemory(device, vertex_memory, null);
     try vkd.bindBufferMemory(device, vertex_buffer, vertex_memory, 0);
-    try dmem.transferMemoryToDevice(vkd, device, vertex_memory, device_properties.limits.non_coherent_atom_size, Vertex, &vertices);
+
+    try staging_buffer.scheduleTransfer(vkd, device, vertex_buffer, Vertex, &vertices);
+    try staging_buffer.flushAndCopyToDestination(vkd, device);
 
     return RenderContext{
         .vkb = vkb,
@@ -395,6 +411,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         .render_finished_semaphores = render_finished_semaphores,
         .in_flight_fences = in_flight_fences,
         .current_frame = 0,
+        .staging_buffer = staging_buffer,
         .vertex_buffer = vertex_buffer,
         .vertex_memory = vertex_memory,
         .queue_family_indices = queue_family_indices,
@@ -461,6 +478,7 @@ pub fn deinit(self: RenderContext, allocator: Allocator) void {
         _ = self.vkd.waitForFences(self.device, 1, @ptrCast([*]const vk.Fence, &fence), vk.TRUE, std.time.ns_per_s) catch {};
     }
 
+    self.staging_buffer.deinit(self.vkd, self.device);
     self.vkd.freeMemory(self.device, self.vertex_memory, null);
     self.vkd.destroyBuffer(self.device, self.vertex_buffer, null);
 
