@@ -36,6 +36,7 @@ pub const DeviceDispatch = vk.DeviceWrapper(.{
     .cmdBeginRenderPass = true,
     .cmdBindPipeline = true,
     .cmdBindVertexBuffers = true,
+    .cmdCopyBuffer = true,
     .cmdDraw = true,
     .cmdEndRenderPass = true,
     .cmdSetScissor = true,
