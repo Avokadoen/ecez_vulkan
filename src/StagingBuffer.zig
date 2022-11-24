@@ -12,13 +12,18 @@ const sync = @import("sync.zig");
 
 const StagingBuffer = @This();
 
+const TransferDestination = struct {
+    buffer: vk.Buffer,
+    offset: vk.DeviceSize,
+};
+
 const max_transfers_scheduled = 32;
 
 buffer: vk.Buffer,
 memory: vk.DeviceMemory,
 
 // memory still not flushed
-destination_buffers: [max_transfers_scheduled]vk.Buffer = undefined,
+transfer_destinations: [max_transfers_scheduled]TransferDestination = undefined,
 incoherent_memory_ranges: [max_transfers_scheduled]vk.MappedMemoryRange = undefined,
 incoherent_memory_count: u32 = 0,
 incoherent_memory_bytes: vk.DeviceSize = 0,
@@ -96,6 +101,7 @@ pub fn scheduleTransfer(
     vkd: DeviceDispatch,
     device: vk.Device,
     destination_buffer: vk.Buffer,
+    destination_offset: vk.DeviceSize,
     comptime T: type,
     data: []const T,
 ) !void {
@@ -106,7 +112,7 @@ pub fn scheduleTransfer(
     const aligned_memory_size = dmem.getAlignedDeviceSize(self.non_coherent_atom_size, @intCast(vk.DeviceSize, raw_data.len));
 
     var device_data = blk: {
-        var raw_device_ptr = try vkd.mapMemory(device, self.memory, 0, aligned_memory_size, .{});
+        var raw_device_ptr = try vkd.mapMemory(device, self.memory, self.incoherent_memory_bytes, aligned_memory_size, .{});
         break :blk @ptrCast([*]u8, raw_device_ptr)[0..raw_data.len];
     };
     defer vkd.unmapMemory(device, self.memory);
@@ -118,7 +124,10 @@ pub fn scheduleTransfer(
         .offset = self.incoherent_memory_bytes,
         .size = aligned_memory_size,
     };
-    self.destination_buffers[self.incoherent_memory_count] = destination_buffer;
+    self.transfer_destinations[self.incoherent_memory_count] = TransferDestination{
+        .buffer = destination_buffer,
+        .offset = destination_offset,
+    };
 
     self.incoherent_memory_count += 1;
     self.incoherent_memory_bytes += aligned_memory_size;
@@ -142,10 +151,10 @@ pub fn flushAndCopyToDestination(self: *StagingBuffer, vkd: DeviceDispatch, devi
     for (self.incoherent_memory_ranges[0..self.incoherent_memory_count]) |memory_ranges, i| {
         copy_regions[i] = vk.BufferCopy{
             .src_offset = memory_ranges.offset,
-            .dst_offset = 0, // TODO
+            .dst_offset = self.transfer_destinations[i].offset,
             .size = memory_ranges.size,
         };
-        vkd.cmdCopyBuffer(self.command_buffer, self.buffer, self.destination_buffers[i], 1, copy_regions[i..].ptr);
+        vkd.cmdCopyBuffer(self.command_buffer, self.buffer, self.transfer_destinations[i].buffer, 1, copy_regions[i..].ptr);
     }
 
     try vkd.endCommandBuffer(self.command_buffer);

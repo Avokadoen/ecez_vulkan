@@ -60,9 +60,17 @@ const Vertex = struct {
 };
 
 const vertices = [_]Vertex{
-    .{ .pos = .{ 0, -0.5 }, .color = .{ 1, 0, 0 } },
-    .{ .pos = .{ 0.5, 0.5 }, .color = .{ 0, 1, 0 } },
-    .{ .pos = .{ -0.5, 0.5 }, .color = .{ 0, 0, 1 } },
+    // zig fmt: off
+    .{ .pos = .{ -0.5, -0.5 }, .color = .{ 1, 0, 0 } },
+    .{ .pos = .{  0.5, -0.5 }, .color = .{ 0, 1, 0 } },
+    .{ .pos = .{  0.5,  0.5 }, .color = .{ 0, 0, 1 } },
+    .{ .pos = .{ -0.5,  0.5 }, .color = .{ 1, 1, 1 } },
+    // zig fmt: on
+};
+const vertex_size: comptime_int = vertices.len * @sizeOf(Vertex);
+
+const indices = [_]u16{ 
+    0, 1, 2, 2, 3, 0
 };
 
 vkb: BaseDispatch,
@@ -104,8 +112,10 @@ current_frame: usize,
 
 staging_buffer: StagingBuffer,
 
-vertex_buffer: vk.Buffer,
-vertex_memory: vk.DeviceMemory,
+vertex_buffer_size: vk.DeviceSize,
+index_buffer_size: vk.DeviceSize,
+vertex_index_buffer: vk.Buffer,
+vertex_index_memory: vk.DeviceMemory,
 
 queue_family_indices: QueueFamilyIndices,
 graphics_queue: vk.Queue,
@@ -362,27 +372,39 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     );
     errdefer staging_buffer.deinit(vkd, device);
 
+    // TODO: simplfiy buffer aligned creation (createBuffer accept size array and do this internally)
+    const vertex_buffer_size = dmem.getAlignedDeviceSize(non_coherent_atom_size, vertex_size);
+    const index_buffer_size = dmem.getAlignedDeviceSize(non_coherent_atom_size, indices.len * @sizeOf(u16));
     // create device memory and transfer vertices to host
-    const vertex_buffer = try dmem.createBuffer(
+    const vertex_index_buffer = try dmem.createBuffer(
         vkd,
         device,
         non_coherent_atom_size,
-        @sizeOf(Vertex) * vertices.len,
-        .{ .transfer_dst_bit = true, .vertex_buffer_bit = true },
+        dmem.getAlignedDeviceSize(non_coherent_atom_size, vertex_buffer_size + index_buffer_size),
+        .{ .transfer_dst_bit = true, .vertex_buffer_bit = true, .index_buffer_bit = true, },
     );
-    errdefer vkd.destroyBuffer(device, vertex_buffer, null);
-    const vertex_memory = try dmem.createDeviceMemory(
+    errdefer vkd.destroyBuffer(device, vertex_index_buffer, null);
+    const vertex_index_memory = try dmem.createDeviceMemory(
         vkd,
         device,
         vki,
         physical_device,
-        vertex_buffer,
+        vertex_index_buffer,
         .{ .device_local_bit = true },
     );
-    errdefer vkd.freeMemory(device, vertex_memory, null);
-    try vkd.bindBufferMemory(device, vertex_buffer, vertex_memory, 0);
+    errdefer vkd.freeMemory(device, vertex_index_memory, null);
+    try vkd.bindBufferMemory(device, vertex_index_buffer, vertex_index_memory, 0);
 
-    try staging_buffer.scheduleTransfer(vkd, device, vertex_buffer, Vertex, &vertices);
+    // TODO: scheduling transfer of data that is not atom aligned is problematic. How should this be communicated or enforced?
+    try staging_buffer.scheduleTransfer(vkd, device, vertex_index_buffer, 0, Vertex, &vertices);
+    try staging_buffer.scheduleTransfer(
+        vkd, 
+        device, 
+        vertex_index_buffer, 
+        vertex_buffer_size, 
+        u16, 
+        &indices,
+    );
     try staging_buffer.flushAndCopyToDestination(vkd, device);
 
     return RenderContext{
@@ -412,8 +434,10 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         .in_flight_fences = in_flight_fences,
         .current_frame = 0,
         .staging_buffer = staging_buffer,
-        .vertex_buffer = vertex_buffer,
-        .vertex_memory = vertex_memory,
+        .vertex_buffer_size = vertex_buffer_size,
+        .index_buffer_size = index_buffer_size,
+        .vertex_index_buffer = vertex_index_buffer,
+        .vertex_index_memory = vertex_index_memory,
         .queue_family_indices = queue_family_indices,
         .graphics_queue = graphics_queue,
         .transfer_queue = transfer_queue,
@@ -479,8 +503,8 @@ pub fn deinit(self: RenderContext, allocator: Allocator) void {
     }
 
     self.staging_buffer.deinit(self.vkd, self.device);
-    self.vkd.freeMemory(self.device, self.vertex_memory, null);
-    self.vkd.destroyBuffer(self.device, self.vertex_buffer, null);
+    self.vkd.freeMemory(self.device, self.vertex_index_memory, null);
+    self.vkd.destroyBuffer(self.device, self.vertex_index_buffer, null);
 
     for (self.framebuffers) |framebuffer| {
         self.vkd.destroyFramebuffer(self.device, framebuffer, null);
@@ -554,7 +578,8 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window) !void {
         self.framebuffers[image_index],
         self.swapchain_extent,
         self.pipeline,
-        self.vertex_buffer,
+        self.vertex_buffer_size,
+        self.vertex_index_buffer,
     );
 
     const wait_dst_stage_mask = vk.PipelineStageFlags{ .color_attachment_output_bit = true };
@@ -1348,7 +1373,8 @@ inline fn recordGraphicsCommandBuffer(
     framebuffer: vk.Framebuffer,
     swapchain_extent: vk.Extent2D,
     pipeline: vk.Pipeline,
-    vertex_buffer: vk.Buffer,
+    vertex_buffer_size: vk.DeviceSize,
+    vertex_index_buffer: vk.Buffer,
 ) !void {
     const begin_info = vk.CommandBufferBeginInfo{
         .flags = .{ .one_time_submit_bit = true },
@@ -1391,11 +1417,17 @@ inline fn recordGraphicsCommandBuffer(
         command_buffer,
         0,
         1,
-        @ptrCast([*]const vk.Buffer, &vertex_buffer),
+        @ptrCast([*]const vk.Buffer, &vertex_index_buffer),
         @ptrCast([*]const vk.DeviceSize, &vertex_offsets),
     );
+    vkd.cmdBindIndexBuffer(
+        command_buffer,
+        vertex_index_buffer,
+        vertex_buffer_size,
+        vk.IndexType.uint16,
+    );
 
-    vkd.cmdDraw(command_buffer, @intCast(u32, vertices.len), 1, 0, 0);
+    vkd.cmdDrawIndexed(command_buffer, @intCast(u32, indices.len), 1, 0, 0, 0);
 
     vkd.cmdEndRenderPass(command_buffer);
     try vkd.endCommandBuffer(command_buffer);
