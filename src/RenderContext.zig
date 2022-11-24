@@ -67,7 +67,6 @@ const vertices = [_]Vertex{
     .{ .pos = .{ -0.5,  0.5 }, .color = .{ 1, 1, 1 } },
     // zig fmt: on
 };
-const vertex_size: comptime_int = vertices.len * @sizeOf(Vertex);
 
 const indices = [_]u16{ 
     0, 1, 2, 2, 3, 0
@@ -373,7 +372,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     errdefer staging_buffer.deinit(vkd, device);
 
     // TODO: simplfiy buffer aligned creation (createBuffer accept size array and do this internally)
-    const vertex_buffer_size = dmem.getAlignedDeviceSize(non_coherent_atom_size, vertex_size);
+    const vertex_buffer_size = dmem.getAlignedDeviceSize(non_coherent_atom_size, vertices.len * @sizeOf(Vertex));
     const index_buffer_size = dmem.getAlignedDeviceSize(non_coherent_atom_size, indices.len * @sizeOf(u16));
     // create device memory and transfer vertices to host
     const vertex_index_buffer = try dmem.createBuffer(
@@ -1373,7 +1372,7 @@ inline fn recordGraphicsCommandBuffer(
     framebuffer: vk.Framebuffer,
     swapchain_extent: vk.Extent2D,
     pipeline: vk.Pipeline,
-    vertex_buffer_size: vk.DeviceSize,
+    index_buffer_offset: vk.DeviceSize,
     vertex_index_buffer: vk.Buffer,
 ) !void {
     const begin_info = vk.CommandBufferBeginInfo{
@@ -1423,7 +1422,7 @@ inline fn recordGraphicsCommandBuffer(
     vkd.cmdBindIndexBuffer(
         command_buffer,
         vertex_index_buffer,
-        vertex_buffer_size,
+        index_buffer_offset,
         vk.IndexType.uint16,
     );
 
