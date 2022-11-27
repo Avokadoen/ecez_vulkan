@@ -28,6 +28,29 @@ const RenderContext = @This();
 // TODO: reduce debug assert, replace with errors
 // TODO: use sync2
 
+const Model = struct {
+    transform: zm.Mat,
+    // TODO: move view + proj to push constant:
+    view: zm.Mat,
+    proj: zm.Mat,
+
+    pub inline fn createDescriptorSetLayout(vkd: DeviceDispatch, device: vk.Device) !vk.DescriptorSetLayout {
+        const ubo_layout_binding = vk.DescriptorSetLayoutBinding{
+            .binding = 0,
+            .descriptor_type = .uniform_buffer,
+            .descriptor_count = 1,
+            .stage_flags = .{ .vertex_bit = true },
+            .p_immutable_samplers = null,
+        };
+        const layout_info = vk.DescriptorSetLayoutCreateInfo{
+            .flags = .{},
+            .binding_count = 1,
+            .p_bindings = @ptrCast([*]const vk.DescriptorSetLayoutBinding, &ubo_layout_binding),
+        };
+        return vkd.createDescriptorSetLayout(device, &layout_info, null);
+    }
+};
+
 // TODO: placeholder
 const Vertex = struct {
     pos: [2]f32,
@@ -93,6 +116,7 @@ swapchain: vk.SwapchainKHR,
 swapchain_images: []vk.Image,
 swapchain_image_views: []vk.ImageView,
 
+
 render_pass: vk.RenderPass,
 framebuffers: []vk.Framebuffer,
 pipeline_layout: vk.PipelineLayout,
@@ -113,8 +137,19 @@ staging_buffer: StagingBuffer,
 
 vertex_buffer_size: vk.DeviceSize,
 index_buffer_size: vk.DeviceSize,
+// TODO: rename 
 vertex_index_buffer: vk.Buffer,
 vertex_index_memory: vk.DeviceMemory,
+
+
+// TODO: this is data we should get from ecez!
+model: Model, 
+model_ubo_desc_set_layout: vk.DescriptorSetLayout,
+model_desc_set_pool: vk.DescriptorPool,
+model_desc_set: vk.DescriptorSet,
+model_buffer_size: vk.DeviceSize,
+model_buffer: vk.Buffer,
+model_memory: vk.DeviceMemory,
 
 queue_family_indices: QueueFamilyIndices,
 graphics_queue: vk.Queue,
@@ -251,11 +286,83 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         }
     }
 
+    
+    const model_ubo_desc_set_layout = try Model.createDescriptorSetLayout(vkd, device);
+    errdefer vkd.destroyDescriptorSetLayout(device, model_ubo_desc_set_layout, null);
+
+    const model_desc_set_pool = blk: {
+        const pool_size = vk.DescriptorPoolSize{
+            .@"type" = .uniform_buffer,
+            .descriptor_count = 1,
+        };
+        const pool_info = vk.DescriptorPoolCreateInfo{
+            .flags = .{},
+            .max_sets = 1,
+            .pool_size_count = 1,
+            .p_pool_sizes = @ptrCast([*]const vk.DescriptorPoolSize, &pool_size),
+        };
+        break :blk try vkd.createDescriptorPool(device, &pool_info, null);
+    };
+    errdefer vkd.destroyDescriptorPool(device, model_desc_set_pool, null);
+
+    const model_desc_set = blk: {
+        const alloc_info = vk.DescriptorSetAllocateInfo{
+            .descriptor_pool = model_desc_set_pool,
+            .descriptor_set_count = 1,
+            .p_set_layouts = @ptrCast([*]const vk.DescriptorSetLayout, &model_ubo_desc_set_layout),
+        };
+        var desc_set: vk.DescriptorSet = undefined;
+        try vkd.allocateDescriptorSets(device, &alloc_info, @ptrCast([*]vk.DescriptorSet, &desc_set));
+        break :blk desc_set;
+    };
+
+    const non_coherent_atom_size = device_properties.limits.non_coherent_atom_size;
+
+    // initialized model to some dummy data (this should be handled by ecez intergration later as model should be a component)
+    const model = blk: {
+        const fovy = std.math.degreesToRadians(f32, 45);
+        const aspect = @intToFloat(f32, swapchain_extent.width) / @intToFloat(f32, swapchain_extent.height);
+        break :blk Model{ 
+            .transform = zm.identity(),
+            .view = zm.lookAtRh(
+                zm.f32x4(3.0, 3.0, 3.0, 1.0), // pos
+                zm.f32x4(0.0, 0.0, 0.0, 1.0), // target
+                zm.f32x4(0.0, 1.0, 0.0, 0.0), // up
+            ),
+            .proj = zm.perspectiveFovRh(fovy, aspect, 0.01, 10),
+        };  
+    };
+
+    const model_buffer_size = dmem.getAlignedDeviceSize(non_coherent_atom_size, @sizeOf(Model));
+
+    // create device memory and transfer vertices to host
+    const uniform_buffer = try dmem.createBuffer(
+        vkd,
+        device,
+        non_coherent_atom_size,
+        dmem.getAlignedDeviceSize(non_coherent_atom_size, model_buffer_size),
+        .{ 
+            .transfer_dst_bit = true, 
+            .uniform_buffer_bit = true, 
+        },
+    );
+    errdefer vkd.destroyBuffer(device, uniform_buffer, null);
+    const uniform_memory = try dmem.createDeviceMemory(
+        vkd,
+        device,
+        vki,
+        physical_device,
+        uniform_buffer,
+        .{ .device_local_bit = true },
+    );
+    errdefer vkd.freeMemory(device, uniform_memory, null);
+    try vkd.bindBufferMemory(device, uniform_buffer, uniform_memory, 0);
+
     const pipeline_layout = blk: {
         const pipeline_layout_info = vk.PipelineLayoutCreateInfo{
             .flags = .{},
-            .set_layout_count = 0,
-            .p_set_layouts = undefined,
+            .set_layout_count = 1,
+            .p_set_layouts = @ptrCast([*]const vk.DescriptorSetLayout, &model_ubo_desc_set_layout),
             .push_constant_range_count = 0,
             .p_push_constant_ranges = undefined,
         };
@@ -357,8 +464,6 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         allocator.free(in_flight_fences);
     }
 
-    const non_coherent_atom_size = device_properties.limits.non_coherent_atom_size;
-
     var staging_buffer = try StagingBuffer.init(
         vki,
         physical_device,
@@ -371,16 +476,31 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     );
     errdefer staging_buffer.deinit(vkd, device);
 
+    const models = [_]Model { model };
+    try staging_buffer.scheduleTransfer(
+        vkd, 
+        device, 
+        uniform_buffer, 
+        0, 
+        Model, 
+        &models,
+    );
+
     // TODO: simplfiy buffer aligned creation (createBuffer accept size array and do this internally)
     const vertex_buffer_size = dmem.getAlignedDeviceSize(non_coherent_atom_size, vertices.len * @sizeOf(Vertex));
     const index_buffer_size = dmem.getAlignedDeviceSize(non_coherent_atom_size, indices.len * @sizeOf(u16));
+
     // create device memory and transfer vertices to host
     const vertex_index_buffer = try dmem.createBuffer(
         vkd,
         device,
         non_coherent_atom_size,
         dmem.getAlignedDeviceSize(non_coherent_atom_size, vertex_buffer_size + index_buffer_size),
-        .{ .transfer_dst_bit = true, .vertex_buffer_bit = true, .index_buffer_bit = true, },
+        .{ 
+            .transfer_dst_bit = true, 
+            .vertex_buffer_bit = true, 
+            .index_buffer_bit = true, 
+        },
     );
     errdefer vkd.destroyBuffer(device, vertex_index_buffer, null);
     const vertex_index_memory = try dmem.createDeviceMemory(
@@ -404,7 +524,27 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         u16, 
         &indices,
     );
+
+
+    // transfer all data to GPU memory
     try staging_buffer.flushAndCopyToDestination(vkd, device);
+
+    const model_desc_buffer_info = vk.DescriptorBufferInfo{
+        .buffer = uniform_buffer,
+        .offset = 0,
+        .range = vk.WHOLE_SIZE,
+    };
+    const model_desc_type = vk.WriteDescriptorSet{
+        .dst_set = model_desc_set,
+        .dst_binding = 0,
+        .dst_array_element = 0,
+        .descriptor_count = 1,
+        .descriptor_type = .uniform_buffer,
+        .p_image_info = undefined,
+        .p_buffer_info = @ptrCast([*]const vk.DescriptorBufferInfo, &model_desc_buffer_info),
+        .p_texel_buffer_view = undefined,
+    };
+    vkd.updateDescriptorSets(device, 1, @ptrCast([*]const vk.WriteDescriptorSet, &model_desc_type), 0, undefined);
 
     return RenderContext{
         .vkb = vkb,
@@ -437,6 +577,13 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         .index_buffer_size = index_buffer_size,
         .vertex_index_buffer = vertex_index_buffer,
         .vertex_index_memory = vertex_index_memory,
+        .model = model,
+        .model_ubo_desc_set_layout = model_ubo_desc_set_layout,
+        .model_desc_set_pool = model_desc_set_pool,
+        .model_desc_set = model_desc_set,
+        .model_buffer_size = model_buffer_size,
+        .model_buffer = uniform_buffer,
+        .model_memory = uniform_memory,
         .queue_family_indices = queue_family_indices,
         .graphics_queue = graphics_queue,
         .transfer_queue = transfer_queue,
@@ -502,8 +649,16 @@ pub fn deinit(self: RenderContext, allocator: Allocator) void {
     }
 
     self.staging_buffer.deinit(self.vkd, self.device);
+    
+    self.vkd.freeMemory(self.device, self.model_memory, null);
+    self.vkd.destroyBuffer(self.device, self.model_buffer, null);
+    
+    
     self.vkd.freeMemory(self.device, self.vertex_index_memory, null);
     self.vkd.destroyBuffer(self.device, self.vertex_index_buffer, null);
+
+    self.vkd.destroyDescriptorPool(self.device, self.model_desc_set_pool, null);
+    self.vkd.destroyDescriptorSetLayout(self.device, self.model_ubo_desc_set_layout, null);
 
     for (self.framebuffers) |framebuffer| {
         self.vkd.destroyFramebuffer(self.device, framebuffer, null);
@@ -577,6 +732,8 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window) !void {
         self.framebuffers[image_index],
         self.swapchain_extent,
         self.pipeline,
+        self.pipeline_layout,
+        self.model_desc_set,
         self.vertex_buffer_size,
         self.vertex_index_buffer,
     );
@@ -1291,6 +1448,7 @@ inline fn createShaderModule(vkd: DeviceDispatch, device: vk.Device, shader_code
     return vkd.createShaderModule(device, &create_info, null);
 }
 
+
 inline fn instantiateImageViews(
     image_views: []vk.ImageView,
     vkd: DeviceDispatch,
@@ -1372,6 +1530,8 @@ inline fn recordGraphicsCommandBuffer(
     framebuffer: vk.Framebuffer,
     swapchain_extent: vk.Extent2D,
     pipeline: vk.Pipeline,
+    pipeline_layout: vk.PipelineLayout,
+    descriptor_set: vk.DescriptorSet,
     index_buffer_offset: vk.DeviceSize,
     vertex_index_buffer: vk.Buffer,
 ) !void {
@@ -1425,9 +1585,10 @@ inline fn recordGraphicsCommandBuffer(
         index_buffer_offset,
         vk.IndexType.uint16,
     );
-
+    vkd.cmdBindDescriptorSets(command_buffer, .graphics, pipeline_layout, 0, 1, @ptrCast([*]const vk.DescriptorSet, &descriptor_set), 0, undefined);
     vkd.cmdDrawIndexed(command_buffer, @intCast(u32, indices.len), 1, 0, 0, 0);
 
     vkd.cmdEndRenderPass(command_buffer);
     try vkd.endCommandBuffer(command_buffer);
 }
+
