@@ -28,11 +28,23 @@ const RenderContext = @This();
 // TODO: reduce debug assert, replace with errors
 // TODO: use sync2
 
+const PushConstant = struct {
+    camera_projection_view: zm.Mat,
+
+    pub fn fromCamera(camera: Camera) PushConstant {
+        return PushConstant{
+            .camera_projection_view = zm.mul(camera.view, camera.projection),
+        };
+    }
+};
+
+const Camera = struct {
+    view: zm.Mat,
+    projection: zm.Mat,
+};
+
 const Model = struct {
     transform: zm.Mat,
-    // TODO: move view + proj to push constant:
-    view: zm.Mat,
-    proj: zm.Mat,
 
     pub inline fn createDescriptorSetLayout(vkd: DeviceDispatch, device: vk.Device) !vk.DescriptorSetLayout {
         const ubo_layout_binding = vk.DescriptorSetLayoutBinding{
@@ -141,6 +153,7 @@ index_buffer_size: vk.DeviceSize,
 vertex_index_buffer: vk.Buffer,
 vertex_index_memory: vk.DeviceMemory,
 
+camera: Camera,
 
 // TODO: this is data we should get from ecez!
 model: Model, 
@@ -318,21 +331,23 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
 
     const non_coherent_atom_size = device_properties.limits.non_coherent_atom_size;
 
-    // initialized model to some dummy data (this should be handled by ecez intergration later as model should be a component)
-    const model = blk: {
+    const camera = blk: {
         const fovy = std.math.degreesToRadians(f32, 45);
         const aspect = @intToFloat(f32, swapchain_extent.width) / @intToFloat(f32, swapchain_extent.height);
-        break :blk Model{ 
-            .transform = zm.identity(),
+        break :blk Camera{
             .view = zm.lookAtRh(
                 zm.f32x4(3.0, 3.0, 3.0, 1.0), // pos
                 zm.f32x4(0.0, 0.0, 0.0, 1.0), // target
                 zm.f32x4(0.0, 1.0, 0.0, 0.0), // up
             ),
-            .proj = zm.perspectiveFovRh(fovy, aspect, 0.01, 10),
-        };  
+            .projection = zm.perspectiveFovRh(fovy, aspect, 0.01, 10),
+        };
     };
 
+    // initialized model to some dummy data (this should be handled by ecez intergration later as model should be a component)
+    const model = Model{ 
+        .transform = zm.identity(),
+    };
     const model_buffer_size = dmem.getAlignedDeviceSize(non_coherent_atom_size, @sizeOf(Model));
 
     // create device memory and transfer vertices to host
@@ -359,12 +374,17 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     try vkd.bindBufferMemory(device, uniform_buffer, uniform_memory, 0);
 
     const pipeline_layout = blk: {
+        const push_constant_range = vk.PushConstantRange{
+            .stage_flags = .{ .vertex_bit = true },
+            .offset = 0,
+            .size = @sizeOf(PushConstant),
+        };
         const pipeline_layout_info = vk.PipelineLayoutCreateInfo{
             .flags = .{},
             .set_layout_count = 1,
             .p_set_layouts = @ptrCast([*]const vk.DescriptorSetLayout, &model_ubo_desc_set_layout),
-            .push_constant_range_count = 0,
-            .p_push_constant_ranges = undefined,
+            .push_constant_range_count = 1,
+            .p_push_constant_ranges = @ptrCast([*]const vk.PushConstantRange, &push_constant_range),
         };
         break :blk try vkd.createPipelineLayout(device, &pipeline_layout_info, null);
     };
@@ -577,6 +597,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         .index_buffer_size = index_buffer_size,
         .vertex_index_buffer = vertex_index_buffer,
         .vertex_index_memory = vertex_index_memory,
+        .camera = camera,
         .model = model,
         .model_ubo_desc_set_layout = model_ubo_desc_set_layout,
         .model_desc_set_pool = model_desc_set_pool,
@@ -736,6 +757,7 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window) !void {
         self.model_desc_set,
         self.vertex_buffer_size,
         self.vertex_index_buffer,
+        self.camera,
     );
 
     const wait_dst_stage_mask = vk.PipelineStageFlags{ .color_attachment_output_bit = true };
@@ -1534,6 +1556,7 @@ inline fn recordGraphicsCommandBuffer(
     descriptor_set: vk.DescriptorSet,
     index_buffer_offset: vk.DeviceSize,
     vertex_index_buffer: vk.Buffer,
+    camera: Camera,
 ) !void {
     const begin_info = vk.CommandBufferBeginInfo{
         .flags = .{ .one_time_submit_bit = true },
@@ -1570,6 +1593,9 @@ inline fn recordGraphicsCommandBuffer(
     };
     vkd.cmdSetViewport(command_buffer, 0, 1, @ptrCast([*]const vk.Viewport, &viewport));
     vkd.cmdSetScissor(command_buffer, 0, 1, @ptrCast([*]const vk.Rect2D, &render_area));
+
+    const push_constant = PushConstant.fromCamera(camera);
+    vkd.cmdPushConstants(command_buffer, pipeline_layout, .{ .vertex_bit = true }, 0, @sizeOf(PushConstant), &push_constant);
 
     const vertex_offsets = [_]vk.DeviceSize{0};
     vkd.cmdBindVertexBuffers(
