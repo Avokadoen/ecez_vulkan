@@ -173,6 +173,9 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     const vk_proc = @ptrCast(fn (instance: vk.Instance, procname: [*:0]const u8) callconv(.C) vk.PfnVoidFunction, glfw.getInstanceProcAddress);
     const vkb = try BaseDispatch.load(vk_proc);
 
+    // get validation layers if we are in debug mode
+    const validation_layers = try application_ext_layers.getValidationLayers(allocator, vkb);
+
     // create the vk instance
     const instance = blk: {
         const application_info = vk.ApplicationInfo{
@@ -195,9 +198,6 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
             // add the debug utils extension
             try extensions.append(vk.extension_info.ext_debug_utils.name);
         }
-
-        // get validation layers if we are in debug mode
-        const validation_layers = try getValidationLayers(allocator, vkb);
 
         const instance_info = vk.InstanceCreateInfo{
             .flags = .{},
@@ -239,7 +239,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     errdefer swapchain_support_details.deinit(allocator);
 
     const queue_family_indices = try QueueFamilyIndices.init(vki, physical_device, surface);
-    const device = try createLogicalDevice(vki, physical_device, queue_family_indices);
+    const device = try createLogicalDevice(vki, physical_device, queue_family_indices, validation_layers);
     const vkd = try DeviceDispatch.load(device, vki.dispatch.vkGetDeviceProcAddr);
     errdefer vkd.destroyDevice(device, null);
 
@@ -1078,6 +1078,7 @@ inline fn createLogicalDevice(
     vki: InstanceDispatch,
     physical_device: vk.PhysicalDevice,
     queue_families: QueueFamilyIndices,
+    validation_layers: []const [*:0]const u8,
 ) InstanceDispatch.CreateDeviceError!vk.Device {
     const one_index = queue_families.graphicsIndex() == queue_families.transferIndex();
     const queue_priorities = [_]f32{1};
@@ -1101,8 +1102,8 @@ inline fn createLogicalDevice(
         .flags = .{},
         .queue_create_info_count = if (one_index) 1 else queue_create_info.len,
         .p_queue_create_infos = &queue_create_info,
-        .enabled_layer_count = if (is_debug_build) application_ext_layers.desired_layers.len else 0,
-        .pp_enabled_layer_names = &application_ext_layers.desired_layers,
+        .enabled_layer_count = if (is_debug_build) @intCast(u32, validation_layers.len) else 0,
+        .pp_enabled_layer_names = validation_layers.ptr,
         .enabled_extension_count = application_ext_layers.required_extensions_cstr.len,
         .pp_enabled_extension_names = &application_ext_layers.required_extensions_cstr,
         .p_enabled_features = &device_features,
@@ -1133,37 +1134,6 @@ inline fn setupDebugMessenger(vki: InstanceDispatch, instance: vk.Instance) !?vk
     }
 
     return (try vki.createDebugUtilsMessengerEXT(instance, &debug_message_info, null));
-}
-
-inline fn getValidationLayers(allocator: Allocator, vkb: BaseDispatch) ![]const [*:0]const u8 {
-    if (comptime (is_debug_build == false)) {
-        return &[0][*:0]const u8{};
-    }
-
-    var layer_count: u32 = undefined;
-    _ = try vkb.enumerateInstanceLayerProperties(&layer_count, null);
-
-    var existing_layers = try allocator.alloc(vk.LayerProperties, layer_count);
-    defer allocator.free(existing_layers);
-
-    _ = try vkb.enumerateInstanceLayerProperties(&layer_count, existing_layers.ptr);
-
-    inline for (application_ext_layers.desired_layers) |desired_layer| {
-        var found: bool = false;
-
-        inner: for (existing_layers) |existing_layer| {
-            if (std.cstr.cmp(desired_layer, @ptrCast([*:0]const u8, &existing_layer.layer_name)) == 0) {
-                found = true;
-                break :inner;
-            }
-        }
-
-        if (found == false) {
-            return error.MissingValidationLayer;
-        }
-    }
-
-    return &application_ext_layers.desired_layers;
 }
 
 fn messageCallback(
