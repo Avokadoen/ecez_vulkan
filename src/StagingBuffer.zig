@@ -133,7 +133,12 @@ pub fn scheduleTransfer(
     self.incoherent_memory_bytes += aligned_memory_size;
 }
 
-pub fn flushAndCopyToDestination(self: *StagingBuffer, vkd: DeviceDispatch, device: vk.Device) !void {
+pub fn flushAndCopyToDestination(
+    self: *StagingBuffer,
+    vkd: DeviceDispatch,
+    device: vk.Device,
+    flush_complete_semaphores: ?[]vk.Semaphore,
+) !void {
     if (self.incoherent_memory_count == 0) return;
 
     _ = try vkd.mapMemory(device, self.memory, 0, self.incoherent_memory_bytes, .{});
@@ -159,15 +164,14 @@ pub fn flushAndCopyToDestination(self: *StagingBuffer, vkd: DeviceDispatch, devi
 
     try vkd.endCommandBuffer(self.command_buffer);
 
-    // TODO: semaphores
     const submit_into = vk.SubmitInfo{
         .wait_semaphore_count = 0,
         .p_wait_semaphores = undefined,
         .p_wait_dst_stage_mask = undefined,
         .command_buffer_count = 1,
         .p_command_buffers = @ptrCast([*]vk.CommandBuffer, &self.command_buffer),
-        .signal_semaphore_count = 0,
-        .p_signal_semaphores = undefined,
+        .signal_semaphore_count = if (flush_complete_semaphores) |semaphores| @intCast(u32, semaphores.len) else 0,
+        .p_signal_semaphores = if (flush_complete_semaphores) |semaphores| semaphores.ptr else undefined,
     };
     try vkd.queueSubmit(self.transfer_queue, 1, @ptrCast([*]const vk.SubmitInfo, &submit_into), self.transfer_fence);
 

@@ -156,6 +156,7 @@ vertex_index_memory: vk.DeviceMemory,
 camera: Camera,
 
 // TODO: this is data we should get from ecez!
+model_transfer_complete_semaphore: vk.Semaphore,
 model: Model, 
 model_ubo_desc_set_layout: vk.DescriptorSetLayout,
 model_desc_set_pool: vk.DescriptorPool,
@@ -431,7 +432,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
 
     // create all sempahores we need which we can slice later
     const all_semaphores = blk: {
-        var semaphores = try allocator.alloc(vk.Semaphore, max_frames_in_flight * 2);
+        var semaphores = try allocator.alloc(vk.Semaphore, max_frames_in_flight * 2 + 1);
 
         var initialized_semaphores: usize = 0;
         errdefer {
@@ -457,6 +458,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     }
     const image_available_semaphores = all_semaphores[0..max_frames_in_flight];
     const render_finished_semaphores = all_semaphores[max_frames_in_flight .. max_frames_in_flight * 2];
+    const model_transfer_complete_semaphore = all_semaphores[max_frames_in_flight * 2];
 
     const in_flight_fences = blk: {
         var fences = try allocator.alloc(vk.Fence, max_frames_in_flight);
@@ -547,7 +549,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
 
 
     // transfer all data to GPU memory
-    try staging_buffer.flushAndCopyToDestination(vkd, device);
+    try staging_buffer.flushAndCopyToDestination(vkd, device, null);
 
     const model_desc_buffer_info = vk.DescriptorBufferInfo{
         .buffer = uniform_buffer,
@@ -598,6 +600,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         .vertex_index_buffer = vertex_index_buffer,
         .vertex_index_memory = vertex_index_memory,
         .camera = camera,
+        .model_transfer_complete_semaphore = model_transfer_complete_semaphore,
         .model = model,
         .model_ubo_desc_set_layout = model_ubo_desc_set_layout,
         .model_desc_set_pool = model_desc_set_pool,
@@ -745,27 +748,93 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window) !void {
 
     try self.vkd.resetFences(self.device, 1, @ptrCast([*]const vk.Fence, &self.in_flight_fences[self.current_frame]));
 
-    try self.vkd.resetCommandPool(self.device, self.command_pools[self.current_frame], .{});
-    try recordGraphicsCommandBuffer(
-        self.vkd,
-        self.command_buffers[self.current_frame],
-        self.render_pass,
-        self.framebuffers[image_index],
-        self.swapchain_extent,
-        self.pipeline,
-        self.pipeline_layout,
-        self.model_desc_set,
-        self.vertex_buffer_size,
-        self.vertex_index_buffer,
-        self.camera,
+    self.model.transform = zm.mul(self.model.transform, zm.rotationY(0.0001));
+    try self.staging_buffer.scheduleTransfer(
+        self.vkd, 
+        self.device, 
+        self.model_buffer, 
+        0, 
+        Model,
+        &[_]Model{ self.model },
+    );
+    try self.staging_buffer.flushAndCopyToDestination(
+        self.vkd, 
+        self.device, 
+        &[_]vk.Semaphore{ self.model_transfer_complete_semaphore },
     );
 
-    const wait_dst_stage_mask = vk.PipelineStageFlags{ .color_attachment_output_bit = true };
+    try self.vkd.resetCommandPool(self.device, self.command_pools[self.current_frame], .{});
+
+    {
+        const command_buffer = self.command_buffers[self.current_frame];
+
+        const begin_info = vk.CommandBufferBeginInfo{
+            .flags = .{ .one_time_submit_bit = true },
+            .p_inheritance_info = null,
+        };
+        try self.vkd.beginCommandBuffer(command_buffer, &begin_info);
+
+        const clear_values = [1]vk.ClearValue{.{
+            .color = .{
+                .float_32 = [_]f32{ 0, 0, 0, 1 },
+            },
+        }};
+        const render_area = vk.Rect2D{
+            .offset = .{ .x = 0, .y = 0 },
+            .extent = self.swapchain_extent,
+        };
+        const render_pass_info = vk.RenderPassBeginInfo{
+            .render_pass = self.render_pass,
+            .framebuffer = self.framebuffers[image_index],
+            .render_area = render_area,
+            .clear_value_count = clear_values.len,
+            .p_clear_values = &clear_values,
+        };
+        self.vkd.cmdBeginRenderPass(command_buffer, &render_pass_info, .@"inline");
+        self.vkd.cmdBindPipeline(command_buffer, .graphics, self.pipeline);
+
+        const viewport = vk.Viewport{
+            .x = 0,
+            .y = 0,
+            .width = @intToFloat(f32, self.swapchain_extent.width),
+            .height = @intToFloat(f32, self.swapchain_extent.height),
+            .min_depth = 0,
+            .max_depth = 1,
+        };
+        self.vkd.cmdSetViewport(command_buffer, 0, 1, @ptrCast([*]const vk.Viewport, &viewport));
+        self.vkd.cmdSetScissor(command_buffer, 0, 1, @ptrCast([*]const vk.Rect2D, &render_area));
+
+        const push_constant = PushConstant.fromCamera(self.camera);
+        self.vkd.cmdPushConstants(command_buffer, self.pipeline_layout, .{ .vertex_bit = true }, 0, @sizeOf(PushConstant), &push_constant,);
+
+        const vertex_offsets = [_]vk.DeviceSize{0};
+        self.vkd.cmdBindVertexBuffers(
+            command_buffer,
+            0,
+            1,
+            @ptrCast([*]const vk.Buffer, &self.vertex_index_buffer),
+            @ptrCast([*]const vk.DeviceSize, &vertex_offsets),
+        );
+
+        const index_buffer_offset = self.vertex_buffer_size;
+        self.vkd.cmdBindIndexBuffer(
+            command_buffer,
+            self.vertex_index_buffer,
+            index_buffer_offset,
+            vk.IndexType.uint16,
+        );
+        self.vkd.cmdBindDescriptorSets(command_buffer, .graphics, self.pipeline_layout, 0, 1, @ptrCast([*]const vk.DescriptorSet, &self.model_desc_set), 0, undefined);
+        self.vkd.cmdDrawIndexed(command_buffer, @intCast(u32, indices.len), 1, 0, 0, 0);
+
+        self.vkd.cmdEndRenderPass(command_buffer);
+        try self.vkd.endCommandBuffer(command_buffer);
+    }
+
     const render_finish_semaphore = @ptrCast([*]const vk.Semaphore, &self.render_finished_semaphores[self.current_frame]);
     const submit_info = vk.SubmitInfo{
-        .wait_semaphore_count = 1,
-        .p_wait_semaphores = @ptrCast([*]const vk.Semaphore, &self.image_available_semaphores[self.current_frame]),
-        .p_wait_dst_stage_mask = @ptrCast([*]const vk.PipelineStageFlags, &wait_dst_stage_mask),
+        .wait_semaphore_count = 2,
+        .p_wait_semaphores = &[_]vk.Semaphore{ self.model_transfer_complete_semaphore, self.image_available_semaphores[self.current_frame] },
+        .p_wait_dst_stage_mask = &[_]vk.PipelineStageFlags{ .{ .vertex_shader_bit = true },  .{ .color_attachment_output_bit = true } },
         .command_buffer_count = 1,
         .p_command_buffers = @ptrCast([*]const vk.CommandBuffer, &self.command_buffers[self.current_frame]),
         .signal_semaphore_count = 1,
@@ -1514,77 +1583,3 @@ inline fn instantiateFramebuffer(
         created_framebuffers = i;
     }
 }
-
-inline fn recordGraphicsCommandBuffer(
-    vkd: DeviceDispatch,
-    command_buffer: vk.CommandBuffer,
-    render_pass: vk.RenderPass,
-    framebuffer: vk.Framebuffer,
-    swapchain_extent: vk.Extent2D,
-    pipeline: vk.Pipeline,
-    pipeline_layout: vk.PipelineLayout,
-    descriptor_set: vk.DescriptorSet,
-    index_buffer_offset: vk.DeviceSize,
-    vertex_index_buffer: vk.Buffer,
-    camera: Camera,
-) !void {
-    const begin_info = vk.CommandBufferBeginInfo{
-        .flags = .{ .one_time_submit_bit = true },
-        .p_inheritance_info = null,
-    };
-    try vkd.beginCommandBuffer(command_buffer, &begin_info);
-
-    const clear_values = [1]vk.ClearValue{.{
-        .color = .{
-            .float_32 = [_]f32{ 0, 0, 0, 1 },
-        },
-    }};
-    const render_area = vk.Rect2D{
-        .offset = .{ .x = 0, .y = 0 },
-        .extent = swapchain_extent,
-    };
-    const render_pass_info = vk.RenderPassBeginInfo{
-        .render_pass = render_pass,
-        .framebuffer = framebuffer,
-        .render_area = render_area,
-        .clear_value_count = clear_values.len,
-        .p_clear_values = &clear_values,
-    };
-    vkd.cmdBeginRenderPass(command_buffer, &render_pass_info, .@"inline");
-    vkd.cmdBindPipeline(command_buffer, .graphics, pipeline);
-
-    const viewport = vk.Viewport{
-        .x = 0,
-        .y = 0,
-        .width = @intToFloat(f32, swapchain_extent.width),
-        .height = @intToFloat(f32, swapchain_extent.height),
-        .min_depth = 0,
-        .max_depth = 1,
-    };
-    vkd.cmdSetViewport(command_buffer, 0, 1, @ptrCast([*]const vk.Viewport, &viewport));
-    vkd.cmdSetScissor(command_buffer, 0, 1, @ptrCast([*]const vk.Rect2D, &render_area));
-
-    const push_constant = PushConstant.fromCamera(camera);
-    vkd.cmdPushConstants(command_buffer, pipeline_layout, .{ .vertex_bit = true }, 0, @sizeOf(PushConstant), &push_constant);
-
-    const vertex_offsets = [_]vk.DeviceSize{0};
-    vkd.cmdBindVertexBuffers(
-        command_buffer,
-        0,
-        1,
-        @ptrCast([*]const vk.Buffer, &vertex_index_buffer),
-        @ptrCast([*]const vk.DeviceSize, &vertex_offsets),
-    );
-    vkd.cmdBindIndexBuffer(
-        command_buffer,
-        vertex_index_buffer,
-        index_buffer_offset,
-        vk.IndexType.uint16,
-    );
-    vkd.cmdBindDescriptorSets(command_buffer, .graphics, pipeline_layout, 0, 1, @ptrCast([*]const vk.DescriptorSet, &descriptor_set), 0, undefined);
-    vkd.cmdDrawIndexed(command_buffer, @intCast(u32, indices.len), 1, 0, 0, 0);
-
-    vkd.cmdEndRenderPass(command_buffer);
-    try vkd.endCommandBuffer(command_buffer);
-}
-
