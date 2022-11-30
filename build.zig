@@ -64,6 +64,9 @@ pub fn build(b: *std.build.Builder) void {
     // link zmath
     exe.addPackage(zmath.pkg);
 
+    // link zigimg
+    exe.addPackagePath("zigimg", "deps/zigimg/zigimg.zig");
+
     // Create a step that generates vk.zig (stored in zig-cache) from the provided vulkan registry.
     const gen = vkgen.VkGenerateStep.init(b, thisDir() ++ "/deps/vk.xml", "vk.zig");
     // Add the generated file as package to the final executable
