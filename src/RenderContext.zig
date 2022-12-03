@@ -6,6 +6,7 @@ const builtin = @import("builtin");
 const vk = @import("vulkan");
 const glfw = @import("glfw");
 const zm = @import("zmath");
+const zigimg = @import("zigimg");
 
 const vk_dispatch = @import("vk_dispatch.zig");
 const BaseDispatch = vk_dispatch.BaseDispatch;
@@ -1268,7 +1269,12 @@ const AssetHandler = struct {
     }
 
     pub inline fn getShaderPath(self: AssetHandler, allocator: Allocator, shader_name: []const u8) ![]const u8 {
-        const join_path = [_][]const u8{ self.exe_path, "../../", shader_name };
+        const join_path = [_][]const u8{ self.exe_path, "../../assets/shaders", shader_name };
+        return std.fs.path.resolve(allocator, join_path[0..]);
+    }
+
+    pub inline fn getTexturePath(self: AssetHandler, allocator: Allocator, shader_name: []const u8) ![]const u8 {
+        const join_path = [_][]const u8{ self.exe_path, "../../assets/textures", shader_name };
         return std.fs.path.resolve(allocator, join_path[0..]);
     }
 };
@@ -1552,4 +1558,8 @@ inline fn instantiateFramebuffer(
         framebuffer.* = try vkd.createFramebuffer(device, &framebuffer_info, null);
         created_framebuffers = i;
     }
+}
+
+inline fn createTextureImage(absolute_path: []const u8) vk.Image {
+    zigimg.Image.fromFilePath(absolute_path);
 }
