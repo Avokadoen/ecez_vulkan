@@ -171,7 +171,7 @@ transfer_queue: vk.Queue,
 
 pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     // bind the glfw instance proc pointer
-    const vk_proc = @ptrCast(fn (instance: vk.Instance, procname: [*:0]const u8) callconv(.C) vk.PfnVoidFunction, glfw.getInstanceProcAddress);
+    const vk_proc = @ptrCast(*const fn (instance: vk.Instance, procname: [*:0]const u8) ?glfw.VKProc, &glfw.getInstanceProcAddress);
     const vkb = try BaseDispatch.load(vk_proc);
 
     // get validation layers if we are in debug mode
@@ -1192,7 +1192,7 @@ const debug_message_info = vk.DebugUtilsMessengerCreateInfoEXT{
         .validation_bit_ext = true,
         .performance_bit_ext = true,
     },
-    .pfn_user_callback = messageCallback,
+    .pfn_user_callback = &messageCallback,
     .p_user_data = null,
 };
 
@@ -1206,8 +1206,8 @@ inline fn setupDebugMessenger(vki: InstanceDispatch, instance: vk.Instance) !?vk
 }
 
 fn messageCallback(
-    message_severity: vk.DebugUtilsMessageSeverityFlagsEXT.IntType,
-    message_types: vk.DebugUtilsMessageTypeFlagsEXT.IntType,
+    message_severity: vk.DebugUtilsMessageSeverityFlagsEXT,
+    message_types: vk.DebugUtilsMessageTypeFlagsEXT,
     p_callback_data: ?*const vk.DebugUtilsMessengerCallbackDataEXT,
     p_user_data: ?*anyopaque,
 ) callconv(vk.vulkan_call_conv) vk.Bool32 {
@@ -1220,7 +1220,7 @@ fn messageCallback(
             .error_bit_ext = true,
         };
     };
-    const is_severe = (error_mask.toInt() & message_severity) > 0;
+    const is_severe = (error_mask.toInt() & message_severity.toInt()) > 0;
     const writer = if (is_severe) std.io.getStdErr().writer() else std.io.getStdOut().writer();
 
     if (p_callback_data) |data| {

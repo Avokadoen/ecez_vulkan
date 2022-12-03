@@ -6,17 +6,13 @@ const Builder = std.build.Builder;
 const Step = std.build.Step;
 const ArrayList = std.ArrayList;
 
-const ecez = @import("deps/ecez/build.zig");
+// const ecez = @import("deps/ecez/build.zig");
 const glfw = @import("deps/mach-glfw/build.zig");
 const zmath = @import("deps/zmath/build.zig");
 
 const vkgen = @import("deps/vulkan-zig/generator/index.zig");
 
 pub fn build(b: *std.build.Builder) void {
-    // we force stage 1 until certain issues have been resolved
-    // see issue: https://github.com/ziglang/zig/issues/12521
-    b.use_stage1 = true;
-
     const target = b.standardTargetOptions(.{});
     const mode = b.standardReleaseOptions();
 
@@ -53,9 +49,9 @@ pub fn build(b: *std.build.Builder) void {
     exe.step.dependOn(&shader_move_step.step);
 
     // let user enable/disable tracy
-    const ztracy_enable = b.option(bool, "enable-tracy", "Enable Tracy profiler") orelse false;
+    // const ztracy_enable = b.option(bool, "enable-tracy", "Enable Tracy profiler") orelse false;
     // link ecez and ztracy
-    ecez.link(b, exe, ztracy_enable);
+    // // ecez.link(b, exe, ztracy_enable);
 
     // link glfw
     exe.addPackage(glfw.pkg);

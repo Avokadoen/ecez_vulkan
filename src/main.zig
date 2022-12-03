@@ -1,5 +1,5 @@
 const std = @import("std");
-const ecez = @import("ecez");
+// const ecez = @import("ecez");
 const glfw = @import("glfw");
 
 const RenderContext = @import("RenderContext.zig");
@@ -21,8 +21,8 @@ pub fn main() !void {
     }
     const allocator = gpa.allocator();
 
-    var world = try ecez.WorldBuilder().WithComponents(.{ PositionComp, VelocityComp }).init(allocator, .{});
-    defer world.deinit();
+    // var world = try ecez.WorldBuilder().WithComponents(.{ PositionComp, VelocityComp }).init(allocator, .{});
+    // defer world.deinit();
 
     // init glfw
     try glfw.init(.{});
