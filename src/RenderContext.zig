@@ -14,6 +14,7 @@ const InstanceDispatch = vk_dispatch.InstanceDispatch;
 const DeviceDispatch = vk_dispatch.DeviceDispatch;
 
 const StagingBuffer = @import("StagingBuffer.zig");
+const ImmutableBuffer = @import("ImmutableBuffer.zig");
 const MutableBuffer = @import("MutableBuffer.zig");
 const QueueFamilyIndices = @import("QueueFamilyIndices.zig");
 
@@ -152,8 +153,7 @@ staging_buffer: StagingBuffer,
 vertex_buffer_size: vk.DeviceSize,
 index_buffer_size: vk.DeviceSize,
 // TODO: rename 
-vertex_index_buffer: vk.Buffer,
-vertex_index_memory: vk.DeviceMemory,
+vertex_index_buffer: ImmutableBuffer,
 
 camera: Camera,
 
@@ -496,39 +496,19 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     const index_buffer_size = dmem.getAlignedDeviceSize(non_coherent_atom_size, indices.len * @sizeOf(u16));
 
     // create device memory and transfer vertices to host
-    const vertex_index_buffer = try dmem.createBuffer(
-        vkd,
-        device,
-        non_coherent_atom_size,
-        dmem.getAlignedDeviceSize(non_coherent_atom_size, vertex_buffer_size + index_buffer_size),
-        .{ 
-            .transfer_dst_bit = true, 
-            .vertex_buffer_bit = true, 
-            .index_buffer_bit = true, 
-        },
-    );
-    errdefer vkd.destroyBuffer(device, vertex_index_buffer, null);
-    const vertex_index_memory = try dmem.createDeviceMemory(
-        vkd,
-        device,
+    const vertex_index_buffer = try ImmutableBuffer.init(
         vki,
         physical_device,
-        vertex_index_buffer,
-        .{ .device_local_bit = true },
+        vkd,
+        device, 
+        non_coherent_atom_size, 
+        .{.vertex_buffer_bit = true, .index_buffer_bit = true },
+        .{ .size = vertex_buffer_size + index_buffer_size },
     );
-    errdefer vkd.freeMemory(device, vertex_index_memory, null);
-    try vkd.bindBufferMemory(device, vertex_index_buffer, vertex_index_memory, 0);
-
+    
     // TODO: scheduling transfer of data that is not atom aligned is problematic. How should this be communicated or enforced?
-    try staging_buffer.scheduleTransferToDst(vertex_index_buffer, 0, Vertex, &vertices);
-    try staging_buffer.scheduleTransferToDst(
-        vertex_index_buffer, 
-        vertex_buffer_size, 
-        u16, 
-        &indices
-    );
-
-
+    try staging_buffer.scheduleTransferToDst(vertex_index_buffer.buffer, 0, Vertex, &vertices);
+    try staging_buffer.scheduleTransferToDst(vertex_index_buffer.buffer, vertex_buffer_size, u16, &indices);
     // transfer all data to GPU memory
     try staging_buffer.flushAndCopyToDestination(vkd, device, null);
 
@@ -579,7 +559,6 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         .vertex_buffer_size = vertex_buffer_size,
         .index_buffer_size = index_buffer_size,
         .vertex_index_buffer = vertex_index_buffer,
-        .vertex_index_memory = vertex_index_memory,
         .camera = camera,
         .model = model,
         .model_ubo_desc_set_layout = model_ubo_desc_set_layout,
@@ -652,9 +631,7 @@ pub fn deinit(self: RenderContext, allocator: Allocator) void {
 
     self.staging_buffer.deinit(self.vkd, self.device);
     self.model_buffer.deinit(self.vkd, self.device);
-    
-    self.vkd.freeMemory(self.device, self.vertex_index_memory, null);
-    self.vkd.destroyBuffer(self.device, self.vertex_index_buffer, null);
+    self.vertex_index_buffer.deinit(self.vkd, self.device);
 
     self.vkd.destroyDescriptorPool(self.device, self.model_desc_set_pool, null);
     self.vkd.destroyDescriptorSetLayout(self.device, self.model_ubo_desc_set_layout, null);
@@ -783,14 +760,14 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window) !void {
             command_buffer,
             0,
             1,
-            @ptrCast([*]const vk.Buffer, &self.vertex_index_buffer),
+            @ptrCast([*]const vk.Buffer, &self.vertex_index_buffer.buffer),
             @ptrCast([*]const vk.DeviceSize, &vertex_offsets),
         );
 
         const index_buffer_offset = self.vertex_buffer_size;
         self.vkd.cmdBindIndexBuffer(
             command_buffer,
-            self.vertex_index_buffer,
+            self.vertex_index_buffer.buffer,
             index_buffer_offset,
             vk.IndexType.uint16,
         );

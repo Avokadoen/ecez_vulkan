@@ -10,7 +10,7 @@ const command = @import("command.zig");
 const dmem = @import("device_memory.zig");
 const sync = @import("sync.zig");
 
-const StagingBuffer = @This();
+const MutableBuffer = @This();
 
 const TransferDestination = struct {
     buffer: vk.Buffer,
@@ -42,7 +42,7 @@ pub inline fn init(
     non_coherent_atom_size: vk.DeviceSize,
     buffer_usage: vk.BufferUsageFlags,
     config: Config,
-) !StagingBuffer {
+) !MutableBuffer {
     std.debug.assert(config.size != 0);
 
     const size = dmem.getAlignedDeviceSize(non_coherent_atom_size, config.size);
@@ -72,7 +72,7 @@ pub inline fn init(
         break :blk @ptrCast([*]u8, raw_device_ptr)[0..size];
     };
 
-    return StagingBuffer{
+    return MutableBuffer{
         .size = size,
         .buffer = buffer,
         .memory = memory,
@@ -81,14 +81,14 @@ pub inline fn init(
     };
 }
 
-pub inline fn deinit(self: StagingBuffer, vkd: DeviceDispatch, device: vk.Device) void {
+pub inline fn deinit(self: MutableBuffer, vkd: DeviceDispatch, device: vk.Device) void {
     vkd.unmapMemory(device, self.memory);
     vkd.freeMemory(device, self.memory, null);
     vkd.destroyBuffer(device, self.buffer, null);
 }
 
 pub inline fn scheduleTransfer(
-    self: *StagingBuffer,
+    self: *MutableBuffer,
     offset: vk.DeviceSize,
     comptime T: type,
     data: []const T,
@@ -116,7 +116,7 @@ pub inline fn scheduleTransfer(
     self.incoherent_memory_count += 1;
 }
 
-pub inline fn flush(self: *StagingBuffer, vkd: DeviceDispatch, device: vk.Device) !void {
+pub inline fn flush(self: *MutableBuffer, vkd: DeviceDispatch, device: vk.Device) !void {
     if (self.incoherent_memory_count == 0) return;
     try vkd.flushMappedMemoryRanges(device, self.incoherent_memory_count, &self.incoherent_memory_ranges);
     self.incoherent_memory_count = 0;
