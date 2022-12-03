@@ -13,6 +13,7 @@ const InstanceDispatch = vk_dispatch.InstanceDispatch;
 const DeviceDispatch = vk_dispatch.DeviceDispatch;
 
 const StagingBuffer = @import("StagingBuffer.zig");
+const MutableBuffer = @import("MutableBuffer.zig");
 const QueueFamilyIndices = @import("QueueFamilyIndices.zig");
 
 const command = @import("command.zig");
@@ -156,14 +157,11 @@ vertex_index_memory: vk.DeviceMemory,
 camera: Camera,
 
 // TODO: this is data we should get from ecez!
-model_transfer_complete_semaphore: vk.Semaphore,
 model: Model, 
 model_ubo_desc_set_layout: vk.DescriptorSetLayout,
 model_desc_set_pool: vk.DescriptorPool,
 model_desc_set: vk.DescriptorSet,
-model_buffer_size: vk.DeviceSize,
-model_buffer: vk.Buffer,
-model_memory: vk.DeviceMemory,
+model_buffer: MutableBuffer,
 
 queue_family_indices: QueueFamilyIndices,
 graphics_queue: vk.Queue,
@@ -345,35 +343,30 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         };
     };
 
+    // create device memory and transfer vertices to host
+    var model_buffer = try MutableBuffer.init(
+        vki,
+        physical_device,
+        vkd,
+        device,
+        non_coherent_atom_size,
+        .{ .uniform_buffer_bit = true },
+        .{ .size = @sizeOf(Model) },
+    );
+    errdefer model_buffer.deinit(vkd, device);
+
     // initialized model to some dummy data (this should be handled by ecez intergration later as model should be a component)
     const model = Model{ 
         .transform = zm.identity(),
     };
-    const model_buffer_size = dmem.getAlignedDeviceSize(non_coherent_atom_size, @sizeOf(Model));
-
-    // create device memory and transfer vertices to host
-    const uniform_buffer = try dmem.createBuffer(
-        vkd,
-        device,
-        non_coherent_atom_size,
-        dmem.getAlignedDeviceSize(non_coherent_atom_size, model_buffer_size),
-        .{ 
-            .transfer_dst_bit = true, 
-            .uniform_buffer_bit = true, 
-        },
+    const models = [_]Model{ model };
+    try model_buffer.scheduleTransfer(
+        0, 
+        Model, 
+        &models
     );
-    errdefer vkd.destroyBuffer(device, uniform_buffer, null);
-    const uniform_memory = try dmem.createDeviceMemory(
-        vkd,
-        device,
-        vki,
-        physical_device,
-        uniform_buffer,
-        .{ .device_local_bit = true },
-    );
-    errdefer vkd.freeMemory(device, uniform_memory, null);
-    try vkd.bindBufferMemory(device, uniform_buffer, uniform_memory, 0);
-
+    
+    try model_buffer.flush(vkd, device);
     const pipeline_layout = blk: {
         const push_constant_range = vk.PushConstantRange{
             .stage_flags = .{ .vertex_bit = true },
@@ -432,7 +425,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
 
     // create all sempahores we need which we can slice later
     const all_semaphores = blk: {
-        var semaphores = try allocator.alloc(vk.Semaphore, max_frames_in_flight * 2 + 1);
+        var semaphores = try allocator.alloc(vk.Semaphore, max_frames_in_flight * 2);
 
         var initialized_semaphores: usize = 0;
         errdefer {
@@ -458,7 +451,6 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     }
     const image_available_semaphores = all_semaphores[0..max_frames_in_flight];
     const render_finished_semaphores = all_semaphores[max_frames_in_flight .. max_frames_in_flight * 2];
-    const model_transfer_complete_semaphore = all_semaphores[max_frames_in_flight * 2];
 
     const in_flight_fences = blk: {
         var fences = try allocator.alloc(vk.Fence, max_frames_in_flight);
@@ -498,16 +490,6 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     );
     errdefer staging_buffer.deinit(vkd, device);
 
-    const models = [_]Model { model };
-    try staging_buffer.scheduleTransfer(
-        vkd, 
-        device, 
-        uniform_buffer, 
-        0, 
-        Model, 
-        &models,
-    );
-
     // TODO: simplfiy buffer aligned creation (createBuffer accept size array and do this internally)
     const vertex_buffer_size = dmem.getAlignedDeviceSize(non_coherent_atom_size, vertices.len * @sizeOf(Vertex));
     const index_buffer_size = dmem.getAlignedDeviceSize(non_coherent_atom_size, indices.len * @sizeOf(u16));
@@ -537,14 +519,12 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     try vkd.bindBufferMemory(device, vertex_index_buffer, vertex_index_memory, 0);
 
     // TODO: scheduling transfer of data that is not atom aligned is problematic. How should this be communicated or enforced?
-    try staging_buffer.scheduleTransfer(vkd, device, vertex_index_buffer, 0, Vertex, &vertices);
-    try staging_buffer.scheduleTransfer(
-        vkd, 
-        device, 
+    try staging_buffer.scheduleTransferToDst(vertex_index_buffer, 0, Vertex, &vertices);
+    try staging_buffer.scheduleTransferToDst(
         vertex_index_buffer, 
         vertex_buffer_size, 
         u16, 
-        &indices,
+        &indices
     );
 
 
@@ -552,7 +532,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     try staging_buffer.flushAndCopyToDestination(vkd, device, null);
 
     const model_desc_buffer_info = vk.DescriptorBufferInfo{
-        .buffer = uniform_buffer,
+        .buffer = model_buffer.buffer,
         .offset = 0,
         .range = vk.WHOLE_SIZE,
     };
@@ -600,14 +580,11 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         .vertex_index_buffer = vertex_index_buffer,
         .vertex_index_memory = vertex_index_memory,
         .camera = camera,
-        .model_transfer_complete_semaphore = model_transfer_complete_semaphore,
         .model = model,
         .model_ubo_desc_set_layout = model_ubo_desc_set_layout,
         .model_desc_set_pool = model_desc_set_pool,
         .model_desc_set = model_desc_set,
-        .model_buffer_size = model_buffer_size,
-        .model_buffer = uniform_buffer,
-        .model_memory = uniform_memory,
+        .model_buffer = model_buffer,
         .queue_family_indices = queue_family_indices,
         .graphics_queue = graphics_queue,
         .transfer_queue = transfer_queue,
@@ -673,10 +650,7 @@ pub fn deinit(self: RenderContext, allocator: Allocator) void {
     }
 
     self.staging_buffer.deinit(self.vkd, self.device);
-    
-    self.vkd.freeMemory(self.device, self.model_memory, null);
-    self.vkd.destroyBuffer(self.device, self.model_buffer, null);
-    
+    self.model_buffer.deinit(self.vkd, self.device);
     
     self.vkd.freeMemory(self.device, self.vertex_index_memory, null);
     self.vkd.destroyBuffer(self.device, self.vertex_index_buffer, null);
@@ -749,18 +723,14 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window) !void {
     try self.vkd.resetFences(self.device, 1, @ptrCast([*]const vk.Fence, &self.in_flight_fences[self.current_frame]));
 
     self.model.transform = zm.mul(self.model.transform, zm.rotationY(0.0001));
-    try self.staging_buffer.scheduleTransfer(
-        self.vkd, 
-        self.device, 
-        self.model_buffer, 
+    try self.model_buffer.scheduleTransfer(
         0, 
         Model,
         &[_]Model{ self.model },
     );
-    try self.staging_buffer.flushAndCopyToDestination(
+    try self.model_buffer.flush(
         self.vkd, 
         self.device, 
-        &[_]vk.Semaphore{ self.model_transfer_complete_semaphore },
     );
 
     try self.vkd.resetCommandPool(self.device, self.command_pools[self.current_frame], .{});
@@ -832,9 +802,9 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window) !void {
 
     const render_finish_semaphore = @ptrCast([*]const vk.Semaphore, &self.render_finished_semaphores[self.current_frame]);
     const submit_info = vk.SubmitInfo{
-        .wait_semaphore_count = 2,
-        .p_wait_semaphores = &[_]vk.Semaphore{ self.model_transfer_complete_semaphore, self.image_available_semaphores[self.current_frame] },
-        .p_wait_dst_stage_mask = &[_]vk.PipelineStageFlags{ .{ .vertex_shader_bit = true },  .{ .color_attachment_output_bit = true } },
+        .wait_semaphore_count = 1,
+        .p_wait_semaphores = &[_]vk.Semaphore{ self.image_available_semaphores[self.current_frame] },
+        .p_wait_dst_stage_mask = &[_]vk.PipelineStageFlags{ .{ .color_attachment_output_bit = true } },
         .command_buffer_count = 1,
         .p_command_buffers = @ptrCast([*]const vk.CommandBuffer, &self.command_buffers[self.current_frame]),
         .signal_semaphore_count = 1,
