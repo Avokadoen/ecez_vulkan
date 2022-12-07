@@ -28,15 +28,16 @@ pub inline fn createBuffer(
     return vkd.createBuffer(device, &buffer_info, null);
 }
 
+// TODO: rename createBufferDeviceMemory
 pub inline fn createDeviceMemory(
     vkd: DeviceDispatch,
     device: vk.Device,
     vki: InstanceDispatch,
     physical_device: vk.PhysicalDevice,
-    vertex_buffer: vk.Buffer,
+    buffer: vk.Buffer,
     property_flags: vk.MemoryPropertyFlags,
 ) !vk.DeviceMemory {
-    const memory_requirements = vkd.getBufferMemoryRequirements(device, vertex_buffer);
+    const memory_requirements = vkd.getBufferMemoryRequirements(device, buffer);
     // TODO: better memory ..
     const memory_type_index = try findMemoryTypeIndex(
         vki,
@@ -49,6 +50,30 @@ pub inline fn createDeviceMemory(
         .allocation_size = memory_requirements.size,
         .memory_type_index = memory_type_index,
     };
+    return vkd.allocateMemory(device, &allocation_info, null);
+}
+
+pub inline fn createDeviceImageMemory(
+    vki: InstanceDispatch,
+    physical_device: vk.PhysicalDevice,
+    vkd: DeviceDispatch,
+    device: vk.Device,
+    non_coherent_atom_size: vk.DeviceSize,
+    images: []const vk.Image,
+) !vk.DeviceMemory {
+    var allocation_size: vk.DeviceSize = 0;
+    var memory_type_bits: u32 = 0;
+    for (images) |image| {
+        const memory_requirements = vkd.getImageMemoryRequirements(device, image);
+        allocation_size += getAlignedDeviceSize(non_coherent_atom_size, memory_requirements.size);
+        memory_type_bits |= memory_requirements.memory_type_bits;
+    }
+
+    const allocation_info = vk.MemoryAllocateInfo{
+        .allocation_size = allocation_size,
+        .memory_type_index = try findMemoryTypeIndex(vki, physical_device, memory_type_bits, .{ .device_local_bit = true }),
+    };
+
     return vkd.allocateMemory(device, &allocation_info, null);
 }
 

@@ -18,14 +18,22 @@ pub const FamilyEntry = struct {
 };
 
 graphics: ?FamilyEntry,
+graphics_queue_count: u32,
+
 compute: ?FamilyEntry,
+compute_queue_count: u32,
+
 transfer: ?FamilyEntry,
+transfer_queue_count: u32,
 
 pub fn init(vki: InstanceDispatch, physical_device: vk.PhysicalDevice, surface: vk.SurfaceKHR) !QueueFamilyIndices {
     var queues: QueueFamilyIndices = QueueFamilyIndices{
         .graphics = null,
+        .graphics_queue_count = 0,
         .compute = null,
+        .compute_queue_count = 0,
         .transfer = null,
+        .transfer_queue_count = 0,
     };
 
     if ((try checkDeviceExtensionSupport(vki, physical_device)) == false) {
@@ -57,6 +65,7 @@ pub fn init(vki: InstanceDispatch, physical_device: vk.PhysicalDevice, surface: 
             const index = @intCast(u32, i);
             const support_present = (try vki.getPhysicalDeviceSurfaceSupportKHR(physical_device, index, surface)) != 0;
             queues.graphics = FamilyEntry{ .index = index, .support_present = support_present };
+            queues.graphics_queue_count = property.queue_count;
         }
 
         // grab dedicated compute family index if any
@@ -65,6 +74,7 @@ pub fn init(vki: InstanceDispatch, physical_device: vk.PhysicalDevice, surface: 
             const index = @intCast(u32, i);
             const support_present = (try vki.getPhysicalDeviceSurfaceSupportKHR(physical_device, index, surface)) != 0;
             queues.compute = FamilyEntry{ .index = index, .support_present = support_present };
+            queues.compute_queue_count = property.queue_count;
         }
 
         // grab dedicated transfer family index if any
@@ -73,6 +83,7 @@ pub fn init(vki: InstanceDispatch, physical_device: vk.PhysicalDevice, surface: 
             const index = @intCast(u32, i);
             const support_present = (try vki.getPhysicalDeviceSurfaceSupportKHR(physical_device, index, surface)) != 0;
             queues.transfer = FamilyEntry{ .index = index, .support_present = support_present };
+            queues.transfer_queue_count = property.queue_count;
         }
     }
 

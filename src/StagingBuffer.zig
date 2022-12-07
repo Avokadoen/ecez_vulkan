@@ -10,187 +10,460 @@ const command = @import("command.zig");
 const dmem = @import("device_memory.zig");
 const sync = @import("sync.zig");
 
-const StagingBuffer = @This();
+pub const Config = struct {
+    size: vk.DeviceSize = 64 * dmem.bytes_in_megabyte, // default of 64 megabyte for staging
+};
 
-const TransferDestination = struct {
+const TransferBufferDestination = struct {
     buffer: vk.Buffer,
     offset: vk.DeviceSize,
 };
 
+pub const ImageTransition = struct {
+    format: vk.Format,
+    old_layout: vk.ImageLayout,
+    new_layout: vk.ImageLayout,
+};
+
+const TransferImageDestination = struct {
+    transition_before: ?ImageTransition,
+    image: vk.Image,
+    width: u32,
+    height: u32,
+    transition_after: ?ImageTransition,
+};
+
+const StagingContext = struct {
+    size: vk.DeviceSize,
+    buffer: vk.Buffer,
+    memory: vk.DeviceMemory,
+
+    incoherent_memory_bytes: vk.DeviceSize = 0,
+    non_coherent_atom_size: vk.DeviceSize,
+
+    // TODO: reduce duplicate memory
+    // memory still not flushed
+    memory_in_flight: u32 = 0,
+    mapped_ranges: [max_transfers_scheduled]vk.MappedMemoryRange = undefined,
+
+    transfer_queue: vk.Queue,
+    command_pool: vk.CommandPool,
+    command_buffer: vk.CommandBuffer,
+    transfer_fence: vk.Fence,
+
+    device_data: []u8,
+
+    pub inline fn init(
+        vki: InstanceDispatch,
+        physical_device: vk.PhysicalDevice,
+        vkd: DeviceDispatch,
+        device: vk.Device,
+        non_coherent_atom_size: vk.DeviceSize,
+        transfer_family_index: u32,
+        transfer_queue: vk.Queue,
+        config: Config,
+    ) !StagingContext {
+        std.debug.assert(config.size != 0);
+
+        const size = dmem.getAlignedDeviceSize(non_coherent_atom_size, config.size);
+
+        // create device memory and transfer vertices to host
+        const buffer = try dmem.createBuffer(
+            vkd,
+            device,
+            non_coherent_atom_size,
+            size,
+            .{ .transfer_src_bit = true },
+        );
+        errdefer vkd.destroyBuffer(device, buffer, null);
+        const memory = try dmem.createDeviceMemory(
+            vkd,
+            device,
+            vki,
+            physical_device,
+            buffer,
+            .{ .host_visible_bit = true },
+        );
+        errdefer vkd.freeMemory(device, memory, null);
+        try vkd.bindBufferMemory(device, buffer, memory, 0);
+
+        const command_pool = try command.createPool(vkd, device, transfer_family_index);
+        errdefer vkd.destroyCommandPool(device, command_pool, null);
+
+        const command_buffer = try command.createBuffer(vkd, device, command_pool);
+
+        const transfer_fence = try sync.createFence(vkd, device, false);
+        errdefer vkd.destroyFence(device, transfer_fence, null);
+
+        const device_data: []u8 = blk: {
+            var raw_device_ptr = try vkd.mapMemory(device, memory, 0, size, .{});
+            break :blk @ptrCast([*]u8, raw_device_ptr)[0..size];
+        };
+
+        return StagingContext{
+            .size = size,
+            .buffer = buffer,
+            .memory = memory,
+            .non_coherent_atom_size = non_coherent_atom_size,
+            .command_pool = command_pool,
+            .command_buffer = command_buffer,
+            .transfer_queue = transfer_queue,
+            .transfer_fence = transfer_fence,
+            .device_data = device_data,
+        };
+    }
+
+    pub inline fn deinit(self: StagingContext, vkd: DeviceDispatch, device: vk.Device) void {
+        _ = vkd.waitForFences(device, 1, @ptrCast([*]const vk.Fence, &self.transfer_fence), vk.TRUE, std.time.ns_per_s) catch {};
+        vkd.unmapMemory(device, self.memory);
+        vkd.destroyFence(device, self.transfer_fence, null);
+        vkd.destroyCommandPool(device, self.command_pool, null);
+        vkd.freeMemory(device, self.memory, null);
+        vkd.destroyBuffer(device, self.buffer, null);
+    }
+};
+
 const max_transfers_scheduled = 32;
 
-size: vk.DeviceSize,
-buffer: vk.Buffer,
-memory: vk.DeviceMemory,
+pub const Buffer = struct {
+    ctx: StagingContext,
+    buffer_destinations: [max_transfers_scheduled]TransferBufferDestination = undefined,
 
-// memory still not flushed
-transfer_destinations: [max_transfers_scheduled]TransferDestination = undefined,
-incoherent_memory_ranges: [max_transfers_scheduled]vk.MappedMemoryRange = undefined,
-incoherent_memory_count: u32 = 0,
-incoherent_memory_bytes: vk.DeviceSize = 0,
-// TODO: reduce duplicate memory
-
-non_coherent_atom_size: vk.DeviceSize,
-
-transfer_queue: vk.Queue,
-command_pool: vk.CommandPool,
-command_buffer: vk.CommandBuffer,
-transfer_fence: vk.Fence,
-
-device_data: []u8,
-
-pub const Config = struct {
-    size: vk.DeviceSize = 64 * dmem.bytes_in_megabyte, // default of 64 megabyte for staging
-};
-pub inline fn init(
-    vki: InstanceDispatch,
-    physical_device: vk.PhysicalDevice,
-    vkd: DeviceDispatch,
-    device: vk.Device,
-    non_coherent_atom_size: vk.DeviceSize,
-    transfer_family_index: u32,
-    transfer_queue: vk.Queue,
-    config: Config,
-) !StagingBuffer {
-    std.debug.assert(config.size != 0);
-
-    const size = dmem.getAlignedDeviceSize(non_coherent_atom_size, config.size);
-
-    // create device memory and transfer vertices to host
-    const buffer = try dmem.createBuffer(
-        vkd,
-        device,
-        non_coherent_atom_size,
-        size,
-        .{ .transfer_src_bit = true },
-    );
-    errdefer vkd.destroyBuffer(device, buffer, null);
-    const memory = try dmem.createDeviceMemory(
-        vkd,
-        device,
-        vki,
-        physical_device,
-        buffer,
-        .{ .host_visible_bit = true },
-    );
-    errdefer vkd.freeMemory(device, memory, null);
-    try vkd.bindBufferMemory(device, buffer, memory, 0);
-
-    const command_pool = try command.createPool(vkd, device, transfer_family_index);
-    errdefer vkd.destroyCommandPool(device, command_pool, null);
-
-    const command_buffer = try command.createBuffer(vkd, device, command_pool);
-
-    const transfer_fence = try sync.createFence(vkd, device, false);
-    errdefer vkd.destroyFence(device, transfer_fence, null);
-
-    const device_data: []u8 = blk: {
-        var raw_device_ptr = try vkd.mapMemory(device, memory, 0, size, .{});
-        break :blk @ptrCast([*]u8, raw_device_ptr)[0..size];
-    };
-
-    return StagingBuffer{
-        .size = size,
-        .buffer = buffer,
-        .memory = memory,
-        .non_coherent_atom_size = non_coherent_atom_size,
-        .command_pool = command_pool,
-        .command_buffer = command_buffer,
-        .transfer_queue = transfer_queue,
-        .transfer_fence = transfer_fence,
-        .device_data = device_data,
-    };
-}
-
-pub fn deinit(self: StagingBuffer, vkd: DeviceDispatch, device: vk.Device) void {
-    _ = vkd.waitForFences(device, 1, @ptrCast([*]const vk.Fence, &self.transfer_fence), vk.TRUE, std.time.ns_per_s) catch {};
-    vkd.unmapMemory(device, self.memory);
-    vkd.destroyFence(device, self.transfer_fence, null);
-    vkd.destroyCommandPool(device, self.command_pool, null);
-    vkd.freeMemory(device, self.memory, null);
-    vkd.destroyBuffer(device, self.buffer, null);
-}
-
-pub fn scheduleTransferToDst(
-    self: *StagingBuffer,
-    destination_buffer: vk.Buffer,
-    destination_offset: vk.DeviceSize,
-    comptime T: type,
-    data: []const T,
-) !void {
-    if (self.incoherent_memory_count >= max_transfers_scheduled) {
-        return error.OutOfTransferSlots;
-    }
-
-    const raw_data = std.mem.sliceAsBytes(data);
-    if (self.incoherent_memory_bytes + raw_data.len > self.size) {
-        return error.OutOfMemory;
-    }
-
-    const aligned_memory_size = dmem.getAlignedDeviceSize(self.non_coherent_atom_size, @intCast(vk.DeviceSize, raw_data.len));
-
-    var vacant_device_data = self.device_data[self.incoherent_memory_bytes..];
-
-    std.mem.copy(u8, vacant_device_data, raw_data);
-
-    self.incoherent_memory_ranges[self.incoherent_memory_count] = vk.MappedMemoryRange{
-        .memory = self.memory,
-        .offset = self.incoherent_memory_bytes,
-        .size = aligned_memory_size,
-    };
-    self.transfer_destinations[self.incoherent_memory_count] = TransferDestination{
-        .buffer = destination_buffer,
-        .offset = destination_offset,
-    };
-
-    self.incoherent_memory_count += 1;
-    self.incoherent_memory_bytes += aligned_memory_size;
-}
-
-pub fn flushAndCopyToDestination(
-    self: *StagingBuffer,
-    vkd: DeviceDispatch,
-    device: vk.Device,
-    transfers_complete_semaphores: ?[]vk.Semaphore,
-) !void {
-    if (self.incoherent_memory_count == 0) return;
-
-    try vkd.flushMappedMemoryRanges(device, self.incoherent_memory_count, &self.incoherent_memory_ranges);
-
-    const begin_info = vk.CommandBufferBeginInfo{
-        .flags = .{ .one_time_submit_bit = true },
-        .p_inheritance_info = null,
-    };
-    try vkd.beginCommandBuffer(self.command_buffer, &begin_info);
-
-    // TODO: reduce buffers, only have one of each dst buffer
-    var copy_regions: [max_transfers_scheduled]vk.BufferCopy = undefined;
-    for (self.incoherent_memory_ranges[0..self.incoherent_memory_count]) |memory_ranges, i| {
-        copy_regions[i] = vk.BufferCopy{
-            .src_offset = memory_ranges.offset,
-            .dst_offset = self.transfer_destinations[i].offset,
-            .size = memory_ranges.size,
+    pub fn init(
+        vki: InstanceDispatch,
+        physical_device: vk.PhysicalDevice,
+        vkd: DeviceDispatch,
+        device: vk.Device,
+        non_coherent_atom_size: vk.DeviceSize,
+        transfer_family_index: u32,
+        transfer_queue: vk.Queue,
+        config: Config,
+    ) !Buffer {
+        return Buffer{
+            .ctx = try StagingContext.init(
+                vki,
+                physical_device,
+                vkd,
+                device,
+                non_coherent_atom_size,
+                transfer_family_index,
+                transfer_queue,
+                config,
+            ),
         };
-        vkd.cmdCopyBuffer(self.command_buffer, self.buffer, self.transfer_destinations[i].buffer, 1, copy_regions[i..].ptr);
     }
 
-    try vkd.endCommandBuffer(self.command_buffer);
+    pub fn deinit(self: Buffer, vkd: DeviceDispatch, device: vk.Device) void {
+        self.ctx.deinit(vkd, device);
+    }
 
-    const submit_into = vk.SubmitInfo{
-        .wait_semaphore_count = 0,
-        .p_wait_semaphores = undefined,
-        .p_wait_dst_stage_mask = undefined,
-        .command_buffer_count = 1,
-        .p_command_buffers = @ptrCast([*]vk.CommandBuffer, &self.command_buffer),
-        .signal_semaphore_count = if (transfers_complete_semaphores) |semaphores| @intCast(u32, semaphores.len) else 0,
-        .p_signal_semaphores = if (transfers_complete_semaphores) |semaphores| semaphores.ptr else undefined,
-    };
-    try vkd.queueSubmit(self.transfer_queue, 1, @ptrCast([*]const vk.SubmitInfo, &submit_into), self.transfer_fence);
+    pub fn scheduleTransferToDst(
+        self: *Buffer,
+        destination_buffer: vk.Buffer,
+        destination_offset: vk.DeviceSize,
+        comptime T: type,
+        data: []const T,
+    ) !void {
+        if (self.ctx.memory_in_flight >= max_transfers_scheduled) {
+            return error.OutOfTransferSlots;
+        }
 
-    _ = vkd.waitForFences(device, 1, @ptrCast([*]const vk.Fence, &self.transfer_fence), vk.TRUE, std.time.ns_per_s) catch {};
-    try vkd.resetFences(device, 1, @ptrCast([*]const vk.Fence, &self.transfer_fence));
+        const raw_data = std.mem.sliceAsBytes(data);
+        if (self.ctx.incoherent_memory_bytes + raw_data.len > self.ctx.size) {
+            return error.OutOfMemory;
+        }
 
-    self.incoherent_memory_count = 0;
-    self.incoherent_memory_bytes = 0;
-    try vkd.resetCommandPool(device, self.command_pool, .{});
-}
+        const aligned_memory_size = dmem.getAlignedDeviceSize(self.ctx.non_coherent_atom_size, @intCast(vk.DeviceSize, raw_data.len));
+        var vacant_device_data = self.ctx.device_data[self.ctx.incoherent_memory_bytes..];
+        std.mem.copy(u8, vacant_device_data, raw_data);
+
+        self.ctx.mapped_ranges[self.ctx.memory_in_flight] = vk.MappedMemoryRange{
+            .memory = self.ctx.memory,
+            .offset = self.ctx.incoherent_memory_bytes,
+            .size = aligned_memory_size,
+        };
+        self.buffer_destinations[self.ctx.memory_in_flight] = TransferBufferDestination{
+            .buffer = destination_buffer,
+            .offset = destination_offset,
+        };
+
+        self.ctx.memory_in_flight += 1;
+        self.ctx.incoherent_memory_bytes += aligned_memory_size;
+    }
+
+    pub fn flushAndCopyToDestination(
+        self: *Buffer,
+        vkd: DeviceDispatch,
+        device: vk.Device,
+        transfers_complete_semaphores: ?[]vk.Semaphore,
+    ) !void {
+        // TODO: propert errdefers in function
+
+        if (self.ctx.memory_in_flight == 0) return;
+
+        try vkd.flushMappedMemoryRanges(device, self.ctx.memory_in_flight, &self.ctx.mapped_ranges);
+
+        const begin_info = vk.CommandBufferBeginInfo{
+            .flags = .{ .one_time_submit_bit = true },
+            .p_inheritance_info = null,
+        };
+        try vkd.beginCommandBuffer(self.ctx.command_buffer, &begin_info);
+
+        // TODO: reduce buffers, only have one of each dst buffer
+        var copy_regions: [max_transfers_scheduled]vk.BufferCopy = undefined;
+        for (self.buffer_destinations[0..self.ctx.memory_in_flight]) |dest, i| {
+            const source_range = self.ctx.mapped_ranges[i];
+            copy_regions[i] = vk.BufferCopy{
+                .src_offset = source_range.offset,
+                .dst_offset = dest.offset,
+                .size = source_range.size,
+            };
+            vkd.cmdCopyBuffer(self.ctx.command_buffer, self.ctx.buffer, dest.buffer, 1, copy_regions[i..].ptr);
+        }
+
+        try vkd.endCommandBuffer(self.ctx.command_buffer);
+
+        const submit_into = vk.SubmitInfo{
+            .wait_semaphore_count = 0,
+            .p_wait_semaphores = undefined,
+            .p_wait_dst_stage_mask = undefined,
+            .command_buffer_count = 1,
+            .p_command_buffers = @ptrCast([*]vk.CommandBuffer, &self.ctx.command_buffer),
+            .signal_semaphore_count = if (transfers_complete_semaphores) |semaphores| @intCast(u32, semaphores.len) else 0,
+            .p_signal_semaphores = if (transfers_complete_semaphores) |semaphores| semaphores.ptr else undefined,
+        };
+        try vkd.queueSubmit(self.ctx.transfer_queue, 1, @ptrCast([*]const vk.SubmitInfo, &submit_into), self.ctx.transfer_fence);
+
+        _ = vkd.waitForFences(device, 1, @ptrCast([*]const vk.Fence, &self.ctx.transfer_fence), vk.TRUE, std.time.ns_per_s) catch {};
+        try vkd.resetFences(device, 1, @ptrCast([*]const vk.Fence, &self.ctx.transfer_fence));
+
+        self.ctx.memory_in_flight = 0;
+        self.ctx.incoherent_memory_bytes = 0;
+        try vkd.resetCommandPool(device, self.ctx.command_pool, .{});
+    }
+};
+
+pub const Image = struct {
+    ctx: StagingContext,
+    image_destinations: [max_transfers_scheduled]TransferImageDestination = undefined,
+
+    pub fn init(
+        vki: InstanceDispatch,
+        physical_device: vk.PhysicalDevice,
+        vkd: DeviceDispatch,
+        device: vk.Device,
+        non_coherent_atom_size: vk.DeviceSize,
+        transfer_family_index: u32,
+        transfer_queue: vk.Queue,
+        config: Config,
+    ) !Image {
+        return Image{
+            .ctx = try StagingContext.init(
+                vki,
+                physical_device,
+                vkd,
+                device,
+                non_coherent_atom_size,
+                transfer_family_index,
+                transfer_queue,
+                config,
+            ),
+        };
+    }
+
+    pub fn deinit(self: Image, vkd: DeviceDispatch, device: vk.Device) void {
+        self.ctx.deinit(vkd, device);
+    }
+
+    pub fn scheduleTransferToDst(
+        self: *Image,
+        destination_image: vk.Image,
+        image_extent: vk.Extent2D,
+        comptime T: type,
+        data: []const T,
+        transition_before: ?ImageTransition,
+        transition_after: ?ImageTransition,
+    ) !void {
+        if (self.ctx.memory_in_flight >= max_transfers_scheduled) {
+            return error.OutOfTransferSlots;
+        }
+
+        const raw_data = std.mem.sliceAsBytes(data);
+        if (self.ctx.incoherent_memory_bytes + raw_data.len > self.ctx.size) {
+            return error.OutOfMemory;
+        }
+
+        const aligned_memory_size = dmem.getAlignedDeviceSize(self.ctx.non_coherent_atom_size, @intCast(vk.DeviceSize, raw_data.len));
+        var vacant_device_data = self.ctx.device_data[self.ctx.incoherent_memory_bytes..];
+        std.mem.copy(u8, vacant_device_data, raw_data);
+
+        self.ctx.mapped_ranges[self.ctx.memory_in_flight] = vk.MappedMemoryRange{
+            .memory = self.ctx.memory,
+            .offset = self.ctx.incoherent_memory_bytes,
+            .size = aligned_memory_size,
+        };
+        self.image_destinations[self.ctx.memory_in_flight] = TransferImageDestination{
+            .transition_before = transition_before,
+            .image = destination_image,
+            .width = @intCast(u32, image_extent.width),
+            .height = @intCast(u32, image_extent.height),
+            .transition_after = transition_after,
+        };
+
+        self.ctx.memory_in_flight += 1;
+        self.ctx.incoherent_memory_bytes += aligned_memory_size;
+    }
+
+    pub fn flushAndCopyToDestination(
+        self: *Image,
+        vkd: DeviceDispatch,
+        device: vk.Device,
+        transfers_complete_semaphores: ?[]vk.Semaphore,
+    ) !void {
+        // TODO: propert errdefers in function
+
+        if (self.ctx.memory_in_flight == 0) return;
+
+        try vkd.flushMappedMemoryRanges(device, self.ctx.memory_in_flight, &self.ctx.mapped_ranges);
+
+        const begin_info = vk.CommandBufferBeginInfo{
+            .flags = .{ .one_time_submit_bit = true },
+            .p_inheritance_info = null,
+        };
+        try vkd.beginCommandBuffer(self.ctx.command_buffer, &begin_info);
+
+        var region = vk.BufferImageCopy{
+            .buffer_offset = 0,
+            .buffer_row_length = 0,
+            .buffer_image_height = 0,
+            .image_subresource = vk.ImageSubresourceLayers{
+                .aspect_mask = .{ .color_bit = true },
+                .mip_level = 0,
+                .base_array_layer = 0,
+                .layer_count = 1,
+            },
+            .image_offset = .{ .x = 0, .y = 0, .z = 0 },
+            .image_extent = .{
+                .width = 0,
+                .height = 0,
+                .depth = 1,
+            },
+        };
+        for (self.image_destinations[0..self.ctx.memory_in_flight]) |dest| {
+            if (dest.transition_before) |transition| {
+                try transitionImage(
+                    vkd,
+                    self.ctx.command_buffer,
+                    dest.image,
+                    transition.format,
+                    transition.old_layout,
+                    transition.new_layout,
+                );
+            }
+
+            region.image_extent.width = dest.width;
+            region.image_extent.height = dest.height;
+
+            vkd.cmdCopyBufferToImage(self.ctx.command_buffer, self.ctx.buffer, dest.image, .transfer_dst_optimal, 1, @ptrCast([*]const vk.BufferImageCopy, &region));
+
+            if (dest.transition_after) |transition| {
+                try transitionImage(
+                    vkd,
+                    self.ctx.command_buffer,
+                    dest.image,
+                    transition.format,
+                    transition.old_layout,
+                    transition.new_layout,
+                );
+            }
+        }
+
+        try vkd.endCommandBuffer(self.ctx.command_buffer);
+
+        const submit_into = vk.SubmitInfo{
+            .wait_semaphore_count = 0,
+            .p_wait_semaphores = undefined,
+            .p_wait_dst_stage_mask = undefined,
+            .command_buffer_count = 1,
+            .p_command_buffers = @ptrCast([*]vk.CommandBuffer, &self.ctx.command_buffer),
+            .signal_semaphore_count = if (transfers_complete_semaphores) |semaphores| @intCast(u32, semaphores.len) else 0,
+            .p_signal_semaphores = if (transfers_complete_semaphores) |semaphores| semaphores.ptr else undefined,
+        };
+        try vkd.queueSubmit(self.ctx.transfer_queue, 1, @ptrCast([*]const vk.SubmitInfo, &submit_into), self.ctx.transfer_fence);
+
+        _ = vkd.waitForFences(device, 1, @ptrCast([*]const vk.Fence, &self.ctx.transfer_fence), vk.TRUE, std.time.ns_per_s) catch {};
+        try vkd.resetFences(device, 1, @ptrCast([*]const vk.Fence, &self.ctx.transfer_fence));
+
+        self.ctx.memory_in_flight = 0;
+        self.ctx.incoherent_memory_bytes = 0;
+        try vkd.resetCommandPool(device, self.ctx.command_pool, .{});
+    }
+
+    inline fn transitionImage(
+        vkd: DeviceDispatch,
+        command_buffer: vk.CommandBuffer,
+        image: vk.Image,
+        format: vk.Format,
+        old_layout: vk.ImageLayout,
+        new_layout: vk.ImageLayout,
+    ) !void {
+        _ = format;
+
+        var barrier = vk.ImageMemoryBarrier{
+            .src_access_mask = .{}, // TODO
+            .dst_access_mask = .{},
+            .old_layout = old_layout,
+            .new_layout = new_layout,
+            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresource_range = .{
+                .aspect_mask = .{ .color_bit = true },
+                .base_mip_level = 0,
+                .level_count = 1,
+                .base_array_layer = 0,
+                .layer_count = 1,
+            },
+        };
+
+        const source_access_mask = blk: {
+            switch (old_layout) {
+                .undefined => {
+                    barrier.src_access_mask = .{};
+                    break :blk vk.PipelineStageFlags{ .top_of_pipe_bit = true };
+                },
+                .transfer_dst_optimal => {
+                    barrier.src_access_mask = .{ .transfer_write_bit = true };
+                    break :blk vk.PipelineStageFlags{ .transfer_bit = true };
+                },
+                else => std.debug.panic("\nunimplemented image old layout {any}\n", .{old_layout}),
+            }
+        };
+        const destination_access_mask = blk: {
+            switch (new_layout) {
+                .transfer_dst_optimal => {
+                    barrier.dst_access_mask = .{ .transfer_write_bit = true };
+                    break :blk vk.PipelineStageFlags{ .transfer_bit = true };
+                },
+                .shader_read_only_optimal => {
+                    barrier.dst_access_mask = .{ .shader_read_bit = true };
+                    break :blk vk.PipelineStageFlags{ .fragment_shader_bit = true };
+                },
+                else => std.debug.panic("\nunimplemented image new layout {any}\n", .{new_layout}),
+            }
+        };
+
+        vkd.cmdPipelineBarrier(
+            command_buffer,
+            source_access_mask,
+            destination_access_mask,
+            .{},
+            0,
+            undefined,
+            0,
+            undefined,
+            1,
+            @ptrCast([*]const vk.ImageMemoryBarrier, &barrier),
+        );
+    }
+};
