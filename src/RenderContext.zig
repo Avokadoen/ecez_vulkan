@@ -50,6 +50,7 @@ const Model = struct {
     transform: zm.Mat,
 
     pub inline fn createDescriptorSetLayout(vkd: DeviceDispatch, device: vk.Device) !vk.DescriptorSetLayout {
+        // TODO: order should be from least updated to most updated
         const ubo_layout_binding = vk.DescriptorSetLayoutBinding{
             .binding = 0,
             .descriptor_type = .uniform_buffer,
@@ -57,10 +58,21 @@ const Model = struct {
             .stage_flags = .{ .vertex_bit = true },
             .p_immutable_samplers = null,
         };
+        const texture_layout_binding = vk.DescriptorSetLayoutBinding{
+            .binding = 1,
+            .descriptor_type = .combined_image_sampler,
+            .descriptor_count = 1,
+            .stage_flags = .{ .fragment_bit = true },
+            .p_immutable_samplers = null,
+        };
+        const bindings = [_]vk.DescriptorSetLayoutBinding{
+            ubo_layout_binding,
+            texture_layout_binding,
+        };
         const layout_info = vk.DescriptorSetLayoutCreateInfo{
             .flags = .{},
-            .binding_count = 1,
-            .p_bindings = @ptrCast([*]const vk.DescriptorSetLayoutBinding, &ubo_layout_binding),
+            .binding_count = bindings.len,
+            .p_bindings = &bindings,
         };
         return vkd.createDescriptorSetLayout(device, &layout_info, null);
     }
@@ -70,6 +82,7 @@ const Model = struct {
 const Vertex = struct {
     pos: [2]f32,
     color: [3]f32,
+    text_coord: [2]f32,
 
     pub fn getBindingDescription() vk.VertexInputBindingDescription {
         return vk.VertexInputBindingDescription{
@@ -79,8 +92,8 @@ const Vertex = struct {
         };
     }
 
-    pub fn getAttributeDescriptions() [2]vk.VertexInputAttributeDescription {
-        return [2]vk.VertexInputAttributeDescription{
+    pub fn getAttributeDescriptions() [3]vk.VertexInputAttributeDescription {
+        return [_]vk.VertexInputAttributeDescription{
             .{
                 .location = 0,
                 .binding = 0,
@@ -93,22 +106,40 @@ const Vertex = struct {
                 .format = .r32g32b32_sfloat,
                 .offset = @offsetOf(Vertex, "color"),
             },
+            .{
+                .location = 2,
+                .binding = 0,
+                .format = .r32g32_sfloat,
+                .offset = @offsetOf(Vertex, "text_coord"),
+            },
         };
     }
 };
 
 const vertices = [_]Vertex{
-    // zig fmt: off
-    .{ .pos = .{ -0.5, -0.5 }, .color = .{ 1, 0, 0 } },
-    .{ .pos = .{  0.5, -0.5 }, .color = .{ 0, 1, 0 } },
-    .{ .pos = .{  0.5,  0.5 }, .color = .{ 0, 0, 1 } },
-    .{ .pos = .{ -0.5,  0.5 }, .color = .{ 1, 1, 1 } },
-    // zig fmt: on
+    .{
+        .pos = .{ -0.5, -0.5 },
+        .color = .{ 1, 0, 0 },
+        .text_coord = .{ 1, 0 },
+    },
+    .{
+        .pos = .{ 0.5, -0.5 },
+        .color = .{ 0, 1, 0 },
+        .text_coord = .{ 0, 0 },
+    },
+    .{
+        .pos = .{ 0.5, 0.5 },
+        .color = .{ 0, 0, 1 },
+        .text_coord = .{ 0, 1 },
+    },
+    .{
+        .pos = .{ -0.5, 0.5 },
+        .color = .{ 1, 1, 1 },
+        .text_coord = .{ 1, 1 },
+    },
 };
 
-const indices = [_]u16{ 
-    0, 1, 2, 2, 3, 0
-};
+const indices = [_]u16{ 0, 1, 2, 2, 3, 0 };
 
 vkb: BaseDispatch,
 vki: InstanceDispatch,
@@ -131,7 +162,6 @@ swapchain: vk.SwapchainKHR,
 swapchain_images: []vk.Image,
 swapchain_image_views: []vk.ImageView,
 
-
 render_pass: vk.RenderPass,
 framebuffers: []vk.Framebuffer,
 pipeline_layout: vk.PipelineLayout,
@@ -148,25 +178,32 @@ in_flight_fences: []vk.Fence,
 
 current_frame: usize,
 
-staging_buffer: StagingBuffer,
+buffer_staging_buffer: StagingBuffer.Buffer,
+image_staging_buffer: StagingBuffer.Image,
 
 vertex_buffer_size: vk.DeviceSize,
 index_buffer_size: vk.DeviceSize,
-// TODO: rename 
+// TODO: rename
 vertex_index_buffer: ImmutableBuffer,
 
 camera: Camera,
 
 // TODO: this is data we should get from ecez!
-model: Model, 
-model_ubo_desc_set_layout: vk.DescriptorSetLayout,
+model: Model,
+model_desc_set_layout: vk.DescriptorSetLayout,
 model_desc_set_pool: vk.DescriptorPool,
 model_desc_set: vk.DescriptorSet,
 model_buffer: MutableBuffer,
 
 queue_family_indices: QueueFamilyIndices,
-graphics_queue: vk.Queue,
+primary_graphics_queue: vk.Queue,
+secondary_graphics_queue: vk.Queue,
 transfer_queue: vk.Queue,
+
+test_image: vk.Image,
+image_memory: vk.DeviceMemory,
+test_image_view: vk.ImageView,
+test_image_sampler: vk.Sampler,
 
 pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     // bind the glfw instance proc pointer
@@ -243,7 +280,15 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     const vkd = try DeviceDispatch.load(device, vki.dispatch.vkGetDeviceProcAddr);
     errdefer vkd.destroyDevice(device, null);
 
-    const graphics_queue = vkd.getDeviceQueue(device, queue_family_indices.graphicsIndex(), 0);
+    const primary_graphics_queue = vkd.getDeviceQueue(device, queue_family_indices.graphicsIndex(), 0);
+    const secondary_graphics_queue = blk: {
+        if (queue_family_indices.graphics_queue_count > 1) {
+            break :blk vkd.getDeviceQueue(device, queue_family_indices.graphicsIndex(), 1);
+        }
+
+        break :blk primary_graphics_queue;
+    };
+
     const transfer_queue = vkd.getDeviceQueue(device, queue_family_indices.transferIndex(), 0);
 
     const swapchain = try createSwapchain(
@@ -299,20 +344,25 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         }
     }
 
-    
-    const model_ubo_desc_set_layout = try Model.createDescriptorSetLayout(vkd, device);
-    errdefer vkd.destroyDescriptorSetLayout(device, model_ubo_desc_set_layout, null);
+    const model_desc_set_layout = try Model.createDescriptorSetLayout(vkd, device);
+    errdefer vkd.destroyDescriptorSetLayout(device, model_desc_set_layout, null);
 
     const model_desc_set_pool = blk: {
-        const pool_size = vk.DescriptorPoolSize{
-            .@"type" = .uniform_buffer,
-            .descriptor_count = 1,
+        const pool_size = [_]vk.DescriptorPoolSize{
+            .{
+                .type = .uniform_buffer,
+                .descriptor_count = 1,
+            },
+            .{
+                .type = .combined_image_sampler,
+                .descriptor_count = 1,
+            },
         };
         const pool_info = vk.DescriptorPoolCreateInfo{
             .flags = .{},
             .max_sets = 1,
-            .pool_size_count = 1,
-            .p_pool_sizes = @ptrCast([*]const vk.DescriptorPoolSize, &pool_size),
+            .pool_size_count = pool_size.len,
+            .p_pool_sizes = &pool_size,
         };
         break :blk try vkd.createDescriptorPool(device, &pool_info, null);
     };
@@ -322,7 +372,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         const alloc_info = vk.DescriptorSetAllocateInfo{
             .descriptor_pool = model_desc_set_pool,
             .descriptor_set_count = 1,
-            .p_set_layouts = @ptrCast([*]const vk.DescriptorSetLayout, &model_ubo_desc_set_layout),
+            .p_set_layouts = @ptrCast([*]const vk.DescriptorSetLayout, &model_desc_set_layout),
         };
         var desc_set: vk.DescriptorSet = undefined;
         try vkd.allocateDescriptorSets(device, &alloc_info, @ptrCast([*]vk.DescriptorSet, &desc_set));
@@ -357,16 +407,12 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     errdefer model_buffer.deinit(vkd, device);
 
     // initialized model to some dummy data (this should be handled by ecez intergration later as model should be a component)
-    const model = Model{ 
+    const model = Model{
         .transform = zm.identity(),
     };
-    const models = [_]Model{ model };
-    try model_buffer.scheduleTransfer(
-        0, 
-        Model, 
-        &models
-    );
-    
+    const models = [_]Model{model};
+    try model_buffer.scheduleTransfer(0, Model, &models);
+
     try model_buffer.flush(vkd, device);
     const pipeline_layout = blk: {
         const push_constant_range = vk.PushConstantRange{
@@ -377,7 +423,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         const pipeline_layout_info = vk.PipelineLayoutCreateInfo{
             .flags = .{},
             .set_layout_count = 1,
-            .p_set_layouts = @ptrCast([*]const vk.DescriptorSetLayout, &model_ubo_desc_set_layout),
+            .p_set_layouts = @ptrCast([*]const vk.DescriptorSetLayout, &model_desc_set_layout),
             .push_constant_range_count = 1,
             .p_push_constant_ranges = @ptrCast([*]const vk.PushConstantRange, &push_constant_range),
         };
@@ -479,7 +525,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         allocator.free(in_flight_fences);
     }
 
-    var staging_buffer = try StagingBuffer.init(
+    var buffer_staging_buffer = try StagingBuffer.Buffer.init(
         vki,
         physical_device,
         vkd,
@@ -487,9 +533,9 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         non_coherent_atom_size,
         queue_family_indices.transferIndex(),
         transfer_queue,
-        .{ .size = 64 * dmem.bytes_in_kilobyte },
+        .{ .size = 2048 },
     );
-    errdefer staging_buffer.deinit(vkd, device);
+    errdefer buffer_staging_buffer.deinit(vkd, device);
 
     // TODO: simplfiy buffer aligned creation (createBuffer accept size array and do this internally)
     const vertex_buffer_size = dmem.getAlignedDeviceSize(non_coherent_atom_size, vertices.len * @sizeOf(Vertex));
@@ -500,34 +546,116 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         vki,
         physical_device,
         vkd,
-        device, 
-        non_coherent_atom_size, 
-        .{.vertex_buffer_bit = true, .index_buffer_bit = true },
+        device,
+        non_coherent_atom_size,
+        .{ .vertex_buffer_bit = true, .index_buffer_bit = true },
         .{ .size = vertex_buffer_size + index_buffer_size },
     );
-    
-    // TODO: scheduling transfer of data that is not atom aligned is problematic. How should this be communicated or enforced?
-    try staging_buffer.scheduleTransferToDst(vertex_index_buffer.buffer, 0, Vertex, &vertices);
-    try staging_buffer.scheduleTransferToDst(vertex_index_buffer.buffer, vertex_buffer_size, u16, &indices);
-    // transfer all data to GPU memory
-    try staging_buffer.flushAndCopyToDestination(vkd, device, null);
 
-    const model_desc_buffer_info = vk.DescriptorBufferInfo{
-        .buffer = model_buffer.buffer,
-        .offset = 0,
-        .range = vk.WHOLE_SIZE,
+    // TODO: scheduling transfer of data that is not atom aligned is problematic. How should this be communicated or enforced?
+    try buffer_staging_buffer.scheduleTransferToDst(vertex_index_buffer.buffer, 0, Vertex, &vertices);
+    try buffer_staging_buffer.scheduleTransferToDst(vertex_index_buffer.buffer, vertex_buffer_size, u16, &indices);
+
+    var loaded_image = blk: {
+        // TODO: only need one asset handler
+        const asset_handler = try AssetHandler.init(allocator);
+        defer asset_handler.deinit(allocator);
+
+        const image_path = try asset_handler.getPath(allocator, .image, "testcard.qoi");
+        defer allocator.free(image_path);
+
+        break :blk try zigimg.Image.fromFilePath(allocator, image_path);
     };
-    const model_desc_type = vk.WriteDescriptorSet{
-        .dst_set = model_desc_set,
-        .dst_binding = 0,
-        .dst_array_element = 0,
-        .descriptor_count = 1,
-        .descriptor_type = .uniform_buffer,
-        .p_image_info = undefined,
-        .p_buffer_info = @ptrCast([*]const vk.DescriptorBufferInfo, &model_desc_buffer_info),
-        .p_texel_buffer_view = undefined,
+    defer loaded_image.deinit();
+
+    const loaded_image_extent = vk.Extent2D{
+        .width = @intCast(u32, loaded_image.width),
+        .height = @intCast(u32, loaded_image.height),
     };
-    vkd.updateDescriptorSets(device, 1, @ptrCast([*]const vk.WriteDescriptorSet, &model_desc_type), 0, undefined);
+
+    const test_image = try createImage(vkd, device, loaded_image_extent);
+    errdefer vkd.destroyImage(device, test_image, null);
+
+    var image_staging_buffer = try StagingBuffer.Image.init(
+        vki,
+        physical_device,
+        vkd,
+        device,
+        non_coherent_atom_size,
+        queue_family_indices.graphicsIndex(),
+        secondary_graphics_queue,
+        .{ .size = dmem.bytes_in_megabyte },
+    );
+    errdefer image_staging_buffer.deinit(vkd, device);
+
+    const image = [_]vk.Image{test_image};
+    const image_memory = try dmem.createDeviceImageMemory(vki, physical_device, vkd, device, non_coherent_atom_size, &image);
+    errdefer vkd.freeMemory(device, image_memory, null);
+
+    try vkd.bindImageMemory(device, test_image, image_memory, 0);
+    try image_staging_buffer.scheduleTransferToDst(
+        test_image,
+        loaded_image_extent,
+        u8,
+        loaded_image.pixels.asBytes(),
+        .{
+            .format = .r8g8b8a8_srgb,
+            .old_layout = .undefined,
+            .new_layout = .transfer_dst_optimal,
+        },
+        .{
+            .format = .r8g8b8a8_srgb,
+            .old_layout = .transfer_dst_optimal,
+            .new_layout = .shader_read_only_optimal,
+        },
+    );
+
+    const test_image_view = try createDefaultImageView(vkd, device, test_image, .r8g8b8a8_srgb);
+    errdefer vkd.destroyImageView(device, test_image_view, null);
+
+    const test_image_sampler = try createDefaultSampler(vkd, device, device_properties.limits);
+    errdefer vkd.destroySampler(device, test_image_sampler, null);
+
+    {
+        const model_desc_buffer_info = vk.DescriptorBufferInfo{
+            .buffer = model_buffer.buffer,
+            .offset = 0,
+            .range = vk.WHOLE_SIZE,
+        };
+        const model_desc_image_info = vk.DescriptorImageInfo{
+            .sampler = test_image_sampler,
+            .image_view = test_image_view,
+            .image_layout = .shader_read_only_optimal,
+        };
+
+        const model_desc_type = [_]vk.WriteDescriptorSet{
+            .{
+                .dst_set = model_desc_set,
+                .dst_binding = 0,
+                .dst_array_element = 0,
+                .descriptor_count = 1,
+                .descriptor_type = .uniform_buffer,
+                .p_image_info = undefined,
+                .p_buffer_info = @ptrCast([*]const vk.DescriptorBufferInfo, &model_desc_buffer_info),
+                .p_texel_buffer_view = undefined,
+            },
+            .{
+                .dst_set = model_desc_set,
+                .dst_binding = 1,
+                .dst_array_element = 0,
+                .descriptor_count = 1,
+                .descriptor_type = .combined_image_sampler,
+                .p_image_info = @ptrCast([*]const vk.DescriptorImageInfo, &model_desc_image_info),
+                .p_buffer_info = undefined,
+                .p_texel_buffer_view = undefined,
+            },
+        };
+        vkd.updateDescriptorSets(device, model_desc_type.len, &model_desc_type, 0, undefined);
+    }
+
+    // transfer all data to GPU memory at the end of init
+    try buffer_staging_buffer.flushAndCopyToDestination(vkd, device, null);
+    try image_staging_buffer.flushAndCopyToDestination(vkd, device, null);
 
     return RenderContext{
         .vkb = vkb,
@@ -555,19 +683,25 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         .render_finished_semaphores = render_finished_semaphores,
         .in_flight_fences = in_flight_fences,
         .current_frame = 0,
-        .staging_buffer = staging_buffer,
+        .buffer_staging_buffer = buffer_staging_buffer,
+        .image_staging_buffer = image_staging_buffer,
         .vertex_buffer_size = vertex_buffer_size,
         .index_buffer_size = index_buffer_size,
         .vertex_index_buffer = vertex_index_buffer,
         .camera = camera,
         .model = model,
-        .model_ubo_desc_set_layout = model_ubo_desc_set_layout,
+        .model_desc_set_layout = model_desc_set_layout,
         .model_desc_set_pool = model_desc_set_pool,
         .model_desc_set = model_desc_set,
         .model_buffer = model_buffer,
         .queue_family_indices = queue_family_indices,
-        .graphics_queue = graphics_queue,
+        .primary_graphics_queue = primary_graphics_queue,
+        .secondary_graphics_queue = secondary_graphics_queue,
         .transfer_queue = transfer_queue,
+        .test_image = test_image,
+        .image_memory = image_memory,
+        .test_image_view = test_image_view,
+        .test_image_sampler = test_image_sampler,
     };
 }
 
@@ -624,17 +758,20 @@ pub fn recreatePresentResources(self: *RenderContext, window: glfw.Window) !void
 }
 
 pub fn deinit(self: RenderContext, allocator: Allocator) void {
-    for (self.in_flight_fences) |fence| {
-        // try to wait for fences, continue if it fails for any reason
-        _ = self.vkd.waitForFences(self.device, 1, @ptrCast([*]const vk.Fence, &fence), vk.TRUE, std.time.ns_per_s) catch {};
-    }
+    self.vkd.deviceWaitIdle(self.device) catch {};
 
-    self.staging_buffer.deinit(self.vkd, self.device);
+    self.vkd.destroySampler(self.device, self.test_image_sampler, null);
+    self.vkd.destroyImageView(self.device, self.test_image_view, null);
+    self.vkd.freeMemory(self.device, self.image_memory, null);
+    self.vkd.destroyImage(self.device, self.test_image, null);
+
+    self.buffer_staging_buffer.deinit(self.vkd, self.device);
+    self.image_staging_buffer.deinit(self.vkd, self.device);
     self.model_buffer.deinit(self.vkd, self.device);
     self.vertex_index_buffer.deinit(self.vkd, self.device);
 
     self.vkd.destroyDescriptorPool(self.device, self.model_desc_set_pool, null);
-    self.vkd.destroyDescriptorSetLayout(self.device, self.model_ubo_desc_set_layout, null);
+    self.vkd.destroyDescriptorSetLayout(self.device, self.model_desc_set_layout, null);
 
     for (self.framebuffers) |framebuffer| {
         self.vkd.destroyFramebuffer(self.device, framebuffer, null);
@@ -702,13 +839,13 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window) !void {
 
     self.model.transform = zm.mul(self.model.transform, zm.rotationY(0.0001));
     try self.model_buffer.scheduleTransfer(
-        0, 
+        0,
         Model,
-        &[_]Model{ self.model },
+        &[_]Model{self.model},
     );
     try self.model_buffer.flush(
-        self.vkd, 
-        self.device, 
+        self.vkd,
+        self.device,
     );
 
     try self.vkd.resetCommandPool(self.device, self.command_pools[self.current_frame], .{});
@@ -753,7 +890,14 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window) !void {
         self.vkd.cmdSetScissor(command_buffer, 0, 1, @ptrCast([*]const vk.Rect2D, &render_area));
 
         const push_constant = PushConstant.fromCamera(self.camera);
-        self.vkd.cmdPushConstants(command_buffer, self.pipeline_layout, .{ .vertex_bit = true }, 0, @sizeOf(PushConstant), &push_constant,);
+        self.vkd.cmdPushConstants(
+            command_buffer,
+            self.pipeline_layout,
+            .{ .vertex_bit = true },
+            0,
+            @sizeOf(PushConstant),
+            &push_constant,
+        );
 
         const vertex_offsets = [_]vk.DeviceSize{0};
         self.vkd.cmdBindVertexBuffers(
@@ -781,14 +925,14 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window) !void {
     const render_finish_semaphore = @ptrCast([*]const vk.Semaphore, &self.render_finished_semaphores[self.current_frame]);
     const submit_info = vk.SubmitInfo{
         .wait_semaphore_count = 1,
-        .p_wait_semaphores = &[_]vk.Semaphore{ self.image_available_semaphores[self.current_frame] },
-        .p_wait_dst_stage_mask = &[_]vk.PipelineStageFlags{ .{ .color_attachment_output_bit = true } },
+        .p_wait_semaphores = &[_]vk.Semaphore{self.image_available_semaphores[self.current_frame]},
+        .p_wait_dst_stage_mask = &[_]vk.PipelineStageFlags{.{ .color_attachment_output_bit = true }},
         .command_buffer_count = 1,
         .p_command_buffers = @ptrCast([*]const vk.CommandBuffer, &self.command_buffers[self.current_frame]),
         .signal_semaphore_count = 1,
         .p_signal_semaphores = render_finish_semaphore,
     };
-    try self.vkd.queueSubmit(self.graphics_queue, 1, @ptrCast([*]const vk.SubmitInfo, &submit_info), self.in_flight_fences[self.current_frame]);
+    try self.vkd.queueSubmit(self.primary_graphics_queue, 1, @ptrCast([*]const vk.SubmitInfo, &submit_info), self.in_flight_fences[self.current_frame]);
 
     const recreate_present_resources = blk: {
         const present_info = vk.PresentInfoKHR{
@@ -799,7 +943,7 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window) !void {
             .p_image_indices = @ptrCast([*]const u32, &image_index),
             .p_results = null,
         };
-        const result = self.vkd.queuePresentKHR(self.graphics_queue, &present_info) catch |err| {
+        const result = self.vkd.queuePresentKHR(self.primary_graphics_queue, &present_info) catch |err| {
             switch (err) {
                 error.OutOfDateKHR => break :blk true,
                 else => return err,
@@ -882,6 +1026,10 @@ inline fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki:
         }
 
         var current_device_features: vk.PhysicalDeviceFeatures = vki.getPhysicalDeviceFeatures(current_device);
+        if (current_device_features.sampler_anisotropy != vk.TRUE) {
+            continue :device_search;
+        }
+
         var selected_feature_sum: u32 = 0;
         var current_feature_sum: u32 = 0;
         const feature_info = @typeInfo(vk.PhysicalDeviceFeatures).Struct;
@@ -1103,7 +1251,7 @@ inline fn createLogicalDevice(
         .{
             .flags = .{},
             .queue_family_index = queue_families.graphicsIndex(),
-            .queue_count = 1,
+            .queue_count = if (queue_families.graphics_queue_count > 1) 2 else 1,
             .p_queue_priorities = &queue_priorities,
         },
         .{
@@ -1114,7 +1262,9 @@ inline fn createLogicalDevice(
         },
     };
 
-    const device_features = vk.PhysicalDeviceFeatures{};
+    const device_features = vk.PhysicalDeviceFeatures{
+        .sampler_anisotropy = vk.TRUE,
+    };
     const create_info = vk.DeviceCreateInfo{
         .flags = .{},
         .queue_create_info_count = if (one_index) 1 else queue_create_info.len,
@@ -1189,7 +1339,7 @@ inline fn createRenderPass(vkd: DeviceDispatch, device: vk.Device, swapchain_for
         .store_op = .store,
         .stencil_load_op = .dont_care,
         .stencil_store_op = .dont_care,
-        .initial_layout = .@"undefined",
+        .initial_layout = .undefined,
         .final_layout = .present_src_khr,
     };
     const color_attachment_ref = vk.AttachmentReference{
@@ -1234,6 +1384,11 @@ inline fn createRenderPass(vkd: DeviceDispatch, device: vk.Device, swapchain_for
 const AssetHandler = struct {
     exe_path: []const u8,
 
+    pub const Kind = enum {
+        shader,
+        image,
+    };
+
     pub fn init(allocator: Allocator) !AssetHandler {
         const exe_path = try std.fs.selfExePathAlloc(allocator);
         return AssetHandler{
@@ -1245,13 +1400,13 @@ const AssetHandler = struct {
         allocator.free(self.exe_path);
     }
 
-    pub inline fn getShaderPath(self: AssetHandler, allocator: Allocator, shader_name: []const u8) ![]const u8 {
-        const join_path = [_][]const u8{ self.exe_path, "../../assets/shaders", shader_name };
-        return std.fs.path.resolve(allocator, join_path[0..]);
-    }
+    pub inline fn getPath(self: AssetHandler, allocator: Allocator, comptime kind: Kind, file_name: []const u8) ![]const u8 {
+        const prefix = comptime switch (kind) {
+            .shader => "../../assets/shaders",
+            .image => "../../assets/images",
+        };
 
-    pub inline fn getTexturePath(self: AssetHandler, allocator: Allocator, shader_name: []const u8) ![]const u8 {
-        const join_path = [_][]const u8{ self.exe_path, "../../assets/textures", shader_name };
+        const join_path = [_][]const u8{ self.exe_path, prefix, file_name };
         return std.fs.path.resolve(allocator, join_path[0..]);
     }
 };
@@ -1285,7 +1440,7 @@ inline fn createGraphicsPipeline(
     defer asset_handler.deinit(allocator);
 
     const vert_bytes = blk: {
-        const path = try asset_handler.getShaderPath(allocator, "shader.vert.spv");
+        const path = try asset_handler.getPath(allocator, .shader, "shader.vert.spv");
         defer allocator.free(path);
         const bytes = try readFile(allocator, path);
         break :blk bytes;
@@ -1304,7 +1459,7 @@ inline fn createGraphicsPipeline(
     };
 
     const frag_bytes = blk: {
-        const path = try asset_handler.getShaderPath(allocator, "shader.frag.spv");
+        const path = try asset_handler.getPath(allocator, .shader, "shader.frag.spv");
         defer allocator.free(path);
         const bytes = try readFile(allocator, path);
         break :blk bytes;
@@ -1462,7 +1617,6 @@ inline fn createShaderModule(vkd: DeviceDispatch, device: vk.Device, shader_code
     return vkd.createShaderModule(device, &create_info, null);
 }
 
-
 inline fn instantiateImageViews(
     image_views: []vk.ImageView,
     vkd: DeviceDispatch,
@@ -1477,29 +1631,8 @@ inline fn instantiateImageViews(
         }
     }
 
-    const identity = vk.ComponentSwizzle.identity;
     for (swapchain_images) |swapchain_image, i| {
-        const create_info = vk.ImageViewCreateInfo{
-            .flags = .{},
-            .image = swapchain_image,
-            .view_type = .@"2d",
-            .format = swapchain_image_format,
-            .components = .{
-                .r = identity,
-                .g = identity,
-                .b = identity,
-                .a = identity,
-            },
-            .subresource_range = .{
-                .aspect_mask = .{ .color_bit = true },
-                .base_mip_level = 0,
-                .level_count = 1,
-                .base_array_layer = 0,
-                .layer_count = 1,
-            },
-        };
-
-        image_views[i] = try vkd.createImageView(device, &create_info, null);
+        image_views[i] = try createDefaultImageView(vkd, device, swapchain_image, swapchain_image_format);
         views_created = i;
     }
 }
@@ -1537,6 +1670,76 @@ inline fn instantiateFramebuffer(
     }
 }
 
-inline fn createTextureImage(absolute_path: []const u8) vk.Image {
-    zigimg.Image.fromFilePath(absolute_path);
+// TODO: BasicImage.zig
+// TODO: function take a zigimg.Image and produce some vk resources
+inline fn createImage(vkd: DeviceDispatch, device: vk.Device, image_extent: vk.Extent2D) !vk.Image {
+    const image_info = vk.ImageCreateInfo{
+        .flags = .{},
+        .image_type = .@"2d",
+        .format = .r8g8b8a8_srgb,
+        .extent = vk.Extent3D{
+            .width = image_extent.width,
+            .height = image_extent.height,
+            .depth = 1,
+        },
+        .mip_levels = 1,
+        .array_layers = 1,
+        .samples = .{ .@"1_bit" = true },
+        .tiling = .optimal,
+        .usage = .{
+            .transfer_dst_bit = true,
+            .sampled_bit = true,
+        },
+        .sharing_mode = .exclusive,
+        .queue_family_index_count = 0,
+        .p_queue_family_indices = undefined,
+        .initial_layout = .undefined,
+    };
+    return try vkd.createImage(device, &image_info, null);
+}
+
+// TODO: BasicImage.zig
+inline fn createDefaultImageView(vkd: DeviceDispatch, device: vk.Device, image: vk.Image, format: vk.Format) !vk.ImageView {
+    const image_view_info = vk.ImageViewCreateInfo{
+        .flags = .{},
+        .image = image,
+        .view_type = .@"2d",
+        .format = format,
+        .components = .{
+            .r = .identity,
+            .g = .identity,
+            .b = .identity,
+            .a = .identity,
+        },
+        .subresource_range = .{
+            .aspect_mask = .{ .color_bit = true },
+            .base_mip_level = 0,
+            .level_count = 1,
+            .base_array_layer = 0,
+            .layer_count = 1,
+        },
+    };
+    return vkd.createImageView(device, &image_view_info, null);
+}
+
+inline fn createDefaultSampler(vkd: DeviceDispatch, device: vk.Device, device_limits: vk.PhysicalDeviceLimits) !vk.Sampler {
+    const sampler_info = vk.SamplerCreateInfo{
+        .flags = .{},
+        .mag_filter = .linear,
+        .min_filter = .linear,
+        .mipmap_mode = .linear,
+        .address_mode_u = .repeat,
+        .address_mode_v = .repeat,
+        .address_mode_w = .repeat,
+        .mip_lod_bias = 0,
+        .anisotropy_enable = vk.TRUE,
+        .max_anisotropy = device_limits.max_sampler_anisotropy,
+        .compare_enable = vk.FALSE,
+        .compare_op = .always,
+        .min_lod = 0,
+        .max_lod = 0,
+        .border_color = .int_opaque_black,
+        .unnormalized_coordinates = vk.FALSE,
+    };
+    return vkd.createSampler(device, &sampler_info, null);
 }
