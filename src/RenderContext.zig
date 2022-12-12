@@ -80,7 +80,7 @@ const Model = struct {
 
 // TODO: placeholder
 const Vertex = struct {
-    pos: [2]f32,
+    pos: [3]f32,
     color: [3]f32,
     text_coord: [2]f32,
 
@@ -97,7 +97,7 @@ const Vertex = struct {
             .{
                 .location = 0,
                 .binding = 0,
-                .format = .r32g32_sfloat,
+                .format = .r32g32b32_sfloat,
                 .offset = @offsetOf(Vertex, "pos"),
             },
             .{
@@ -117,29 +117,57 @@ const Vertex = struct {
 };
 
 const vertices = [_]Vertex{
+    // quad 1
     .{
-        .pos = .{ -0.5, -0.5 },
+        .pos = .{ -0.5, -0.5, 0.0 },
         .color = .{ 1, 0, 0 },
         .text_coord = .{ 1, 0 },
     },
     .{
-        .pos = .{ 0.5, -0.5 },
+        .pos = .{ 0.5, -0.5, 0.0 },
         .color = .{ 0, 1, 0 },
         .text_coord = .{ 0, 0 },
     },
     .{
-        .pos = .{ 0.5, 0.5 },
+        .pos = .{ 0.5, 0.5, 0.0 },
         .color = .{ 0, 0, 1 },
         .text_coord = .{ 0, 1 },
     },
     .{
-        .pos = .{ -0.5, 0.5 },
+        .pos = .{ -0.5, 0.5, 0.0 },
+        .color = .{ 1, 1, 1 },
+        .text_coord = .{ 1, 1 },
+    },
+
+    // quad 2
+    .{
+        .pos = .{ -0.5, -0.5, 0.01 },
+        .color = .{ 1, 0, 0 },
+        .text_coord = .{ 1, 0 },
+    },
+    .{
+        .pos = .{ 0.5, -0.5, 0.01 },
+        .color = .{ 0, 1, 0 },
+        .text_coord = .{ 0, 0 },
+    },
+    .{
+        .pos = .{ 0.5, 0.5, 0.01 },
+        .color = .{ 0, 0, 1 },
+        .text_coord = .{ 0, 1 },
+    },
+    .{
+        .pos = .{ -0.5, 0.5, 0.01 },
         .color = .{ 1, 1, 1 },
         .text_coord = .{ 1, 1 },
     },
 };
 
-const indices = [_]u16{ 0, 1, 2, 2, 3, 0 };
+const indices = [_]u16{
+    // quad 1
+    0, 1, 2, 2, 3, 0,
+    // quad 2
+    4, 5, 6, 6, 7, 4,
+};
 
 vkb: BaseDispatch,
 vki: InstanceDispatch,
@@ -200,10 +228,15 @@ primary_graphics_queue: vk.Queue,
 secondary_graphics_queue: vk.Queue,
 transfer_queue: vk.Queue,
 
+depth_image: vk.Image,
+depth_image_view: vk.ImageView,
+depth_image_memory: vk.DeviceMemory,
+
 test_image: vk.Image,
-image_memory: vk.DeviceMemory,
 test_image_view: vk.ImageView,
 test_image_sampler: vk.Sampler,
+
+texture_image_memory: vk.DeviceMemory,
 
 pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     // bind the glfw instance proc pointer
@@ -271,9 +304,11 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
 
     const physical_device = try selectPhysicalDevice(allocator, instance, vki, surface);
     const device_properties = vki.getPhysicalDeviceProperties(physical_device);
+    const non_coherent_atom_size = device_properties.limits.non_coherent_atom_size;
 
     const swapchain_support_details = try SwapchainSupportDetails.init(allocator, vki, physical_device, surface);
     errdefer swapchain_support_details.deinit(allocator);
+    const swapchain_extent = try swapchain_support_details.chooseExtent(window);
 
     const queue_family_indices = try QueueFamilyIndices.init(vki, physical_device, surface);
     const device = try createLogicalDevice(vki, physical_device, queue_family_indices, validation_layers);
@@ -329,15 +364,63 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         }
     }
 
-    const render_pass = try createRenderPass(vkd, device, swapchain_support_details.preferredFormat().format);
-    errdefer vkd.destroyRenderPass(device, render_pass, null);
+    var image_staging_buffer = try StagingBuffer.Image.init(
+        vki,
+        physical_device,
+        vkd,
+        device,
+        non_coherent_atom_size,
+        queue_family_indices.graphicsIndex(),
+        secondary_graphics_queue,
+        .{ .size = dmem.bytes_in_megabyte },
+    );
+    errdefer image_staging_buffer.deinit(vkd, device);
 
-    const swapchain_extent = try swapchain_support_details.chooseExtent(window);
+    const depth_format = try findDepthFormat(vki, physical_device);
+    const depth_image = try createImage(vkd, device, depth_format, .{ .transfer_dst_bit = true, .depth_stencil_attachment_bit = true }, swapchain_extent);
+    errdefer vkd.destroyImage(device, depth_image, null);
+
+    const depth_image_memory = try dmem.createDeviceImageMemory(
+        vki,
+        physical_device,
+        vkd,
+        device,
+        non_coherent_atom_size,
+        &[_]vk.Image{depth_image},
+    );
+    errdefer vkd.freeMemory(device, depth_image_memory, null);
+    try vkd.bindImageMemory(device, depth_image, depth_image_memory, 0);
+
+    const depth_image_view = try createDefaultImageView(vkd, device, depth_image, depth_format, .{ .depth_bit = true });
+    errdefer vkd.destroyImageView(device, depth_image_view, null);
+
+    // buffer overflow error is not possible yet
+    image_staging_buffer.scheduleLayoutTransitionBeforeTransfers(depth_image, .{
+        .format = depth_format,
+        .old_layout = .undefined,
+        .new_layout = .depth_stencil_attachment_optimal,
+    }) catch unreachable;
+
+    const render_pass = try createRenderPass(
+        vkd,
+        device,
+        swapchain_support_details.preferredFormat().format,
+        depth_format,
+    );
+    errdefer vkd.destroyRenderPass(device, render_pass, null);
 
     var framebuffers = try allocator.alloc(vk.Framebuffer, swapchain_images.len);
     errdefer allocator.free(framebuffers);
 
-    try instantiateFramebuffer(framebuffers, vkd, device, render_pass, swapchain_extent, swapchain_image_views);
+    try instantiateFramebuffer(
+        framebuffers,
+        vkd,
+        device,
+        render_pass,
+        swapchain_extent,
+        swapchain_image_views,
+        depth_image_view,
+    );
     errdefer {
         for (framebuffers) |framebuffer| {
             vkd.destroyFramebuffer(device, framebuffer, null);
@@ -378,8 +461,6 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         try vkd.allocateDescriptorSets(device, &alloc_info, @ptrCast([*]vk.DescriptorSet, &desc_set));
         break :blk desc_set;
     };
-
-    const non_coherent_atom_size = device_properties.limits.non_coherent_atom_size;
 
     const camera = blk: {
         const fovy = std.math.degreesToRadians(f32, 45);
@@ -573,44 +654,35 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         .height = @intCast(u32, loaded_image.height),
     };
 
-    const test_image = try createImage(vkd, device, loaded_image_extent);
+    const test_image = try createImage(vkd, device, .r8g8b8a8_srgb, .{ .transfer_dst_bit = true, .sampled_bit = true }, loaded_image_extent);
     errdefer vkd.destroyImage(device, test_image, null);
 
-    var image_staging_buffer = try StagingBuffer.Image.init(
-        vki,
-        physical_device,
-        vkd,
-        device,
-        non_coherent_atom_size,
-        queue_family_indices.graphicsIndex(),
-        secondary_graphics_queue,
-        .{ .size = dmem.bytes_in_megabyte },
-    );
-    errdefer image_staging_buffer.deinit(vkd, device);
+    const texture_images = [_]vk.Image{test_image};
+    const texture_image_memory = try dmem.createDeviceImageMemory(vki, physical_device, vkd, device, non_coherent_atom_size, &texture_images);
+    errdefer vkd.freeMemory(device, texture_image_memory, null);
 
-    const image = [_]vk.Image{test_image};
-    const image_memory = try dmem.createDeviceImageMemory(vki, physical_device, vkd, device, non_coherent_atom_size, &image);
-    errdefer vkd.freeMemory(device, image_memory, null);
+    try vkd.bindImageMemory(device, test_image, texture_image_memory, 0);
 
-    try vkd.bindImageMemory(device, test_image, image_memory, 0);
+    image_staging_buffer.scheduleLayoutTransitionBeforeTransfers(test_image, .{
+        .format = .r8g8b8a8_srgb,
+        .old_layout = .undefined,
+        .new_layout = .transfer_dst_optimal,
+    }) catch unreachable;
+
     try image_staging_buffer.scheduleTransferToDst(
         test_image,
         loaded_image_extent,
         u8,
         loaded_image.pixels.asBytes(),
-        .{
-            .format = .r8g8b8a8_srgb,
-            .old_layout = .undefined,
-            .new_layout = .transfer_dst_optimal,
-        },
-        .{
-            .format = .r8g8b8a8_srgb,
-            .old_layout = .transfer_dst_optimal,
-            .new_layout = .shader_read_only_optimal,
-        },
     );
 
-    const test_image_view = try createDefaultImageView(vkd, device, test_image, .r8g8b8a8_srgb);
+    image_staging_buffer.scheduleLayoutTransitionAfterTransfers(test_image, .{
+        .format = .r8g8b8a8_srgb,
+        .old_layout = .transfer_dst_optimal,
+        .new_layout = .shader_read_only_optimal,
+    }) catch unreachable;
+
+    const test_image_view = try createDefaultImageView(vkd, device, test_image, .r8g8b8a8_srgb, .{ .color_bit = true });
     errdefer vkd.destroyImageView(device, test_image_view, null);
 
     const test_image_sampler = try createDefaultSampler(vkd, device, device_properties.limits);
@@ -698,10 +770,13 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         .primary_graphics_queue = primary_graphics_queue,
         .secondary_graphics_queue = secondary_graphics_queue,
         .transfer_queue = transfer_queue,
+        .depth_image = depth_image,
+        .depth_image_memory = depth_image_memory,
+        .depth_image_view = depth_image_view,
         .test_image = test_image,
-        .image_memory = image_memory,
         .test_image_view = test_image_view,
         .test_image_sampler = test_image_sampler,
+        .texture_image_memory = texture_image_memory,
     };
 }
 
@@ -747,6 +822,47 @@ pub fn recreatePresentResources(self: *RenderContext, window: glfw.Window) !void
         self.swapchain_images,
         self.swapchain_support_details.preferredFormat().format,
     );
+
+    // recreate depth buffer
+    {
+        self.vkd.destroyImageView(self.device, self.depth_image_view, null);
+        self.vkd.freeMemory(self.device, self.depth_image_memory, null);
+        self.vkd.destroyImage(self.device, self.depth_image, null);
+
+        const depth_format = try findDepthFormat(self.vki, self.physical_device);
+        self.depth_image = try createImage(
+            self.vkd,
+            self.device,
+            depth_format,
+            .{ .transfer_dst_bit = true, .depth_stencil_attachment_bit = true },
+            self.swapchain_extent,
+        );
+        errdefer self.vkd.destroyImage(self.device, self.depth_image, null);
+
+        self.depth_image_memory = try dmem.createDeviceImageMemory(
+            self.vki,
+            self.physical_device,
+            self.vkd,
+            self.device,
+            self.device_properties.limits.non_coherent_atom_size,
+            &[_]vk.Image{self.depth_image},
+        );
+        errdefer self.vkd.freeMemory(self.device, self.depth_image_memory, null);
+        try self.vkd.bindImageMemory(self.device, self.depth_image, self.depth_image_memory, 0);
+
+        self.depth_image_view = try createDefaultImageView(self.vkd, self.device, self.depth_image, depth_format, .{ .depth_bit = true });
+        errdefer self.vkd.destroyImageView(self.device, self.depth_image_view, null);
+
+        // buffer overflow error is not possible yet
+        self.image_staging_buffer.scheduleLayoutTransitionBeforeTransfers(self.depth_image, .{
+            .format = depth_format,
+            .old_layout = .undefined,
+            .new_layout = .depth_stencil_attachment_optimal,
+        }) catch unreachable;
+
+        try self.image_staging_buffer.flushAndCopyToDestination(self.vkd, self.device, null);
+    }
+
     try instantiateFramebuffer(
         self.framebuffers,
         self.vkd,
@@ -754,15 +870,20 @@ pub fn recreatePresentResources(self: *RenderContext, window: glfw.Window) !void
         self.render_pass,
         self.swapchain_extent,
         self.swapchain_image_views,
+        self.depth_image_view,
     );
 }
 
 pub fn deinit(self: RenderContext, allocator: Allocator) void {
     self.vkd.deviceWaitIdle(self.device) catch {};
 
+    self.vkd.destroyImageView(self.device, self.depth_image_view, null);
+    self.vkd.freeMemory(self.device, self.depth_image_memory, null);
+    self.vkd.destroyImage(self.device, self.depth_image, null);
+
     self.vkd.destroySampler(self.device, self.test_image_sampler, null);
     self.vkd.destroyImageView(self.device, self.test_image_view, null);
-    self.vkd.freeMemory(self.device, self.image_memory, null);
+    self.vkd.freeMemory(self.device, self.texture_image_memory, null);
     self.vkd.destroyImage(self.device, self.test_image, null);
 
     self.buffer_staging_buffer.deinit(self.vkd, self.device);
@@ -859,11 +980,16 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window) !void {
         };
         try self.vkd.beginCommandBuffer(command_buffer, &begin_info);
 
-        const clear_values = [1]vk.ClearValue{.{
+        const clear_values = [_]vk.ClearValue{ .{
             .color = .{
                 .float_32 = [_]f32{ 0, 0, 0, 1 },
             },
-        }};
+        }, .{
+            .depth_stencil = .{
+                .depth = 1,
+                .stencil = 0,
+            },
+        } };
         const render_area = vk.Rect2D{
             .offset = .{ .x = 0, .y = 0 },
             .extent = self.swapchain_extent,
@@ -1330,7 +1456,7 @@ fn messageCallback(
     return vk.FALSE;
 }
 
-inline fn createRenderPass(vkd: DeviceDispatch, device: vk.Device, swapchain_format: vk.Format) !vk.RenderPass {
+inline fn createRenderPass(vkd: DeviceDispatch, device: vk.Device, swapchain_format: vk.Format, depth_format: vk.Format) !vk.RenderPass {
     const color_attachment = vk.AttachmentDescription{
         .flags = .{},
         .format = swapchain_format,
@@ -1346,6 +1472,23 @@ inline fn createRenderPass(vkd: DeviceDispatch, device: vk.Device, swapchain_for
         .attachment = 0,
         .layout = .color_attachment_optimal,
     };
+
+    const depth_attachment = vk.AttachmentDescription{
+        .flags = .{},
+        .format = depth_format,
+        .samples = .{ .@"1_bit" = true },
+        .load_op = .clear,
+        .store_op = .dont_care,
+        .stencil_load_op = .dont_care,
+        .stencil_store_op = .dont_care,
+        .initial_layout = .undefined,
+        .final_layout = .depth_stencil_attachment_optimal,
+    };
+    const depth_attachment_ref = vk.AttachmentReference{
+        .attachment = 1,
+        .layout = .depth_stencil_attachment_optimal,
+    };
+
     const subpass = vk.SubpassDescription{
         .flags = .{},
         .pipeline_bind_point = .graphics,
@@ -1354,7 +1497,7 @@ inline fn createRenderPass(vkd: DeviceDispatch, device: vk.Device, swapchain_for
         .color_attachment_count = 1,
         .p_color_attachments = @ptrCast([*]const vk.AttachmentReference, &color_attachment_ref),
         .p_resolve_attachments = null,
-        .p_depth_stencil_attachment = null,
+        .p_depth_stencil_attachment = &depth_attachment_ref,
         .preserve_attachment_count = 0,
         .p_preserve_attachments = undefined,
     };
@@ -1362,17 +1505,18 @@ inline fn createRenderPass(vkd: DeviceDispatch, device: vk.Device, swapchain_for
     const subpass_dependency = vk.SubpassDependency{
         .src_subpass = vk.SUBPASS_EXTERNAL,
         .dst_subpass = 0,
-        .src_stage_mask = .{ .color_attachment_output_bit = true },
-        .dst_stage_mask = .{ .color_attachment_output_bit = true },
+        .src_stage_mask = .{ .color_attachment_output_bit = true, .early_fragment_tests_bit = true },
+        .dst_stage_mask = .{ .color_attachment_output_bit = true, .early_fragment_tests_bit = true },
         .src_access_mask = .{},
-        .dst_access_mask = .{ .color_attachment_write_bit = true },
+        .dst_access_mask = .{ .color_attachment_write_bit = true, .depth_stencil_attachment_write_bit = true },
         .dependency_flags = .{},
     };
 
+    const attachments = [_]vk.AttachmentDescription{ color_attachment, depth_attachment };
     const render_pass_info = vk.RenderPassCreateInfo{
         .flags = .{},
-        .attachment_count = 1,
-        .p_attachments = @ptrCast([*]const vk.AttachmentDescription, &color_attachment),
+        .attachment_count = attachments.len,
+        .p_attachments = &attachments,
         .subpass_count = 1,
         .p_subpasses = @ptrCast([*]const vk.SubpassDescription, &subpass),
         .dependency_count = 1,
@@ -1575,6 +1719,28 @@ inline fn createGraphicsPipeline(
         .blend_constants = [4]f32{ 0, 0, 0, 0 },
     };
 
+    const nop_front_back = vk.StencilOpState{
+        .fail_op = .keep,
+        .pass_op = .keep,
+        .depth_fail_op = .keep,
+        .compare_op = .never,
+        .compare_mask = 0,
+        .write_mask = 0,
+        .reference = 0,
+    };
+    const depth_stencil_info = vk.PipelineDepthStencilStateCreateInfo{
+        .flags = .{},
+        .depth_test_enable = vk.TRUE,
+        .depth_write_enable = vk.TRUE,
+        .depth_compare_op = .less,
+        .depth_bounds_test_enable = vk.FALSE,
+        .stencil_test_enable = vk.FALSE,
+        .front = nop_front_back,
+        .back = nop_front_back,
+        .min_depth_bounds = 0,
+        .max_depth_bounds = 1,
+    };
+
     const pipeline_info = vk.GraphicsPipelineCreateInfo{
         .flags = .{},
         .stage_count = shader_stages_info.len,
@@ -1585,7 +1751,7 @@ inline fn createGraphicsPipeline(
         .p_viewport_state = &viewport_state_info,
         .p_rasterization_state = &rasterization_state_info,
         .p_multisample_state = &multisampling,
-        .p_depth_stencil_state = null,
+        .p_depth_stencil_state = &depth_stencil_info,
         .p_color_blend_state = &color_blend_info,
         .p_dynamic_state = &dynamic_state_info,
         .layout = pipeline_layout,
@@ -1632,7 +1798,7 @@ inline fn instantiateImageViews(
     }
 
     for (swapchain_images) |swapchain_image, i| {
-        image_views[i] = try createDefaultImageView(vkd, device, swapchain_image, swapchain_image_format);
+        image_views[i] = try createDefaultImageView(vkd, device, swapchain_image, swapchain_image_format, .{ .color_bit = true });
         views_created = i;
     }
 }
@@ -1644,6 +1810,7 @@ inline fn instantiateFramebuffer(
     render_pass: vk.RenderPass,
     swapchain_extent: vk.Extent2D,
     swapchain_image_views: []vk.ImageView,
+    depth_image_view: vk.ImageView,
 ) !void {
     var created_framebuffers: usize = 0;
     errdefer {
@@ -1654,7 +1821,7 @@ inline fn instantiateFramebuffer(
     }
 
     for (framebuffers) |*framebuffer, i| {
-        const attachments = [_]vk.ImageView{swapchain_image_views[i]};
+        const attachments = [_]vk.ImageView{ swapchain_image_views[i], depth_image_view };
         const framebuffer_info = vk.FramebufferCreateInfo{
             .flags = .{},
             .render_pass = render_pass,
@@ -1672,11 +1839,11 @@ inline fn instantiateFramebuffer(
 
 // TODO: BasicImage.zig
 // TODO: function take a zigimg.Image and produce some vk resources
-inline fn createImage(vkd: DeviceDispatch, device: vk.Device, image_extent: vk.Extent2D) !vk.Image {
+inline fn createImage(vkd: DeviceDispatch, device: vk.Device, format: vk.Format, usage: vk.ImageUsageFlags, image_extent: vk.Extent2D) !vk.Image {
     const image_info = vk.ImageCreateInfo{
         .flags = .{},
         .image_type = .@"2d",
-        .format = .r8g8b8a8_srgb,
+        .format = format,
         .extent = vk.Extent3D{
             .width = image_extent.width,
             .height = image_extent.height,
@@ -1686,10 +1853,7 @@ inline fn createImage(vkd: DeviceDispatch, device: vk.Device, image_extent: vk.E
         .array_layers = 1,
         .samples = .{ .@"1_bit" = true },
         .tiling = .optimal,
-        .usage = .{
-            .transfer_dst_bit = true,
-            .sampled_bit = true,
-        },
+        .usage = usage,
         .sharing_mode = .exclusive,
         .queue_family_index_count = 0,
         .p_queue_family_indices = undefined,
@@ -1699,7 +1863,7 @@ inline fn createImage(vkd: DeviceDispatch, device: vk.Device, image_extent: vk.E
 }
 
 // TODO: BasicImage.zig
-inline fn createDefaultImageView(vkd: DeviceDispatch, device: vk.Device, image: vk.Image, format: vk.Format) !vk.ImageView {
+inline fn createDefaultImageView(vkd: DeviceDispatch, device: vk.Device, image: vk.Image, format: vk.Format, aspect_flags: vk.ImageAspectFlags) !vk.ImageView {
     const image_view_info = vk.ImageViewCreateInfo{
         .flags = .{},
         .image = image,
@@ -1712,7 +1876,7 @@ inline fn createDefaultImageView(vkd: DeviceDispatch, device: vk.Device, image: 
             .a = .identity,
         },
         .subresource_range = .{
-            .aspect_mask = .{ .color_bit = true },
+            .aspect_mask = aspect_flags,
             .base_mip_level = 0,
             .level_count = 1,
             .base_array_layer = 0,
@@ -1742,4 +1906,37 @@ inline fn createDefaultSampler(vkd: DeviceDispatch, device: vk.Device, device_li
         .unnormalized_coordinates = vk.FALSE,
     };
     return vkd.createSampler(device, &sampler_info, null);
+}
+
+inline fn findSupportedFormat(
+    vki: InstanceDispatch,
+    physical_device: vk.PhysicalDevice,
+    candidate_formats: []const vk.Format,
+    features: vk.FormatFeatureFlags,
+    comptime tiling: vk.ImageTiling,
+) !vk.Format {
+    const field = comptime switch (tiling) {
+        .linear => "linear_tiling_features",
+        .optimal => "optimal_tiling_features",
+        else => @compileError("unsupported tiling used " ++ @tagName(tiling)),
+    };
+
+    for (candidate_formats) |format| {
+        const format_properties = vki.getPhysicalDeviceFormatProperties(physical_device, format);
+        if ((features.intersect(@field(format_properties, field))).toInt() != 0) {
+            return format;
+        }
+    }
+
+    return error.NoSuitableFormat;
+}
+
+inline fn findDepthFormat(vki: InstanceDispatch, physical_device: vk.PhysicalDevice) !vk.Format {
+    return findSupportedFormat(
+        vki,
+        physical_device,
+        &[_]vk.Format{ .d32_sfloat, .d24_unorm_s8_uint, .d32_sfloat_s8_uint },
+        .{ .depth_stencil_attachment_bit = true },
+        .optimal,
+    );
 }

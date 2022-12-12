@@ -14,23 +14,10 @@ pub const Config = struct {
     size: vk.DeviceSize = 64 * dmem.bytes_in_megabyte, // default of 64 megabyte for staging
 };
 
-const TransferBufferDestination = struct {
-    buffer: vk.Buffer,
-    offset: vk.DeviceSize,
-};
-
 pub const ImageTransition = struct {
     format: vk.Format,
     old_layout: vk.ImageLayout,
     new_layout: vk.ImageLayout,
-};
-
-const TransferImageDestination = struct {
-    transition_before: ?ImageTransition,
-    image: vk.Image,
-    width: u32,
-    height: u32,
-    transition_after: ?ImageTransition,
 };
 
 const StagingContext = struct {
@@ -126,6 +113,11 @@ const StagingContext = struct {
 const max_transfers_scheduled = 32;
 
 pub const Buffer = struct {
+    const TransferBufferDestination = struct {
+        buffer: vk.Buffer,
+        offset: vk.DeviceSize,
+    };
+
     ctx: StagingContext,
     buffer_destinations: [max_transfers_scheduled]TransferBufferDestination = undefined,
 
@@ -244,8 +236,26 @@ pub const Buffer = struct {
 };
 
 pub const Image = struct {
+    const ImageTransferJob = struct {
+        image: vk.Image,
+        width: u32,
+        height: u32,
+    };
+
+    const ImageTransitionJob = struct {
+        image: vk.Image,
+        transition: ImageTransition,
+    };
+
     ctx: StagingContext,
-    image_destinations: [max_transfers_scheduled]TransferImageDestination = undefined,
+
+    transitions_before_tranfer_in_flight: u32 = 0,
+    image_transitions_before: [max_transfers_scheduled / 2]ImageTransitionJob = undefined,
+
+    transitions_after_tranfer_in_flight: u32 = 0,
+    image_transitions_after: [max_transfers_scheduled / 2]ImageTransitionJob = undefined,
+
+    image_destinations: [max_transfers_scheduled]ImageTransferJob = undefined,
 
     pub fn init(
         vki: InstanceDispatch,
@@ -281,8 +291,6 @@ pub const Image = struct {
         image_extent: vk.Extent2D,
         comptime T: type,
         data: []const T,
-        transition_before: ?ImageTransition,
-        transition_after: ?ImageTransition,
     ) !void {
         if (self.ctx.memory_in_flight >= max_transfers_scheduled) {
             return error.OutOfTransferSlots;
@@ -302,16 +310,48 @@ pub const Image = struct {
             .offset = self.ctx.incoherent_memory_bytes,
             .size = aligned_memory_size,
         };
-        self.image_destinations[self.ctx.memory_in_flight] = TransferImageDestination{
-            .transition_before = transition_before,
+        self.image_destinations[self.ctx.memory_in_flight] = ImageTransferJob{
             .image = destination_image,
             .width = @intCast(u32, image_extent.width),
             .height = @intCast(u32, image_extent.height),
-            .transition_after = transition_after,
         };
 
         self.ctx.memory_in_flight += 1;
         self.ctx.incoherent_memory_bytes += aligned_memory_size;
+    }
+
+    pub fn scheduleLayoutTransitionBeforeTransfers(
+        self: *Image,
+        image: vk.Image,
+        transition: ImageTransition,
+    ) !void {
+        if (self.transitions_before_tranfer_in_flight >= max_transfers_scheduled / 2) {
+            return error.OutOfTransitionBeforeTransferSlots;
+        }
+
+        self.image_transitions_before[self.transitions_before_tranfer_in_flight] = ImageTransitionJob{
+            .image = image,
+            .transition = transition,
+        };
+
+        self.transitions_before_tranfer_in_flight += 1;
+    }
+
+    pub fn scheduleLayoutTransitionAfterTransfers(
+        self: *Image,
+        image: vk.Image,
+        transition: ImageTransition,
+    ) !void {
+        if (self.transitions_after_tranfer_in_flight >= max_transfers_scheduled / 2) {
+            return error.OutOfTransitionAfterTransferSlots;
+        }
+
+        self.image_transitions_after[self.transitions_after_tranfer_in_flight] = ImageTransitionJob{
+            .image = image,
+            .transition = transition,
+        };
+
+        self.transitions_after_tranfer_in_flight += 1;
     }
 
     pub fn flushAndCopyToDestination(
@@ -322,15 +362,34 @@ pub const Image = struct {
     ) !void {
         // TODO: propert errdefers in function
 
-        if (self.ctx.memory_in_flight == 0) return;
+        if (self.ctx.memory_in_flight == 0 and
+            self.transitions_before_tranfer_in_flight == 0 and
+            self.transitions_after_tranfer_in_flight == 0)
+        {
+            return;
+        }
 
-        try vkd.flushMappedMemoryRanges(device, self.ctx.memory_in_flight, &self.ctx.mapped_ranges);
+        if (self.ctx.memory_in_flight != 0) {
+            try vkd.flushMappedMemoryRanges(device, self.ctx.memory_in_flight, &self.ctx.mapped_ranges);
+        }
 
         const begin_info = vk.CommandBufferBeginInfo{
             .flags = .{ .one_time_submit_bit = true },
             .p_inheritance_info = null,
         };
         try vkd.beginCommandBuffer(self.ctx.command_buffer, &begin_info);
+
+        for (self.image_transitions_before[0..self.transitions_before_tranfer_in_flight]) |transition_job| {
+            const transition = transition_job.transition;
+            try transitionImage(
+                vkd,
+                self.ctx.command_buffer,
+                transition_job.image,
+                transition.format,
+                transition.old_layout,
+                transition.new_layout,
+            );
+        }
 
         var region = vk.BufferImageCopy{
             .buffer_offset = 0,
@@ -350,32 +409,22 @@ pub const Image = struct {
             },
         };
         for (self.image_destinations[0..self.ctx.memory_in_flight]) |dest| {
-            if (dest.transition_before) |transition| {
-                try transitionImage(
-                    vkd,
-                    self.ctx.command_buffer,
-                    dest.image,
-                    transition.format,
-                    transition.old_layout,
-                    transition.new_layout,
-                );
-            }
-
             region.image_extent.width = dest.width;
             region.image_extent.height = dest.height;
 
             vkd.cmdCopyBufferToImage(self.ctx.command_buffer, self.ctx.buffer, dest.image, .transfer_dst_optimal, 1, @ptrCast([*]const vk.BufferImageCopy, &region));
+        }
 
-            if (dest.transition_after) |transition| {
-                try transitionImage(
-                    vkd,
-                    self.ctx.command_buffer,
-                    dest.image,
-                    transition.format,
-                    transition.old_layout,
-                    transition.new_layout,
-                );
-            }
+        for (self.image_transitions_after[0..self.transitions_after_tranfer_in_flight]) |transition_job| {
+            const transition = transition_job.transition;
+            try transitionImage(
+                vkd,
+                self.ctx.command_buffer,
+                transition_job.image,
+                transition.format,
+                transition.old_layout,
+                transition.new_layout,
+            );
         }
 
         try vkd.endCommandBuffer(self.ctx.command_buffer);
@@ -391,12 +440,16 @@ pub const Image = struct {
         };
         try vkd.queueSubmit(self.ctx.transfer_queue, 1, @ptrCast([*]const vk.SubmitInfo, &submit_into), self.ctx.transfer_fence);
 
+        // TODO: we dont want to force fence wait here (should be a manuall call to reset, same for staging buffer)
         _ = vkd.waitForFences(device, 1, @ptrCast([*]const vk.Fence, &self.ctx.transfer_fence), vk.TRUE, std.time.ns_per_s) catch {};
         try vkd.resetFences(device, 1, @ptrCast([*]const vk.Fence, &self.ctx.transfer_fence));
 
+        try vkd.resetCommandPool(device, self.ctx.command_pool, .{});
+
         self.ctx.memory_in_flight = 0;
         self.ctx.incoherent_memory_bytes = 0;
-        try vkd.resetCommandPool(device, self.ctx.command_pool, .{});
+        self.transitions_before_tranfer_in_flight = 0;
+        self.transitions_after_tranfer_in_flight = 0;
     }
 
     inline fn transitionImage(
@@ -407,8 +460,15 @@ pub const Image = struct {
         old_layout: vk.ImageLayout,
         new_layout: vk.ImageLayout,
     ) !void {
-        _ = format;
-
+        const aspect_mask: vk.ImageAspectFlags = blk: {
+            if (new_layout == .depth_stencil_attachment_optimal) {
+                break :blk .{
+                    .depth_bit = true,
+                    .stencil_bit = hasStencilComponent(format),
+                };
+            }
+            break :blk .{ .color_bit = true };
+        };
         var barrier = vk.ImageMemoryBarrier{
             .src_access_mask = .{}, // TODO
             .dst_access_mask = .{},
@@ -418,7 +478,8 @@ pub const Image = struct {
             .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
             .image = image,
             .subresource_range = .{
-                .aspect_mask = .{ .color_bit = true },
+                // default to color bit, can be overwritten by some layout changes
+                .aspect_mask = aspect_mask,
                 .base_mip_level = 0,
                 .level_count = 1,
                 .base_array_layer = 0,
@@ -449,6 +510,13 @@ pub const Image = struct {
                     barrier.dst_access_mask = .{ .shader_read_bit = true };
                     break :blk vk.PipelineStageFlags{ .fragment_shader_bit = true };
                 },
+                .depth_stencil_attachment_optimal => {
+                    barrier.dst_access_mask = .{
+                        .depth_stencil_attachment_read_bit = true,
+                        .depth_stencil_attachment_write_bit = true,
+                    };
+                    break :blk vk.PipelineStageFlags{ .early_fragment_tests_bit = true };
+                },
                 else => std.debug.panic("\nunimplemented image new layout {any}\n", .{new_layout}),
             }
         };
@@ -465,5 +533,9 @@ pub const Image = struct {
             1,
             @ptrCast([*]const vk.ImageMemoryBarrier, &barrier),
         );
+    }
+
+    inline fn hasStencilComponent(format: vk.Format) bool {
+        return format == .d32_sfloat_s8_uint or format == .d24_unorm_s8_uint;
     }
 };
