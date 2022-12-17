@@ -32,6 +32,8 @@ const RenderContext = @This();
 // TODO: reduce debug assert, replace with errors
 // TODO: use sync2
 
+pub const MeshHandle = u32;
+
 const PushConstant = struct {
     camera_projection_view: zm.Mat,
 
@@ -79,10 +81,8 @@ const Model = struct {
     }
 };
 
-// TODO: placeholder
 const Vertex = struct {
     pos: [3]f32,
-    color: [3]f32,
     text_coord: [2]f32,
 
     pub fn getBindingDescription() vk.VertexInputBindingDescription {
@@ -93,7 +93,7 @@ const Vertex = struct {
         };
     }
 
-    pub fn getAttributeDescriptions() [3]vk.VertexInputAttributeDescription {
+    pub fn getAttributeDescriptions() [2]vk.VertexInputAttributeDescription {
         return [_]vk.VertexInputAttributeDescription{
             .{
                 .location = 0,
@@ -104,70 +104,11 @@ const Vertex = struct {
             .{
                 .location = 1,
                 .binding = 0,
-                .format = .r32g32b32_sfloat,
-                .offset = @offsetOf(Vertex, "color"),
-            },
-            .{
-                .location = 2,
-                .binding = 0,
                 .format = .r32g32_sfloat,
                 .offset = @offsetOf(Vertex, "text_coord"),
             },
         };
     }
-};
-
-const vertices = [_]Vertex{
-    // quad 1
-    .{
-        .pos = .{ -0.5, -0.5, 0.0 },
-        .color = .{ 1, 0, 0 },
-        .text_coord = .{ 1, 0 },
-    },
-    .{
-        .pos = .{ 0.5, -0.5, 0.0 },
-        .color = .{ 0, 1, 0 },
-        .text_coord = .{ 0, 0 },
-    },
-    .{
-        .pos = .{ 0.5, 0.5, 0.0 },
-        .color = .{ 0, 0, 1 },
-        .text_coord = .{ 0, 1 },
-    },
-    .{
-        .pos = .{ -0.5, 0.5, 0.0 },
-        .color = .{ 1, 1, 1 },
-        .text_coord = .{ 1, 1 },
-    },
-
-    // quad 2
-    .{
-        .pos = .{ -0.5, -0.5, 0.01 },
-        .color = .{ 1, 0, 0 },
-        .text_coord = .{ 1, 0 },
-    },
-    .{
-        .pos = .{ 0.5, -0.5, 0.01 },
-        .color = .{ 0, 1, 0 },
-        .text_coord = .{ 0, 0 },
-    },
-    .{
-        .pos = .{ 0.5, 0.5, 0.01 },
-        .color = .{ 0, 0, 1 },
-        .text_coord = .{ 0, 1 },
-    },
-    .{
-        .pos = .{ -0.5, 0.5, 0.01 },
-        .color = .{ 1, 1, 1 },
-        .text_coord = .{ 1, 1 },
-    },
-};
-
-const indices = [_]u16{
-    // quad 1
-    0, 1, 2, 2, 3, 0,
-    // quad 2
-    4, 5, 6, 6, 7, 4,
 };
 
 asset_handler: AssetHandler,
@@ -240,6 +181,8 @@ test_image_view: vk.ImageView,
 test_image_sampler: vk.Sampler,
 
 texture_image_memory: vk.DeviceMemory,
+
+index_count: u32,
 
 pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     zmesh.init(allocator);
@@ -476,11 +419,11 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         const aspect = @intToFloat(f32, swapchain_extent.width) / @intToFloat(f32, swapchain_extent.height);
         break :blk Camera{
             .view = zm.lookAtRh(
-                zm.f32x4(3.0, 3.0, 3.0, 1.0), // pos
+                zm.f32x4(3.0, 3.0, 10.0, 1.0), // pos
                 zm.f32x4(0.0, 0.0, 0.0, 1.0), // target
                 zm.f32x4(0.0, 1.0, 0.0, 0.0), // up
             ),
-            .projection = zm.perspectiveFovRh(fovy, aspect, 0.01, 10),
+            .projection = zm.perspectiveFovRh(fovy, aspect, 0.01, 300),
         };
     };
 
@@ -631,13 +574,72 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         non_coherent_atom_size,
         queue_family_indices.transferIndex(),
         transfer_queue,
-        .{ .size = 2048 },
+        .{},
     );
     errdefer buffer_staging_buffer.deinit(vkd, device);
 
+    var mesh_indices = std.ArrayList(u32).init(allocator);
+    defer mesh_indices.deinit();
+
+    const content_path = try asset_handler.getCPath(allocator, .model, "ScifiHelmet/ScifiHelmet.gltf");
+    defer allocator.free(content_path);
+
+    const data = try zmesh.io.parseAndLoadFile(content_path);
+    defer zmesh.io.freeData(data);
+
+    var mesh_positions = std.ArrayList([3]f32).init(allocator);
+    defer mesh_positions.deinit();
+
+    // var mesh_normals = std.ArrayList([3]f32).init(allocator);
+    // defer mesh_normals.deinit();
+
+    var mesh_text_coords = std.ArrayList([2]f32).init(allocator);
+    defer mesh_text_coords.deinit();
+
+    try zmesh.io.appendMeshPrimitive(
+        data, // *zmesh.io.cgltf.Data
+        0, // mesh index
+        0, // gltf primitive index (submesh index)
+        &mesh_indices,
+        &mesh_positions,
+        null, // &mesh_normals, // normals (optional)
+        &mesh_text_coords, // texcoords (optional)
+        null, // tangents (optional)
+    );
+
+    var vertices = try allocator.alloc(Vertex, mesh_positions.items.len);
+    defer allocator.free(vertices);
+    for (vertices) |*vert, i| {
+        vert.* = Vertex{
+            .pos = mesh_positions.items[i],
+            .text_coord = mesh_text_coords.items[i],
+        };
+    }
+
+    var remap = try allocator.alloc(u32, mesh_indices.items.len);
+    defer allocator.free(remap);
+
+    const num_unique_vertices = zmesh.opt.generateVertexRemap(
+        remap, // 'vertex remap' (destination)
+        null, // non-optimized indices
+        Vertex, // Zig type describing your vertex
+        vertices, // non-optimized vertices
+    );
+
+    var optimized_indices = try allocator.alloc(u32, mesh_indices.items.len);
+    defer allocator.free(optimized_indices);
+    zmesh.opt.remapIndexBuffer(optimized_indices, mesh_indices.items, remap);
+
+    var optimized_vertices = try allocator.alloc(Vertex, num_unique_vertices);
+    defer allocator.free(optimized_vertices);
+    zmesh.opt.remapVertexBuffer(Vertex, optimized_vertices, vertices, remap);
+
+    zmesh.opt.optimizeVertexCache(optimized_indices, optimized_indices, optimized_vertices.len);
+    zmesh.opt.optimizeOverdraw(optimized_indices, optimized_indices, Vertex, optimized_vertices, 1.05);
+
     // TODO: simplfiy buffer aligned creation (createBuffer accept size array and do this internally)
-    const vertex_buffer_size = dmem.getAlignedDeviceSize(non_coherent_atom_size, vertices.len * @sizeOf(Vertex));
-    const index_buffer_size = dmem.getAlignedDeviceSize(non_coherent_atom_size, indices.len * @sizeOf(u16));
+    const vertex_buffer_size = dmem.getAlignedDeviceSize(non_coherent_atom_size, optimized_vertices.len * @sizeOf(Vertex));
+    const index_buffer_size = dmem.getAlignedDeviceSize(non_coherent_atom_size, optimized_indices.len * @sizeOf(u32));
 
     // create device memory and transfer vertices to host
     const vertex_index_buffer = try ImmutableBuffer.init(
@@ -651,8 +653,8 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     );
 
     // TODO: scheduling transfer of data that is not atom aligned is problematic. How should this be communicated or enforced?
-    try buffer_staging_buffer.scheduleTransferToDst(vertex_index_buffer.buffer, 0, Vertex, &vertices);
-    try buffer_staging_buffer.scheduleTransferToDst(vertex_index_buffer.buffer, vertex_buffer_size, u16, &indices);
+    try buffer_staging_buffer.scheduleTransferToDst(vertex_index_buffer.buffer, 0, Vertex, optimized_vertices);
+    try buffer_staging_buffer.scheduleTransferToDst(vertex_index_buffer.buffer, vertex_buffer_size, u32, optimized_indices);
 
     var loaded_image = blk: {
         const image_path = try asset_handler.getPath(allocator, .image, "testcard.qoi");
@@ -791,6 +793,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         .test_image_view = test_image_view,
         .test_image_sampler = test_image_sampler,
         .texture_image_memory = texture_image_memory,
+        .index_count = @intCast(u32, optimized_indices.len),
     };
 }
 
@@ -1056,10 +1059,10 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window) !void {
             command_buffer,
             self.vertex_index_buffer.buffer,
             index_buffer_offset,
-            vk.IndexType.uint16,
+            vk.IndexType.uint32,
         );
         self.vkd.cmdBindDescriptorSets(command_buffer, .graphics, self.pipeline_layout, 0, 1, @ptrCast([*]const vk.DescriptorSet, &self.model_desc_set), 0, undefined);
-        self.vkd.cmdDrawIndexed(command_buffer, @intCast(u32, indices.len), 1, 0, 0, 0);
+        self.vkd.cmdDrawIndexed(command_buffer, self.index_count, 1, 0, 0, 0);
 
         self.vkd.cmdEndRenderPass(command_buffer);
         try self.vkd.endCommandBuffer(command_buffer);
@@ -1567,6 +1570,16 @@ const AssetHandler = struct {
 
         const join_path = [_][]const u8{ self.exe_path, prefix, file_name };
         return std.fs.path.resolve(allocator, join_path[0..]);
+    }
+
+    pub inline fn getCPath(self: AssetHandler, allocator: Allocator, comptime kind: Kind, file_name: []const u8) ![:0]const u8 {
+        const prefix = "../../assets/" ++ @tagName(kind) ++ "s";
+
+        const join_path = [_][]const u8{ self.exe_path, prefix, file_name };
+        var file_path = try std.fs.path.resolve(allocator, &join_path);
+        defer allocator.free(file_path);
+
+        return std.cstr.addNullByte(allocator, file_path);
     }
 };
 
