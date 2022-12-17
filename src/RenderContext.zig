@@ -324,7 +324,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         non_coherent_atom_size,
         queue_family_indices.graphicsIndex(),
         secondary_graphics_queue,
-        .{ .size = dmem.bytes_in_megabyte },
+        .{ .size = dmem.bytes_in_megabyte * 32 },
     );
     errdefer image_staging_buffer.deinit(vkd, device);
 
@@ -414,18 +414,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         break :blk desc_set;
     };
 
-    const camera = blk: {
-        const fovy = std.math.degreesToRadians(f32, 45);
-        const aspect = @intToFloat(f32, swapchain_extent.width) / @intToFloat(f32, swapchain_extent.height);
-        break :blk Camera{
-            .view = zm.lookAtRh(
-                zm.f32x4(3.0, 3.0, 10.0, 1.0), // pos
-                zm.f32x4(0.0, 0.0, 0.0, 1.0), // target
-                zm.f32x4(0.0, 1.0, 0.0, 0.0), // up
-            ),
-            .projection = zm.perspectiveFovRh(fovy, aspect, 0.01, 300),
-        };
-    };
+    const camera = calculateCamera(45, swapchain_extent);
 
     // create device memory and transfer vertices to host
     var model_buffer = try MutableBuffer.init(
@@ -581,7 +570,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     var mesh_indices = std.ArrayList(u32).init(allocator);
     defer mesh_indices.deinit();
 
-    const content_path = try asset_handler.getCPath(allocator, .model, "ScifiHelmet/ScifiHelmet.gltf");
+    const content_path = try asset_handler.getCPath(allocator, "models/ScifiHelmet/ScifiHelmet.gltf");
     defer allocator.free(content_path);
 
     const data = try zmesh.io.parseAndLoadFile(content_path);
@@ -657,7 +646,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     try buffer_staging_buffer.scheduleTransferToDst(vertex_index_buffer.buffer, vertex_buffer_size, u32, optimized_indices);
 
     var loaded_image = blk: {
-        const image_path = try asset_handler.getPath(allocator, .image, "testcard.qoi");
+        const image_path = try asset_handler.getPath(allocator, "models/ScifiHelmet/SciFiHelmet_BaseColor.png");
         defer allocator.free(image_path);
 
         break :blk try zigimg.Image.fromFilePath(allocator, image_path);
@@ -889,6 +878,21 @@ pub fn recreatePresentResources(self: *RenderContext, window: glfw.Window) !void
         self.swapchain_image_views,
         self.depth_image_view,
     );
+
+    self.camera = calculateCamera(45, self.swapchain_extent);
+}
+
+inline fn calculateCamera(degree_fovy: f32, swapchain_extent: vk.Extent2D) Camera {
+    const fovy = std.math.degreesToRadians(f32, degree_fovy);
+    const aspect = @intToFloat(f32, swapchain_extent.width) / @intToFloat(f32, swapchain_extent.height);
+    return Camera{
+        .view = zm.lookAtRh(
+            zm.f32x4(3.0, 3.0, 10.0, 1.0), // pos
+            zm.f32x4(0.0, 0.0, 0.0, 1.0), // target
+            zm.f32x4(0.0, -1.0, 0.0, 0.0), // up
+        ),
+        .projection = zm.perspectiveFovRh(fovy, aspect, 0.01, 300),
+    };
 }
 
 pub fn deinit(self: RenderContext, allocator: Allocator) void {
@@ -1548,12 +1552,6 @@ inline fn createRenderPass(vkd: DeviceDispatch, device: vk.Device, swapchain_for
 const AssetHandler = struct {
     exe_path: []const u8,
 
-    pub const Kind = enum {
-        shader,
-        image,
-        model,
-    };
-
     pub fn init(allocator: Allocator) !AssetHandler {
         const exe_path = try std.fs.selfExePathAlloc(allocator);
         return AssetHandler{
@@ -1565,21 +1563,21 @@ const AssetHandler = struct {
         allocator.free(self.exe_path);
     }
 
-    pub inline fn getPath(self: AssetHandler, allocator: Allocator, comptime kind: Kind, file_name: []const u8) ![]const u8 {
-        const prefix = "../../assets/" ++ @tagName(kind) ++ "s";
+    pub inline fn getPath(self: AssetHandler, allocator: Allocator, file_path: []const u8) ![]const u8 {
+        const prefix = "../../assets/";
 
-        const join_path = [_][]const u8{ self.exe_path, prefix, file_name };
+        const join_path = [_][]const u8{ self.exe_path, prefix, file_path };
         return std.fs.path.resolve(allocator, join_path[0..]);
     }
 
-    pub inline fn getCPath(self: AssetHandler, allocator: Allocator, comptime kind: Kind, file_name: []const u8) ![:0]const u8 {
-        const prefix = "../../assets/" ++ @tagName(kind) ++ "s";
+    pub inline fn getCPath(self: AssetHandler, allocator: Allocator, file_path: []const u8) ![:0]const u8 {
+        const prefix = "../../assets/";
 
-        const join_path = [_][]const u8{ self.exe_path, prefix, file_name };
-        var file_path = try std.fs.path.resolve(allocator, &join_path);
-        defer allocator.free(file_path);
+        const join_path = [_][]const u8{ self.exe_path, prefix, file_path };
+        var absolute_file_path = try std.fs.path.resolve(allocator, &join_path);
+        defer allocator.free(absolute_file_path);
 
-        return std.cstr.addNullByte(allocator, file_path);
+        return std.cstr.addNullByte(allocator, absolute_file_path);
     }
 };
 
@@ -1610,7 +1608,7 @@ inline fn createGraphicsPipeline(
     pipeline_layout: vk.PipelineLayout,
 ) !vk.Pipeline {
     const vert_bytes = blk: {
-        const path = try asset_handler.getPath(allocator, .shader, "shader.vert.spv");
+        const path = try asset_handler.getPath(allocator, "shaders/shader.vert.spv");
         defer allocator.free(path);
         const bytes = try readFile(allocator, path);
         break :blk bytes;
@@ -1629,7 +1627,7 @@ inline fn createGraphicsPipeline(
     };
 
     const frag_bytes = blk: {
-        const path = try asset_handler.getPath(allocator, .shader, "shader.frag.spv");
+        const path = try asset_handler.getPath(allocator, "shaders/shader.frag.spv");
         defer allocator.free(path);
         const bytes = try readFile(allocator, path);
         break :blk bytes;
