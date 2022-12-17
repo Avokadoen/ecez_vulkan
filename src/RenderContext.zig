@@ -7,6 +7,7 @@ const vk = @import("vulkan");
 const glfw = @import("glfw");
 const zm = @import("zmath");
 const zigimg = @import("zigimg");
+const zmesh = @import("zmesh");
 
 const vk_dispatch = @import("vk_dispatch.zig");
 const BaseDispatch = vk_dispatch.BaseDispatch;
@@ -169,6 +170,8 @@ const indices = [_]u16{
     4, 5, 6, 6, 7, 4,
 };
 
+asset_handler: AssetHandler,
+
 vkb: BaseDispatch,
 vki: InstanceDispatch,
 vkd: DeviceDispatch,
@@ -239,6 +242,12 @@ test_image_sampler: vk.Sampler,
 texture_image_memory: vk.DeviceMemory,
 
 pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
+    zmesh.init(allocator);
+    errdefer zmesh.deinit();
+
+    const asset_handler = try AssetHandler.init(allocator);
+    errdefer asset_handler.deinit(allocator);
+
     // bind the glfw instance proc pointer
     const vk_proc = @ptrCast(*const fn (instance: vk.Instance, procname: [*:0]const u8) ?glfw.VKProc, &glfw.getInstanceProcAddress);
     const vkb = try BaseDispatch.load(vk_proc);
@@ -512,7 +521,15 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     };
     errdefer vkd.destroyPipelineLayout(device, pipeline_layout, null);
 
-    const pipeline = try createGraphicsPipeline(allocator, vkd, device, swapchain_extent, render_pass, pipeline_layout);
+    const pipeline = try createGraphicsPipeline(
+        allocator,
+        asset_handler,
+        vkd,
+        device,
+        swapchain_extent,
+        render_pass,
+        pipeline_layout,
+    );
     errdefer vkd.destroyPipeline(device, pipeline, null);
 
     // TODO: spawn pools according to how many threads we have
@@ -638,10 +655,6 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     try buffer_staging_buffer.scheduleTransferToDst(vertex_index_buffer.buffer, vertex_buffer_size, u16, &indices);
 
     var loaded_image = blk: {
-        // TODO: only need one asset handler
-        const asset_handler = try AssetHandler.init(allocator);
-        defer asset_handler.deinit(allocator);
-
         const image_path = try asset_handler.getPath(allocator, .image, "testcard.qoi");
         defer allocator.free(image_path);
 
@@ -730,6 +743,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     try image_staging_buffer.flushAndCopyToDestination(vkd, device, null);
 
     return RenderContext{
+        .asset_handler = asset_handler,
         .vkb = vkb,
         .vki = vki,
         .vkd = vkd,
@@ -876,6 +890,9 @@ pub fn recreatePresentResources(self: *RenderContext, window: glfw.Window) !void
 
 pub fn deinit(self: RenderContext, allocator: Allocator) void {
     self.vkd.deviceWaitIdle(self.device) catch {};
+
+    zmesh.deinit();
+    self.asset_handler.deinit(allocator);
 
     self.vkd.destroyImageView(self.device, self.depth_image_view, null);
     self.vkd.freeMemory(self.device, self.depth_image_memory, null);
@@ -1531,6 +1548,7 @@ const AssetHandler = struct {
     pub const Kind = enum {
         shader,
         image,
+        model,
     };
 
     pub fn init(allocator: Allocator) !AssetHandler {
@@ -1545,10 +1563,7 @@ const AssetHandler = struct {
     }
 
     pub inline fn getPath(self: AssetHandler, allocator: Allocator, comptime kind: Kind, file_name: []const u8) ![]const u8 {
-        const prefix = comptime switch (kind) {
-            .shader => "../../assets/shaders",
-            .image => "../../assets/images",
-        };
+        const prefix = "../../assets/" ++ @tagName(kind) ++ "s";
 
         const join_path = [_][]const u8{ self.exe_path, prefix, file_name };
         return std.fs.path.resolve(allocator, join_path[0..]);
@@ -1574,15 +1589,13 @@ pub fn readFile(allocator: Allocator, absolute_path: []const u8) ![]u8 {
 
 inline fn createGraphicsPipeline(
     allocator: Allocator,
+    asset_handler: AssetHandler,
     vkd: DeviceDispatch,
     device: vk.Device,
     swapchain_extent: vk.Extent2D,
     render_pass: vk.RenderPass,
     pipeline_layout: vk.PipelineLayout,
 ) !vk.Pipeline {
-    const asset_handler = try AssetHandler.init(allocator);
-    defer asset_handler.deinit(allocator);
-
     const vert_bytes = blk: {
         const path = try asset_handler.getPath(allocator, .shader, "shader.vert.spv");
         defer allocator.free(path);
