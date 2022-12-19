@@ -1143,7 +1143,11 @@ inline fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki:
     var selected_device_properties: vk.PhysicalDeviceProperties = vki.getPhysicalDeviceProperties(selected_device);
     var selected_device_features: vk.PhysicalDeviceFeatures = vki.getPhysicalDeviceFeatures(selected_device);
 
-    device_search: for (devices[1..]) |current_device| {
+    var found_any_device = false;
+
+    // include first element even though we start by using it as selected device
+    // this is so we can validate later that the device is valid for the application
+    device_search: for (devices[0..]) |current_device| {
         var current_queue_families = try QueueFamilyIndices.init(vki, current_device, surface);
         if (current_queue_families.isComplete() == false) {
             continue :device_search;
@@ -1170,7 +1174,7 @@ inline fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki:
                 const current_limit_field = @field(current_device_properties.limits, field.name);
 
                 selected_limit_score += @intCast(u32, @boolToInt(selected_limit_field > current_limit_field));
-                current_limit_score += @intCast(u32, @boolToInt(selected_limit_field < current_limit_field));
+                current_limit_score += @intCast(u32, @boolToInt(selected_limit_field <= current_limit_field));
             }
 
             if (current_limit_score < selected_limit_score) {
@@ -1179,6 +1183,11 @@ inline fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki:
         }
 
         var current_device_features: vk.PhysicalDeviceFeatures = vki.getPhysicalDeviceFeatures(current_device);
+        // at the time of writing this comment 82.5% support this
+        if (current_device_features.multi_draw_indirect != vk.TRUE) {
+            continue :device_search;
+        }
+        // at the time of writing this comment 90% support this
         if (current_device_features.sampler_anisotropy != vk.TRUE) {
             continue :device_search;
         }
@@ -1196,12 +1205,17 @@ inline fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki:
         }
 
         // if current should be selected
-        if (selected_feature_sum < current_feature_sum) {
+        if (selected_feature_sum <= current_feature_sum) {
             selected_device = current_device;
             selected_device_properties = current_device_properties;
             selected_device_features = current_device_features;
             selected_queue_families = current_queue_families;
+            found_any_device = true;
         }
+    }
+
+    if (found_any_device == false) {
+        return error.NoSuitableDevice; // no device has the required feature set
     }
 
     if (is_debug_build) {
