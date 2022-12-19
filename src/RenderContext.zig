@@ -585,6 +585,16 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     var mesh_text_coords = std.ArrayList([2]f32).init(allocator);
     defer mesh_text_coords.deinit();
 
+    var loaded_image = blk: {
+        const image_uri = std.mem.span(data.images.?[0].uri.?);
+        const join_path = [_][]const u8{ content_path, "..", image_uri };
+        const image_path = try std.fs.path.resolve(allocator, join_path[0..]);
+        defer allocator.free(image_path);
+
+        break :blk try zigimg.Image.fromFilePath(allocator, image_path);
+    };
+    defer loaded_image.deinit();
+
     try zmesh.io.appendMeshPrimitive(
         data, // *zmesh.io.cgltf.Data
         0, // mesh index
@@ -645,14 +655,6 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     try buffer_staging_buffer.scheduleTransferToDst(vertex_index_buffer.buffer, 0, Vertex, optimized_vertices);
     try buffer_staging_buffer.scheduleTransferToDst(vertex_index_buffer.buffer, vertex_buffer_size, u32, optimized_indices);
 
-    var loaded_image = blk: {
-        const image_path = try asset_handler.getPath(allocator, "models/ScifiHelmet/SciFiHelmet_BaseColor.png");
-        defer allocator.free(image_path);
-
-        break :blk try zigimg.Image.fromFilePath(allocator, image_path);
-    };
-    defer loaded_image.deinit();
-
     const loaded_image_extent = vk.Extent2D{
         .width = @intCast(u32, loaded_image.width),
         .height = @intCast(u32, loaded_image.height),
@@ -662,6 +664,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     errdefer vkd.destroyImage(device, test_image, null);
 
     const texture_images = [_]vk.Image{test_image};
+    // TODO: create image memory for all textures
     const texture_image_memory = try dmem.createDeviceImageMemory(vki, physical_device, vkd, device, non_coherent_atom_size, &texture_images);
     errdefer vkd.freeMemory(device, texture_image_memory, null);
 
