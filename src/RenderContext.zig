@@ -49,45 +49,15 @@ const Camera = struct {
     projection: zm.Mat,
 };
 
-const Model = struct {
-    transform: zm.Mat,
-
-    pub inline fn createDescriptorSetLayout(vkd: DeviceDispatch, device: vk.Device) !vk.DescriptorSetLayout {
-        // TODO: order should be from least updated to most updated
-        const ubo_layout_binding = vk.DescriptorSetLayoutBinding{
-            .binding = 0,
-            .descriptor_type = .uniform_buffer,
-            .descriptor_count = 1,
-            .stage_flags = .{ .vertex_bit = true },
-            .p_immutable_samplers = null,
-        };
-        const texture_layout_binding = vk.DescriptorSetLayoutBinding{
-            .binding = 1,
-            .descriptor_type = .combined_image_sampler,
-            .descriptor_count = 1,
-            .stage_flags = .{ .fragment_bit = true },
-            .p_immutable_samplers = null,
-        };
-        const bindings = [_]vk.DescriptorSetLayoutBinding{
-            ubo_layout_binding,
-            texture_layout_binding,
-        };
-        const layout_info = vk.DescriptorSetLayoutCreateInfo{
-            .flags = .{},
-            .binding_count = bindings.len,
-            .p_bindings = &bindings,
-        };
-        return vkd.createDescriptorSetLayout(device, &layout_info, null);
-    }
-};
-
 const Vertex = struct {
+    pub const binding = 0;
+
     pos: [3]f32,
     text_coord: [2]f32,
 
     pub fn getBindingDescription() vk.VertexInputBindingDescription {
         return vk.VertexInputBindingDescription{
-            .binding = 0,
+            .binding = binding,
             .stride = @sizeOf(Vertex),
             .input_rate = .vertex,
         };
@@ -97,15 +67,66 @@ const Vertex = struct {
         return [_]vk.VertexInputAttributeDescription{
             .{
                 .location = 0,
-                .binding = 0,
+                .binding = binding,
                 .format = .r32g32b32_sfloat,
                 .offset = @offsetOf(Vertex, "pos"),
             },
             .{
                 .location = 1,
-                .binding = 0,
+                .binding = binding,
                 .format = .r32g32_sfloat,
                 .offset = @offsetOf(Vertex, "text_coord"),
+            },
+        };
+    }
+};
+
+const test_index_count = 32 * 32;
+const DrawInstance = struct {
+    pub const binding = 1;
+
+    texture_index: u32,
+    tranform: zm.Mat,
+
+    pub fn getBindingDescription() vk.VertexInputBindingDescription {
+        return vk.VertexInputBindingDescription{
+            .binding = binding,
+            .stride = @sizeOf(DrawInstance),
+            .input_rate = .instance,
+        };
+    }
+
+    pub fn getAttributeDescriptions() [5]vk.VertexInputAttributeDescription {
+        return [_]vk.VertexInputAttributeDescription{
+            .{
+                .location = 2,
+                .binding = binding,
+                .format = .r32_sint,
+                .offset = @offsetOf(DrawInstance, "texture_index"),
+            },
+            .{
+                .location = 3,
+                .binding = binding,
+                .format = .r32g32b32a32_sfloat,
+                .offset = @offsetOf(DrawInstance, "tranform") + @sizeOf(zm.F32x4) * 0,
+            },
+            .{
+                .location = 4,
+                .binding = binding,
+                .format = .r32g32b32a32_sfloat,
+                .offset = @offsetOf(DrawInstance, "tranform") + @sizeOf(zm.F32x4) * 1,
+            },
+            .{
+                .location = 5,
+                .binding = binding,
+                .format = .r32g32b32a32_sfloat,
+                .offset = @offsetOf(DrawInstance, "tranform") + @sizeOf(zm.F32x4) * 2,
+            },
+            .{
+                .location = 6,
+                .binding = binding,
+                .format = .r32g32b32a32_sfloat,
+                .offset = @offsetOf(DrawInstance, "tranform") + @sizeOf(zm.F32x4) * 3,
             },
         };
     }
@@ -161,11 +182,9 @@ vertex_index_buffer: ImmutableBuffer,
 camera: Camera,
 
 // TODO: this is data we should get from ecez!
-model: Model,
 model_desc_set_layout: vk.DescriptorSetLayout,
 model_desc_set_pool: vk.DescriptorPool,
 model_desc_set: vk.DescriptorSet,
-model_buffer: MutableBuffer,
 
 queue_family_indices: QueueFamilyIndices,
 primary_graphics_queue: vk.Queue,
@@ -182,9 +201,19 @@ test_image_sampler: vk.Sampler,
 
 texture_image_memory: vk.DeviceMemory,
 
-index_count: u32,
+// TODO: double or triple buffer device data to avoid bubble
+instance_data: std.ArrayList(DrawInstance),
+instance_data_buffer: MutableBuffer,
+// Store the indirect draw commands containing index offsets and instance count per object
+// on the host
+indirect_commands: std.ArrayList(vk.DrawIndexedIndirectCommand),
+// on the device
+indirect_commands_buffer: ImmutableBuffer,
 
-pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
+pub fn init(
+    allocator: Allocator,
+    window: glfw.Window,
+) !RenderContext {
     zmesh.init(allocator);
     errdefer zmesh.deinit();
 
@@ -379,15 +408,12 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         }
     }
 
-    const model_desc_set_layout = try Model.createDescriptorSetLayout(vkd, device);
+    // TODO(indirect): rename this model stuff to something instance related
+    const model_desc_set_layout = try createDescriptorSetLayout(vkd, device);
     errdefer vkd.destroyDescriptorSetLayout(device, model_desc_set_layout, null);
 
     const model_desc_set_pool = blk: {
         const pool_size = [_]vk.DescriptorPoolSize{
-            .{
-                .type = .uniform_buffer,
-                .descriptor_count = 1,
-            },
             .{
                 .type = .combined_image_sampler,
                 .descriptor_count = 1,
@@ -416,26 +442,6 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
 
     const camera = calculateCamera(45, swapchain_extent);
 
-    // create device memory and transfer vertices to host
-    var model_buffer = try MutableBuffer.init(
-        vki,
-        physical_device,
-        vkd,
-        device,
-        non_coherent_atom_size,
-        .{ .uniform_buffer_bit = true },
-        .{ .size = @sizeOf(Model) },
-    );
-    errdefer model_buffer.deinit(vkd, device);
-
-    // initialized model to some dummy data (this should be handled by ecez intergration later as model should be a component)
-    const model = Model{
-        .transform = zm.identity(),
-    };
-    const models = [_]Model{model};
-    try model_buffer.scheduleTransfer(0, Model, &models);
-
-    try model_buffer.flush(vkd, device);
     const pipeline_layout = blk: {
         const push_constant_range = vk.PushConstantRange{
             .stage_flags = .{ .vertex_bit = true },
@@ -689,6 +695,8 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         .new_layout = .shader_read_only_optimal,
     }) catch unreachable;
 
+    try image_staging_buffer.flushAndCopyToDestination(vkd, device, null);
+
     const test_image_view = try createDefaultImageView(vkd, device, test_image, .r8g8b8a8_srgb, .{ .color_bit = true });
     errdefer vkd.destroyImageView(device, test_image_view, null);
 
@@ -696,11 +704,6 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     errdefer vkd.destroySampler(device, test_image_sampler, null);
 
     {
-        const model_desc_buffer_info = vk.DescriptorBufferInfo{
-            .buffer = model_buffer.buffer,
-            .offset = 0,
-            .range = vk.WHOLE_SIZE,
-        };
         const model_desc_image_info = vk.DescriptorImageInfo{
             .sampler = test_image_sampler,
             .image_view = test_image_view,
@@ -713,16 +716,6 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
                 .dst_binding = 0,
                 .dst_array_element = 0,
                 .descriptor_count = 1,
-                .descriptor_type = .uniform_buffer,
-                .p_image_info = undefined,
-                .p_buffer_info = @ptrCast([*]const vk.DescriptorBufferInfo, &model_desc_buffer_info),
-                .p_texel_buffer_view = undefined,
-            },
-            .{
-                .dst_set = model_desc_set,
-                .dst_binding = 1,
-                .dst_array_element = 0,
-                .descriptor_count = 1,
                 .descriptor_type = .combined_image_sampler,
                 .p_image_info = @ptrCast([*]const vk.DescriptorImageInfo, &model_desc_image_info),
                 .p_buffer_info = undefined,
@@ -732,9 +725,63 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         vkd.updateDescriptorSets(device, model_desc_type.len, &model_desc_type, 0, undefined);
     }
 
+    // TODO(indirect): this is just test code
+    var instance_data = try std.ArrayList(DrawInstance).initCapacity(allocator, test_index_count);
+    errdefer instance_data.deinit();
+    {
+        var x: f32 = 0;
+        while (x < 32) : (x += 1) {
+            var y: f32 = 0;
+            while (y < 32) : (y += 1) {
+                instance_data.appendAssumeCapacity(.{
+                    .texture_index = 0,
+                    .tranform = zm.translation(x, y, 0),
+                });
+            }
+        }
+    }
+
+    var instance_data_buffer = try MutableBuffer.init(
+        vki,
+        physical_device,
+        vkd,
+        device,
+        non_coherent_atom_size,
+        .{ .vertex_buffer_bit = true },
+        .{ .size = @sizeOf(DrawInstance) * instance_data.items.len },
+    );
+    errdefer instance_data_buffer.deinit(vkd, device);
+    try instance_data_buffer.scheduleTransfer(0, DrawInstance, instance_data.items);
+    try instance_data_buffer.flush(vkd, device);
+
+    // create our indirect draw calls
+    var indirect_commands = try std.ArrayList(vk.DrawIndexedIndirectCommand).initCapacity(allocator, 1);
+    errdefer indirect_commands.deinit();
+    {
+        indirect_commands.appendAssumeCapacity(.{
+            .index_count = @intCast(u32, optimized_indices.len),
+            .instance_count = test_index_count,
+            .first_index = 0,
+            .vertex_offset = 0,
+            .first_instance = 0,
+        });
+    }
+
+    // create device memory for our draw calls
+    var indirect_commands_buffer = try ImmutableBuffer.init(
+        vki,
+        physical_device,
+        vkd,
+        device,
+        non_coherent_atom_size,
+        .{ .indirect_buffer_bit = true },
+        .{ .size = @sizeOf(vk.DrawIndexedIndirectCommand) * indirect_commands.items.len },
+    );
+    errdefer indirect_commands_buffer.deinit(vkd, device);
+    try buffer_staging_buffer.scheduleTransferToDst(indirect_commands_buffer.buffer, 0, vk.DrawIndexedIndirectCommand, indirect_commands.items);
+
     // transfer all data to GPU memory at the end of init
     try buffer_staging_buffer.flushAndCopyToDestination(vkd, device, null);
-    try image_staging_buffer.flushAndCopyToDestination(vkd, device, null);
 
     return RenderContext{
         .asset_handler = asset_handler,
@@ -769,11 +816,9 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         .index_buffer_size = index_buffer_size,
         .vertex_index_buffer = vertex_index_buffer,
         .camera = camera,
-        .model = model,
         .model_desc_set_layout = model_desc_set_layout,
         .model_desc_set_pool = model_desc_set_pool,
         .model_desc_set = model_desc_set,
-        .model_buffer = model_buffer,
         .queue_family_indices = queue_family_indices,
         .primary_graphics_queue = primary_graphics_queue,
         .secondary_graphics_queue = secondary_graphics_queue,
@@ -785,7 +830,10 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
         .test_image_view = test_image_view,
         .test_image_sampler = test_image_sampler,
         .texture_image_memory = texture_image_memory,
-        .index_count = @intCast(u32, optimized_indices.len),
+        .instance_data = instance_data,
+        .instance_data_buffer = instance_data_buffer,
+        .indirect_commands = indirect_commands,
+        .indirect_commands_buffer = indirect_commands_buffer,
     };
 }
 
@@ -890,8 +938,8 @@ inline fn calculateCamera(degree_fovy: f32, swapchain_extent: vk.Extent2D) Camer
     const aspect = @intToFloat(f32, swapchain_extent.width) / @intToFloat(f32, swapchain_extent.height);
     return Camera{
         .view = zm.lookAtRh(
-            zm.f32x4(3.0, 3.0, 10.0, 1.0), // pos
-            zm.f32x4(0.0, 0.0, 0.0, 1.0), // target
+            zm.f32x4(16.0, 16.0, 40.0, 1.0), // pos
+            zm.f32x4(8, 8, 0, 1.0), // target
             zm.f32x4(0.0, -1.0, 0.0, 0.0), // up
         ),
         .projection = zm.perspectiveFovRh(fovy, aspect, 0.01, 300),
@@ -904,6 +952,11 @@ pub fn deinit(self: RenderContext, allocator: Allocator) void {
     zmesh.deinit();
     self.asset_handler.deinit(allocator);
 
+    self.instance_data.deinit();
+    self.instance_data_buffer.deinit(self.vkd, self.device);
+    self.indirect_commands.deinit();
+    self.indirect_commands_buffer.deinit(self.vkd, self.device);
+
     self.vkd.destroyImageView(self.device, self.depth_image_view, null);
     self.vkd.freeMemory(self.device, self.depth_image_memory, null);
     self.vkd.destroyImage(self.device, self.depth_image, null);
@@ -915,7 +968,6 @@ pub fn deinit(self: RenderContext, allocator: Allocator) void {
 
     self.buffer_staging_buffer.deinit(self.vkd, self.device);
     self.image_staging_buffer.deinit(self.vkd, self.device);
-    self.model_buffer.deinit(self.vkd, self.device);
     self.vertex_index_buffer.deinit(self.vkd, self.device);
 
     self.vkd.destroyDescriptorPool(self.device, self.model_desc_set_pool, null);
@@ -985,17 +1037,6 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window) !void {
 
     try self.vkd.resetFences(self.device, 1, @ptrCast([*]const vk.Fence, &self.in_flight_fences[self.current_frame]));
 
-    self.model.transform = zm.mul(self.model.transform, zm.rotationY(0.0001));
-    try self.model_buffer.scheduleTransfer(
-        0,
-        Model,
-        &[_]Model{self.model},
-    );
-    try self.model_buffer.flush(
-        self.vkd,
-        self.device,
-    );
-
     try self.vkd.resetCommandPool(self.device, self.command_pools[self.current_frame], .{});
 
     {
@@ -1055,10 +1096,18 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window) !void {
         const vertex_offsets = [_]vk.DeviceSize{0};
         self.vkd.cmdBindVertexBuffers(
             command_buffer,
-            0,
+            Vertex.binding,
             1,
             @ptrCast([*]const vk.Buffer, &self.vertex_index_buffer.buffer),
-            @ptrCast([*]const vk.DeviceSize, &vertex_offsets),
+            &vertex_offsets,
+        );
+        const instance_offset = [_]vk.DeviceSize{0};
+        self.vkd.cmdBindVertexBuffers(
+            command_buffer,
+            DrawInstance.binding,
+            1,
+            @ptrCast([*]const vk.Buffer, &self.instance_data_buffer.buffer),
+            &instance_offset,
         );
 
         const index_buffer_offset = self.vertex_buffer_size;
@@ -1068,8 +1117,23 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window) !void {
             index_buffer_offset,
             vk.IndexType.uint32,
         );
-        self.vkd.cmdBindDescriptorSets(command_buffer, .graphics, self.pipeline_layout, 0, 1, @ptrCast([*]const vk.DescriptorSet, &self.model_desc_set), 0, undefined);
-        self.vkd.cmdDrawIndexed(command_buffer, self.index_count, 1, 0, 0, 0);
+        self.vkd.cmdBindDescriptorSets(
+            command_buffer,
+            .graphics,
+            self.pipeline_layout,
+            0,
+            1,
+            @ptrCast([*]const vk.DescriptorSet, &self.model_desc_set),
+            0,
+            undefined,
+        );
+        self.vkd.cmdDrawIndexedIndirect(
+            command_buffer,
+            self.indirect_commands_buffer.buffer,
+            0,
+            @intCast(u32, self.indirect_commands.items.len),
+            @sizeOf(vk.DrawIndexedIndirectCommand),
+        );
 
         self.vkd.cmdEndRenderPass(command_buffer);
         try self.vkd.endCommandBuffer(command_buffer);
@@ -1431,6 +1495,7 @@ inline fn createLogicalDevice(
 
     const device_features = vk.PhysicalDeviceFeatures{
         .sampler_anisotropy = vk.TRUE,
+        .multi_draw_indirect = vk.TRUE,
     };
     const create_info = vk.DeviceCreateInfo{
         .flags = .{},
@@ -1667,14 +1732,17 @@ inline fn createGraphicsPipeline(
         frag_stage_info,
     };
 
-    const vertex_binding_description = Vertex.getBindingDescription();
-    const vertex_attribute_description = Vertex.getAttributeDescriptions();
+    const binding_descriptions = [_]vk.VertexInputBindingDescription{
+        Vertex.getBindingDescription(),
+        DrawInstance.getBindingDescription(),
+    };
+    const attribute_descriptions = Vertex.getAttributeDescriptions() ++ DrawInstance.getAttributeDescriptions();
     const vertex_input_info = vk.PipelineVertexInputStateCreateInfo{
         .flags = .{},
-        .vertex_binding_description_count = 1,
-        .p_vertex_binding_descriptions = @ptrCast([*]const vk.VertexInputBindingDescription, &vertex_binding_description),
-        .vertex_attribute_description_count = vertex_attribute_description.len,
-        .p_vertex_attribute_descriptions = &vertex_attribute_description,
+        .vertex_binding_description_count = binding_descriptions.len,
+        .p_vertex_binding_descriptions = &binding_descriptions,
+        .vertex_attribute_description_count = attribute_descriptions.len,
+        .p_vertex_attribute_descriptions = &attribute_descriptions,
     };
 
     const input_assembly = vk.PipelineInputAssemblyStateCreateInfo{
@@ -1876,6 +1944,26 @@ inline fn instantiateFramebuffer(
         framebuffer.* = try vkd.createFramebuffer(device, &framebuffer_info, null);
         created_framebuffers = i;
     }
+}
+
+inline fn createDescriptorSetLayout(vkd: DeviceDispatch, device: vk.Device) !vk.DescriptorSetLayout {
+    // TODO (indirect): we need multiple descriptors using VK_EXT_descriptor_indexing: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VK_EXT_descriptor_indexing.html
+    const texture_layout_binding = vk.DescriptorSetLayoutBinding{
+        .binding = 0,
+        .descriptor_type = .combined_image_sampler,
+        .descriptor_count = 1,
+        .stage_flags = .{ .fragment_bit = true },
+        .p_immutable_samplers = null,
+    };
+    const bindings = [_]vk.DescriptorSetLayoutBinding{
+        texture_layout_binding,
+    };
+    const layout_info = vk.DescriptorSetLayoutCreateInfo{
+        .flags = .{},
+        .binding_count = bindings.len,
+        .p_bindings = &bindings,
+    };
+    return vkd.createDescriptorSetLayout(device, &layout_info, null);
 }
 
 // TODO: BasicImage.zig
