@@ -8,11 +8,19 @@ const vk = @import("vulkan");
 pub const required_extensions = [_][:0]const u8{
     vk.extension_info.khr_swapchain.name,
     vk.extension_info.khr_synchronization_2.name,
+    // At the time of writing, descriptor indexing is supported by 48% of hardware
+    // This is not as bad as it sounds. As an example Nvidias 600 series support this extension.
+    vk.extension_info.khr_maintenance_3.name,
+    vk.extension_info.ext_descriptor_indexing.name,
 };
 
 pub const required_extensions_cstr = [_][*:0]const u8{
     vk.extension_info.khr_swapchain.name,
     vk.extension_info.khr_synchronization_2.name,
+    // At the time of writing, descriptor indexing is supported by 48% of hardware
+    // This is not as bad as it sounds. As an example Nvidias 600 series support this extension.
+    vk.extension_info.khr_maintenance_3.name,
+    vk.extension_info.ext_descriptor_indexing.name,
 };
 
 const desired_layers = [_][*:0]const u8{

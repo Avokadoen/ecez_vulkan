@@ -1,12 +1,14 @@
 #version 450
 
-layout(location = 0) in vec3 fragTexCoord;
+#extension GL_EXT_nonuniform_qualifier : require
+
+layout(location = 0) in vec2 fragTexCoord;
+layout(location = 1) flat in int fragTexIndex;
 
 layout(location = 0) out vec4 outColor;
 
-// TODO: array of normal samplers instead using indexed descriptor sets
-layout(binding = 0) uniform sampler2D texSampler;
+layout (set = 0, binding = 0) uniform sampler2D textureSamplers[];
 
 void main() {
-    outColor = texture(texSampler, fragTexCoord.xy);
+    outColor = texture(textureSamplers[nonuniformEXT(fragTexIndex)], fragTexCoord);
 }

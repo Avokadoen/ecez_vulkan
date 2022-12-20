@@ -245,6 +245,9 @@ pub fn init(
         const glfw_extensions = try glfw.getRequiredInstanceExtensions();
         try extensions.appendSlice(glfw_extensions);
 
+        // required extension for VK_EXT_DESCRIPTOR_INDEXING_EXTENSION
+        try extensions.append(vk.extension_info.khr_get_physical_device_properties_2.name);
+
         if (is_debug_build) {
             // add the debug utils extension
             try extensions.append(vk.extension_info.ext_debug_utils.name);
@@ -409,14 +412,16 @@ pub fn init(
     }
 
     // TODO(indirect): rename this model stuff to something instance related
-    const model_desc_set_layout = try createDescriptorSetLayout(vkd, device);
+    // TODO: multiple textures
+    const texture_count = 1;
+    const model_desc_set_layout = try createDescriptorSetLayout(vkd, device, texture_count);
     errdefer vkd.destroyDescriptorSetLayout(device, model_desc_set_layout, null);
 
     const model_desc_set_pool = blk: {
         const pool_size = [_]vk.DescriptorPoolSize{
             .{
                 .type = .combined_image_sampler,
-                .descriptor_count = 1,
+                .descriptor_count = texture_count,
             },
         };
         const pool_info = vk.DescriptorPoolCreateInfo{
@@ -429,8 +434,15 @@ pub fn init(
     };
     errdefer vkd.destroyDescriptorPool(device, model_desc_set_pool, null);
 
+    const variable_counts = [_]u32{texture_count};
+    const variable_descriptor_count_alloc_info = vk.DescriptorSetVariableDescriptorCountAllocateInfoEXT{
+        .descriptor_set_count = variable_counts.len,
+        .p_descriptor_counts = &variable_counts,
+    };
+
     const model_desc_set = blk: {
         const alloc_info = vk.DescriptorSetAllocateInfo{
+            .p_next = &variable_descriptor_count_alloc_info,
             .descriptor_pool = model_desc_set_pool,
             .descriptor_set_count = 1,
             .p_set_layouts = @ptrCast([*]const vk.DescriptorSetLayout, &model_desc_set_layout),
@@ -704,20 +716,21 @@ pub fn init(
     errdefer vkd.destroySampler(device, test_image_sampler, null);
 
     {
-        const model_desc_image_info = vk.DescriptorImageInfo{
+        // for each loaded model texture
+        const model_desc_image_info = [texture_count]vk.DescriptorImageInfo{.{
             .sampler = test_image_sampler,
             .image_view = test_image_view,
             .image_layout = .shader_read_only_optimal,
-        };
+        }};
 
         const model_desc_type = [_]vk.WriteDescriptorSet{
             .{
                 .dst_set = model_desc_set,
                 .dst_binding = 0,
                 .dst_array_element = 0,
-                .descriptor_count = 1,
+                .descriptor_count = @intCast(u32, model_desc_image_info.len),
                 .descriptor_type = .combined_image_sampler,
-                .p_image_info = @ptrCast([*]const vk.DescriptorImageInfo, &model_desc_image_info),
+                .p_image_info = &model_desc_image_info,
                 .p_buffer_info = undefined,
                 .p_texel_buffer_view = undefined,
             },
@@ -1493,11 +1506,19 @@ inline fn createLogicalDevice(
         },
     };
 
+    // request features needed to dynamically select textures at runtime
+    const descriptor_indexing_freatures = vk.PhysicalDeviceDescriptorIndexingFeatures{
+        .shader_sampled_image_array_non_uniform_indexing = vk.TRUE,
+        .descriptor_binding_variable_descriptor_count = vk.TRUE,
+        .runtime_descriptor_array = vk.TRUE,
+    };
+
     const device_features = vk.PhysicalDeviceFeatures{
         .sampler_anisotropy = vk.TRUE,
         .multi_draw_indirect = vk.TRUE,
     };
     const create_info = vk.DeviceCreateInfo{
+        .p_next = &descriptor_indexing_freatures,
         .flags = .{},
         .queue_create_info_count = if (one_index) 1 else queue_create_info.len,
         .p_queue_create_infos = &queue_create_info,
@@ -1946,19 +1967,27 @@ inline fn instantiateFramebuffer(
     }
 }
 
-inline fn createDescriptorSetLayout(vkd: DeviceDispatch, device: vk.Device) !vk.DescriptorSetLayout {
-    // TODO (indirect): we need multiple descriptors using VK_EXT_descriptor_indexing: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VK_EXT_descriptor_indexing.html
+fn createDescriptorSetLayout(vkd: DeviceDispatch, device: vk.Device, texture_count: u32) !vk.DescriptorSetLayout {
     const texture_layout_binding = vk.DescriptorSetLayoutBinding{
         .binding = 0,
         .descriptor_type = .combined_image_sampler,
-        .descriptor_count = 1,
+        .descriptor_count = texture_count,
         .stage_flags = .{ .fragment_bit = true },
         .p_immutable_samplers = null,
     };
     const bindings = [_]vk.DescriptorSetLayoutBinding{
         texture_layout_binding,
     };
+
+    const binding_flags = [bindings.len]vk.DescriptorBindingFlagsEXT{.{ .variable_descriptor_count_bit = true }};
+    // Mark descriptor binding as variable count
+    const set_layout_binding_flags = vk.DescriptorSetLayoutBindingFlagsCreateInfoEXT{
+        .binding_count = binding_flags.len,
+        .p_binding_flags = &binding_flags,
+    };
+
     const layout_info = vk.DescriptorSetLayoutCreateInfo{
+        .p_next = &set_layout_binding_flags,
         .flags = .{},
         .binding_count = bindings.len,
         .p_bindings = &bindings,
