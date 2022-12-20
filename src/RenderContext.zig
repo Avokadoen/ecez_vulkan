@@ -24,7 +24,7 @@ const sync = @import("sync.zig");
 const dmem = @import("device_memory.zig");
 const application_ext_layers = @import("application_ext_layers.zig");
 
-const is_debug_build = builtin.mode == .Debug;
+pub const is_debug_build = builtin.mode == .Debug;
 const max_frames_in_flight = 2;
 
 const RenderContext = @This();
@@ -192,7 +192,7 @@ pub fn init(allocator: Allocator, window: glfw.Window) !RenderContext {
     errdefer asset_handler.deinit(allocator);
 
     // bind the glfw instance proc pointer
-    const vk_proc = @ptrCast(*const fn (instance: vk.Instance, procname: [*:0]const u8) ?glfw.VKProc, &glfw.getInstanceProcAddress);
+    const vk_proc = @ptrCast(*const fn (instance: vk.Instance, procname: [*:0]const u8) callconv(.C) vk.PfnVoidFunction, &glfw.getInstanceProcAddress);
     const vkb = try BaseDispatch.load(vk_proc);
 
     // get validation layers if we are in debug mode

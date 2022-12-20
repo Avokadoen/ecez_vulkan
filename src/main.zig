@@ -13,13 +13,17 @@ const VelocityComp = struct {
 };
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    // create a gpa with default configuration
+    var alloc = if (RenderContext.is_debug_build) std.heap.GeneralPurposeAllocator(.{}){} else std.heap.c_allocator;
     defer {
-        if (gpa.deinit()) {
-            std.log.err("leak detected", .{});
+        if (RenderContext.is_debug_build) {
+            const leak = alloc.deinit();
+            if (leak) {
+                std.debug.print("leak detected in gpa!", .{});
+            }
         }
     }
-    const allocator = gpa.allocator();
+    const allocator = if (RenderContext.is_debug_build) alloc.allocator() else alloc;
 
     // var world = try ecez.WorldBuilder().WithComponents(.{ PositionComp, VelocityComp }).init(allocator, .{});
     // defer world.deinit();
