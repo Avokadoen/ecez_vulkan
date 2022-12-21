@@ -182,9 +182,9 @@ vertex_index_buffer: ImmutableBuffer,
 camera: Camera,
 
 // TODO: this is data we should get from ecez!
-model_desc_set_layout: vk.DescriptorSetLayout,
-model_desc_set_pool: vk.DescriptorPool,
-model_desc_set: vk.DescriptorSet,
+instances_desc_set_layout: vk.DescriptorSetLayout,
+instances_desc_set_pool: vk.DescriptorPool,
+instances_desc_set: vk.DescriptorSet,
 
 queue_family_indices: QueueFamilyIndices,
 primary_graphics_queue: vk.Queue,
@@ -411,13 +411,11 @@ pub fn init(
         }
     }
 
-    // TODO(indirect): rename this model stuff to something instance related
-    // TODO: multiple textures
     const texture_count = 1;
-    const model_desc_set_layout = try createDescriptorSetLayout(vkd, device, texture_count);
-    errdefer vkd.destroyDescriptorSetLayout(device, model_desc_set_layout, null);
+    const instances_desc_set_layout = try createDescriptorSetLayout(vkd, device, texture_count);
+    errdefer vkd.destroyDescriptorSetLayout(device, instances_desc_set_layout, null);
 
-    const model_desc_set_pool = blk: {
+    const instances_desc_set_pool = blk: {
         const pool_size = [_]vk.DescriptorPoolSize{
             .{
                 .type = .combined_image_sampler,
@@ -432,7 +430,7 @@ pub fn init(
         };
         break :blk try vkd.createDescriptorPool(device, &pool_info, null);
     };
-    errdefer vkd.destroyDescriptorPool(device, model_desc_set_pool, null);
+    errdefer vkd.destroyDescriptorPool(device, instances_desc_set_pool, null);
 
     const variable_counts = [_]u32{texture_count};
     const variable_descriptor_count_alloc_info = vk.DescriptorSetVariableDescriptorCountAllocateInfoEXT{
@@ -440,12 +438,12 @@ pub fn init(
         .p_descriptor_counts = &variable_counts,
     };
 
-    const model_desc_set = blk: {
+    const instances_desc_set = blk: {
         const alloc_info = vk.DescriptorSetAllocateInfo{
             .p_next = &variable_descriptor_count_alloc_info,
-            .descriptor_pool = model_desc_set_pool,
+            .descriptor_pool = instances_desc_set_pool,
             .descriptor_set_count = 1,
-            .p_set_layouts = @ptrCast([*]const vk.DescriptorSetLayout, &model_desc_set_layout),
+            .p_set_layouts = @ptrCast([*]const vk.DescriptorSetLayout, &instances_desc_set_layout),
         };
         var desc_set: vk.DescriptorSet = undefined;
         try vkd.allocateDescriptorSets(device, &alloc_info, @ptrCast([*]vk.DescriptorSet, &desc_set));
@@ -463,7 +461,7 @@ pub fn init(
         const pipeline_layout_info = vk.PipelineLayoutCreateInfo{
             .flags = .{},
             .set_layout_count = 1,
-            .p_set_layouts = @ptrCast([*]const vk.DescriptorSetLayout, &model_desc_set_layout),
+            .p_set_layouts = @ptrCast([*]const vk.DescriptorSetLayout, &instances_desc_set_layout),
             .push_constant_range_count = 1,
             .p_push_constant_ranges = @ptrCast([*]const vk.PushConstantRange, &push_constant_range),
         };
@@ -717,25 +715,25 @@ pub fn init(
 
     {
         // for each loaded model texture
-        const model_desc_image_info = [texture_count]vk.DescriptorImageInfo{.{
+        const instances_desc_image_info = [texture_count]vk.DescriptorImageInfo{.{
             .sampler = test_image_sampler,
             .image_view = test_image_view,
             .image_layout = .shader_read_only_optimal,
         }};
 
-        const model_desc_type = [_]vk.WriteDescriptorSet{
+        const instances_desc_type = [_]vk.WriteDescriptorSet{
             .{
-                .dst_set = model_desc_set,
+                .dst_set = instances_desc_set,
                 .dst_binding = 0,
                 .dst_array_element = 0,
-                .descriptor_count = @intCast(u32, model_desc_image_info.len),
+                .descriptor_count = @intCast(u32, instances_desc_image_info.len),
                 .descriptor_type = .combined_image_sampler,
-                .p_image_info = &model_desc_image_info,
+                .p_image_info = &instances_desc_image_info,
                 .p_buffer_info = undefined,
                 .p_texel_buffer_view = undefined,
             },
         };
-        vkd.updateDescriptorSets(device, model_desc_type.len, &model_desc_type, 0, undefined);
+        vkd.updateDescriptorSets(device, instances_desc_type.len, &instances_desc_type, 0, undefined);
     }
 
     // TODO(indirect): this is just test code
@@ -829,9 +827,9 @@ pub fn init(
         .index_buffer_size = index_buffer_size,
         .vertex_index_buffer = vertex_index_buffer,
         .camera = camera,
-        .model_desc_set_layout = model_desc_set_layout,
-        .model_desc_set_pool = model_desc_set_pool,
-        .model_desc_set = model_desc_set,
+        .instances_desc_set_layout = instances_desc_set_layout,
+        .instances_desc_set_pool = instances_desc_set_pool,
+        .instances_desc_set = instances_desc_set,
         .queue_family_indices = queue_family_indices,
         .primary_graphics_queue = primary_graphics_queue,
         .secondary_graphics_queue = secondary_graphics_queue,
@@ -983,8 +981,8 @@ pub fn deinit(self: RenderContext, allocator: Allocator) void {
     self.image_staging_buffer.deinit(self.vkd, self.device);
     self.vertex_index_buffer.deinit(self.vkd, self.device);
 
-    self.vkd.destroyDescriptorPool(self.device, self.model_desc_set_pool, null);
-    self.vkd.destroyDescriptorSetLayout(self.device, self.model_desc_set_layout, null);
+    self.vkd.destroyDescriptorPool(self.device, self.instances_desc_set_pool, null);
+    self.vkd.destroyDescriptorSetLayout(self.device, self.instances_desc_set_layout, null);
 
     for (self.framebuffers) |framebuffer| {
         self.vkd.destroyFramebuffer(self.device, framebuffer, null);
@@ -1136,7 +1134,7 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window) !void {
             self.pipeline_layout,
             0,
             1,
-            @ptrCast([*]const vk.DescriptorSet, &self.model_desc_set),
+            @ptrCast([*]const vk.DescriptorSet, &self.instances_desc_set),
             0,
             undefined,
         );
