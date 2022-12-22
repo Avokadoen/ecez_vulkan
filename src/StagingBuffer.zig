@@ -161,6 +161,9 @@ pub const Buffer = struct {
         }
 
         const raw_data = std.mem.sliceAsBytes(data);
+        if (raw_data.len > self.ctx.size) {
+            return error.InsufficentStagingSize; // the staging buffer can not transfer this data in one transfer
+        }
         if (self.ctx.incoherent_memory_bytes + raw_data.len > self.ctx.size) {
             return error.OutOfMemory;
         }
@@ -297,6 +300,9 @@ pub const Image = struct {
         }
 
         const raw_data = std.mem.sliceAsBytes(data);
+        if (raw_data.len > self.ctx.size) {
+            return error.InsufficentStagingSize; // the staging buffer can not transfer this data in one transfer
+        }
         if (self.ctx.incoherent_memory_bytes + raw_data.len > self.ctx.size) {
             return error.OutOfMemory;
         }

@@ -34,6 +34,11 @@ const RenderContext = @This();
 
 pub const MeshHandle = u32;
 
+pub const MeshInitializeContex = struct {
+    cgltf_path: []const u8,
+    instance_count: u32,
+};
+
 const PushConstant = struct {
     camera_projection_view: zm.Mat,
 
@@ -176,15 +181,19 @@ image_staging_buffer: StagingBuffer.Image,
 
 vertex_buffer_size: vk.DeviceSize,
 index_buffer_size: vk.DeviceSize,
+index_buffer_offset: vk.DeviceSize,
 // TODO: rename
 vertex_index_buffer: ImmutableBuffer,
 
 camera: Camera,
 
-// TODO: this is data we should get from ecez!
 instances_desc_set_layout: vk.DescriptorSetLayout,
 instances_desc_set_pool: vk.DescriptorPool,
 instances_desc_set: vk.DescriptorSet,
+
+instance_images: []vk.Image,
+instance_image_views: []vk.ImageView,
+instances_image_sampler: vk.Sampler,
 
 queue_family_indices: QueueFamilyIndices,
 primary_graphics_queue: vk.Queue,
@@ -195,13 +204,9 @@ depth_image: vk.Image,
 depth_image_view: vk.ImageView,
 depth_image_memory: vk.DeviceMemory,
 
-test_image: vk.Image,
-test_image_view: vk.ImageView,
-test_image_sampler: vk.Sampler,
-
 texture_image_memory: vk.DeviceMemory,
 
-// TODO: double or triple buffer device data to avoid bubble
+// TODO: double or triple buffer device data to avoid pipeline bubbles
 instance_data: std.ArrayList(DrawInstance),
 instance_data_buffer: MutableBuffer,
 // Store the indirect draw commands containing index offsets and instance count per object
@@ -213,6 +218,7 @@ indirect_commands_buffer: ImmutableBuffer,
 pub fn init(
     allocator: Allocator,
     window: glfw.Window,
+    model_initalizers: []const MeshInitializeContex,
 ) !RenderContext {
     zmesh.init(allocator);
     errdefer zmesh.deinit();
@@ -369,7 +375,6 @@ pub fn init(
         physical_device,
         vkd,
         device,
-        non_coherent_atom_size,
         &[_]vk.Image{depth_image},
     );
     errdefer vkd.freeMemory(device, depth_image_memory, null);
@@ -411,7 +416,8 @@ pub fn init(
         }
     }
 
-    const texture_count = 1;
+    // we have one base color texture per mesh
+    const texture_count = @intCast(u32, model_initalizers.len);
     const instances_desc_set_layout = try createDescriptorSetLayout(vkd, device, texture_count);
     errdefer vkd.destroyDescriptorSetLayout(device, instances_desc_set_layout, null);
 
@@ -579,84 +585,14 @@ pub fn init(
         non_coherent_atom_size,
         queue_family_indices.transferIndex(),
         transfer_queue,
-        .{},
+        .{ .size = 64 * dmem.bytes_in_megabyte },
     );
     errdefer buffer_staging_buffer.deinit(vkd, device);
 
-    var mesh_indices = std.ArrayList(u32).init(allocator);
-    defer mesh_indices.deinit();
-
-    const content_path = try asset_handler.getCPath(allocator, "models/ScifiHelmet/ScifiHelmet.gltf");
-    defer allocator.free(content_path);
-
-    const data = try zmesh.io.parseAndLoadFile(content_path);
-    defer zmesh.io.freeData(data);
-
-    var mesh_positions = std.ArrayList([3]f32).init(allocator);
-    defer mesh_positions.deinit();
-
-    // var mesh_normals = std.ArrayList([3]f32).init(allocator);
-    // defer mesh_normals.deinit();
-
-    var mesh_text_coords = std.ArrayList([2]f32).init(allocator);
-    defer mesh_text_coords.deinit();
-
-    var loaded_image = blk: {
-        const image_uri = std.mem.span(data.images.?[0].uri.?);
-        const join_path = [_][]const u8{ content_path, "..", image_uri };
-        const image_path = try std.fs.path.resolve(allocator, join_path[0..]);
-        defer allocator.free(image_path);
-
-        break :blk try zigimg.Image.fromFilePath(allocator, image_path);
-    };
-    defer loaded_image.deinit();
-
-    try zmesh.io.appendMeshPrimitive(
-        data, // *zmesh.io.cgltf.Data
-        0, // mesh index
-        0, // gltf primitive index (submesh index)
-        &mesh_indices,
-        &mesh_positions,
-        null, // &mesh_normals, // normals (optional)
-        &mesh_text_coords, // texcoords (optional)
-        null, // tangents (optional)
-    );
-
-    var vertices = try allocator.alloc(Vertex, mesh_positions.items.len);
-    defer allocator.free(vertices);
-    for (vertices) |*vert, i| {
-        vert.* = Vertex{
-            .pos = mesh_positions.items[i],
-            .text_coord = mesh_text_coords.items[i],
-        };
-    }
-
-    var remap = try allocator.alloc(u32, mesh_indices.items.len);
-    defer allocator.free(remap);
-
-    const num_unique_vertices = zmesh.opt.generateVertexRemap(
-        remap, // 'vertex remap' (destination)
-        null, // non-optimized indices
-        Vertex, // Zig type describing your vertex
-        vertices, // non-optimized vertices
-    );
-
-    var optimized_indices = try allocator.alloc(u32, mesh_indices.items.len);
-    defer allocator.free(optimized_indices);
-    zmesh.opt.remapIndexBuffer(optimized_indices, mesh_indices.items, remap);
-
-    var optimized_vertices = try allocator.alloc(Vertex, num_unique_vertices);
-    defer allocator.free(optimized_vertices);
-    zmesh.opt.remapVertexBuffer(Vertex, optimized_vertices, vertices, remap);
-
-    zmesh.opt.optimizeVertexCache(optimized_indices, optimized_indices, optimized_vertices.len);
-    zmesh.opt.optimizeOverdraw(optimized_indices, optimized_indices, Vertex, optimized_vertices, 1.05);
-
     // TODO: simplfiy buffer aligned creation (createBuffer accept size array and do this internally)
-    const vertex_buffer_size = dmem.getAlignedDeviceSize(non_coherent_atom_size, optimized_vertices.len * @sizeOf(Vertex));
-    const index_buffer_size = dmem.getAlignedDeviceSize(non_coherent_atom_size, optimized_indices.len * @sizeOf(u32));
-
-    // create device memory and transfer vertices to host
+    // TODO: let the user specify this size (we can let the app crash if they specify the wrong size >:) )
+    // We don't really know how big these buffers must be so we just allocate
+    // the biggest size recommend for a chunk of memory (256mb - some leeway)
     const vertex_index_buffer = try ImmutableBuffer.init(
         vki,
         physical_device,
@@ -664,63 +600,248 @@ pub fn init(
         device,
         non_coherent_atom_size,
         .{ .vertex_buffer_bit = true, .index_buffer_bit = true },
-        .{ .size = vertex_buffer_size + index_buffer_size },
+        .{ .size = 256 * dmem.bytes_in_megabyte },
     );
 
-    // TODO: scheduling transfer of data that is not atom aligned is problematic. How should this be communicated or enforced?
-    try buffer_staging_buffer.scheduleTransferToDst(vertex_index_buffer.buffer, 0, Vertex, optimized_vertices);
-    try buffer_staging_buffer.scheduleTransferToDst(vertex_index_buffer.buffer, vertex_buffer_size, u32, optimized_indices);
+    var vertex_buffer_size: vk.DeviceSize = 0;
+    var index_buffer_size: vk.DeviceSize = 0;
+    const index_buffer_offset = dmem.getAlignedDeviceSize(non_coherent_atom_size, vertex_index_buffer.size / 2);
 
-    const loaded_image_extent = vk.Extent2D{
-        .width = @intCast(u32, loaded_image.width),
-        .height = @intCast(u32, loaded_image.height),
-    };
+    var image_memory_offsets = try allocator.alloc(vk.DeviceSize, model_initalizers.len);
+    defer allocator.free(image_memory_offsets);
 
-    const test_image = try createImage(vkd, device, .r8g8b8a8_srgb, .{ .transfer_dst_bit = true, .sampled_bit = true }, loaded_image_extent);
-    errdefer vkd.destroyImage(device, test_image, null);
+    // TODO: errdefer: cleanup vk resources here as well
+    // all image resources needed by each model
+    var instance_images = try allocator.alloc(vk.Image, model_initalizers.len);
+    errdefer allocator.free(instance_images);
 
-    const texture_images = [_]vk.Image{test_image};
-    // TODO: create image memory for all textures
-    const texture_image_memory = try dmem.createDeviceImageMemory(vki, physical_device, vkd, device, non_coherent_atom_size, &texture_images);
+    var instance_image_views = try allocator.alloc(vk.ImageView, model_initalizers.len);
+    errdefer allocator.free(instance_image_views);
+
+    // we use the same sampler for all images
+    var instances_image_sampler = try createDefaultSampler(vkd, device, device_properties.limits);
+    errdefer vkd.destroySampler(device, instances_image_sampler, null);
+
+    // create our indirect draw calls
+    var indirect_commands = try std.ArrayList(vk.DrawIndexedIndirectCommand).initCapacity(allocator, model_initalizers.len);
+    errdefer indirect_commands.deinit();
+
+    // Load all models and process the data using meshoptimizer
+    {
+        // prepare some storage for mesh data to be loaded in
+        var mesh_indices = std.ArrayList(u32).init(allocator);
+        defer mesh_indices.deinit();
+
+        var mesh_positions = std.ArrayList([3]f32).init(allocator);
+        defer mesh_positions.deinit();
+
+        // var mesh_normals = std.ArrayList([3]f32).init(allocator);
+        // defer mesh_normals.deinit();
+
+        var mesh_text_coords = std.ArrayList([2]f32).init(allocator);
+        defer mesh_text_coords.deinit();
+
+        var vertices = std.ArrayList(Vertex).init(allocator);
+        defer vertices.deinit();
+
+        var remap = std.ArrayList(u32).init(allocator);
+        defer remap.deinit();
+
+        var optimized_indices = std.ArrayList(u32).init(allocator);
+        defer optimized_indices.deinit();
+
+        var optimized_vertices = std.ArrayList(Vertex).init(allocator);
+        defer optimized_vertices.deinit();
+
+        var vertex_buffer_position: vk.DeviceSize = 0;
+        defer vertex_buffer_size = vertex_buffer_position;
+
+        var index_buffer_position: vk.DeviceSize = index_buffer_offset;
+        defer index_buffer_size = index_buffer_position - index_buffer_offset;
+
+        // counts used by the indirect commands
+        var index_count: u32 = 0;
+        var instance_count: u32 = 0;
+
+        // TODO: storing all images on CPU is a bit sad ...
+        // TODO: proper errdefer clean images
+        var model_base_color_images = try allocator.alloc(zigimg.Image, model_initalizers.len);
+        defer allocator.free(model_base_color_images);
+
+        for (model_initalizers) |model_init, i| {
+            // Do not reuse data from previous iterations (but reuse the memory)
+            defer {
+                // cant OOM when requesting 0
+                mesh_indices.resize(0) catch unreachable;
+                mesh_positions.resize(0) catch unreachable;
+                mesh_text_coords.resize(0) catch unreachable;
+                vertices.resize(0) catch unreachable;
+            }
+
+            const content_path = try asset_handler.getCPath(allocator, model_init.cgltf_path);
+            defer allocator.free(content_path);
+
+            const gltf_data = try zmesh.io.parseAndLoadFile(content_path);
+            defer zmesh.io.freeData(gltf_data);
+
+            try zmesh.io.appendMeshPrimitive(
+                gltf_data, // *zmesh.io.cgltf.Data
+                0, // mesh index
+                0, // gltf primitive index (submesh index)
+                &mesh_indices,
+                &mesh_positions,
+                null, // &mesh_normals, // normals (optional)
+                &mesh_text_coords, // texcoords (optional)
+                null, // tangents (optional)
+            );
+
+            try vertices.ensureUnusedCapacity(mesh_positions.items.len);
+            for (mesh_positions.items) |pos, j| {
+                vertices.appendAssumeCapacity(Vertex{
+                    .pos = pos,
+                    .text_coord = mesh_text_coords.items[j],
+                });
+            }
+
+            try remap.resize(mesh_indices.items.len);
+            const num_unique_vertices = zmesh.opt.generateVertexRemap(
+                remap.items, // 'vertex remap' (destination)
+                null, // non-optimized indices
+                Vertex, // Zig type describing your vertex
+                vertices.items, // non-optimized vertices
+            );
+
+            try optimized_indices.resize(mesh_indices.items.len);
+            zmesh.opt.remapIndexBuffer(optimized_indices.items, mesh_indices.items, remap.items);
+
+            try optimized_vertices.resize(num_unique_vertices);
+            zmesh.opt.remapVertexBuffer(Vertex, optimized_vertices.items, vertices.items, remap.items);
+
+            zmesh.opt.optimizeVertexCache(optimized_indices.items, optimized_indices.items, optimized_vertices.items.len);
+            zmesh.opt.optimizeOverdraw(optimized_indices.items, optimized_indices.items, Vertex, optimized_vertices.items, 1.05);
+            // TODO: utilize meshoptimizer quantization here
+            // TODO: LOD!
+
+            // TODO: scheduling transfer of data that is not atom aligned is problematic. How should this be communicated or enforced?
+            // TODO: move this fancy pancy staging behaviour into a staging buffer function instead of copy pasting code?
+
+            // attempt to schedule transfer of vertex data, perform a transfer if the stage is out of slots
+            buffer_staging_buffer.scheduleTransferToDst(vertex_index_buffer.buffer, vertex_buffer_position, Vertex, optimized_vertices.items) catch |err| {
+                // flush all pending memory
+                try buffer_staging_buffer.flushAndCopyToDestination(vkd, device, null);
+                if (err == error.InsufficentStagingSize) {
+                    // TODO: too lazy to implement this now, implement this later:
+                    unreachable;
+                    // const transfer_size = std.mem.sliceAsBytes(optimized_vertices.items).len;
+                    // // Ceil divide
+                    // var transfers_needed = @min(1, (transfer_size + buffer_staging_buffer.ctx.size - 1) / buffer_staging_buffer.ctx.size);
+                    // var i: usize = 0;
+                    // while (i < transfers_needed) : (i += 1) {
+                    //     buffer_staging_buffer.scheduleTransferToDst(vertex_index_buffer.buffer, )
+                    // }
+                } else {
+                    // This transfer cant fail because we know the staging buffer has sufficent size (did not hit error.InsufficentStagingSize)
+                    // and we have emptied the buffer for pending transfers.
+                    buffer_staging_buffer.scheduleTransferToDst(vertex_index_buffer.buffer, vertex_buffer_position, Vertex, optimized_vertices.items) catch unreachable;
+                }
+            };
+
+            // attempt to schedule transfer to dst, perform a transfer if the stage is out of slots
+            buffer_staging_buffer.scheduleTransferToDst(vertex_index_buffer.buffer, index_buffer_position, u32, optimized_indices.items) catch |err| {
+                try buffer_staging_buffer.flushAndCopyToDestination(vkd, device, null);
+                if (err == error.InsufficentStagingSize) {
+                    // TODO:
+                    unreachable; // very much reachable :)
+                } else {
+                    // This transfer cant fail because we know the staging buffer has sufficent size (did not hit error.InsufficentStagingSize)
+                    // and we have emptied the buffer for pending transfers.
+                    buffer_staging_buffer.scheduleTransferToDst(vertex_index_buffer.buffer, index_buffer_position, u32, optimized_indices.items) catch unreachable;
+                }
+            };
+
+            // flush data to gpu before we reuse cpu data for next model
+            try buffer_staging_buffer.flushAndCopyToDestination(vkd, device, null);
+            index_buffer_position += std.mem.sliceAsBytes(optimized_indices.items).len;
+
+            // load image on cpu
+            model_base_color_images[i] = blk: {
+                const image_uri = std.mem.span(gltf_data.images.?[0].uri.?);
+                const join_path = [_][]const u8{ content_path, "..", image_uri };
+                const image_path = try std.fs.path.resolve(allocator, join_path[0..]);
+                defer allocator.free(image_path);
+
+                break :blk try zigimg.Image.fromFilePath(allocator, image_path);
+            };
+            defer model_base_color_images[i].deinit();
+
+            // store the byte size of the image for when we bind the memory later
+            // the sizes will be shifted once to get offsets later
+            image_memory_offsets[i] = @intCast(vk.DeviceSize, model_base_color_images[i].imageByteSize());
+
+            const loaded_image_extent = vk.Extent2D{
+                .width = @intCast(u32, model_base_color_images[i].width),
+                .height = @intCast(u32, model_base_color_images[i].height),
+            };
+
+            instance_images[i] = try createImage(vkd, device, .r8g8b8a8_srgb, .{ .transfer_dst_bit = true, .sampled_bit = true }, loaded_image_extent);
+            errdefer vkd.destroyImage(device, instance_images[i], null);
+
+            // TODO: only load image dimension in this loop and then we can load the actual image
+            //       in a later loop after image memory has been created.
+            // Note: we can not force a flush in the loop for this currently because the image memory does not exist yet
+            try image_staging_buffer.scheduleLayoutTransitionBeforeTransfers(instance_images[i], .{
+                .format = .r8g8b8a8_srgb,
+                .old_layout = .undefined,
+                .new_layout = .transfer_dst_optimal,
+            });
+            try image_staging_buffer.scheduleTransferToDst(instance_images[i], loaded_image_extent, u8, model_base_color_images[i].pixels.asBytes());
+            try image_staging_buffer.scheduleLayoutTransitionAfterTransfers(instance_images[i], .{
+                .format = .r8g8b8a8_srgb,
+                .old_layout = .transfer_dst_optimal,
+                .new_layout = .shader_read_only_optimal,
+            });
+
+            // populate our indirect commands with some initial state
+            indirect_commands.appendAssumeCapacity(vk.DrawIndexedIndirectCommand{
+                .index_count = @intCast(u32, optimized_indices.items.len),
+                .instance_count = model_init.instance_count,
+                .first_index = index_count,
+                .vertex_offset = @intCast(i32, vertex_buffer_position),
+                .first_instance = instance_count,
+            });
+
+            vertex_buffer_position += std.mem.sliceAsBytes(optimized_vertices.items).len;
+            index_count += @intCast(u32, optimized_indices.items.len);
+            instance_count += model_init.instance_count;
+        }
+    }
+
+    const texture_image_memory = try dmem.createDeviceImageMemory(vki, physical_device, vkd, device, instance_images);
     errdefer vkd.freeMemory(device, texture_image_memory, null);
 
-    try vkd.bindImageMemory(device, test_image, texture_image_memory, 0);
+    // move sizes to the right to get offsets instead
+    std.mem.rotate(vk.DeviceSize, image_memory_offsets, image_memory_offsets.len - 1);
+    image_memory_offsets[0] = 0;
 
-    image_staging_buffer.scheduleLayoutTransitionBeforeTransfers(test_image, .{
-        .format = .r8g8b8a8_srgb,
-        .old_layout = .undefined,
-        .new_layout = .transfer_dst_optimal,
-    }) catch unreachable;
+    for (instance_images) |vk_image, i| {
+        try vkd.bindImageMemory(device, vk_image, texture_image_memory, image_memory_offsets[i]);
 
-    try image_staging_buffer.scheduleTransferToDst(
-        test_image,
-        loaded_image_extent,
-        u8,
-        loaded_image.pixels.asBytes(),
-    );
-
-    image_staging_buffer.scheduleLayoutTransitionAfterTransfers(test_image, .{
-        .format = .r8g8b8a8_srgb,
-        .old_layout = .transfer_dst_optimal,
-        .new_layout = .shader_read_only_optimal,
-    }) catch unreachable;
-
+        instance_image_views[i] = try createDefaultImageView(vkd, device, vk_image, .r8g8b8a8_srgb, .{ .color_bit = true });
+        errdefer vkd.destroyImageView(device, instance_image_views[i], null);
+    }
     try image_staging_buffer.flushAndCopyToDestination(vkd, device, null);
 
-    const test_image_view = try createDefaultImageView(vkd, device, test_image, .r8g8b8a8_srgb, .{ .color_bit = true });
-    errdefer vkd.destroyImageView(device, test_image_view, null);
-
-    const test_image_sampler = try createDefaultSampler(vkd, device, device_properties.limits);
-    errdefer vkd.destroySampler(device, test_image_sampler, null);
-
     {
+        var instances_desc_image_info = try allocator.alloc(vk.DescriptorImageInfo, texture_count);
+        defer allocator.free(instances_desc_image_info);
         // for each loaded model texture
-        const instances_desc_image_info = [texture_count]vk.DescriptorImageInfo{.{
-            .sampler = test_image_sampler,
-            .image_view = test_image_view,
-            .image_layout = .shader_read_only_optimal,
-        }};
-
+        for (instance_image_views) |image_view, i| {
+            instances_desc_image_info[i] = vk.DescriptorImageInfo{
+                .sampler = instances_image_sampler,
+                .image_view = image_view,
+                .image_layout = .shader_read_only_optimal,
+            };
+        }
         const instances_desc_type = [_]vk.WriteDescriptorSet{
             .{
                 .dst_set = instances_desc_set,
@@ -728,7 +849,7 @@ pub fn init(
                 .dst_array_element = 0,
                 .descriptor_count = @intCast(u32, instances_desc_image_info.len),
                 .descriptor_type = .combined_image_sampler,
-                .p_image_info = &instances_desc_image_info,
+                .p_image_info = instances_desc_image_info.ptr,
                 .p_buffer_info = undefined,
                 .p_texel_buffer_view = undefined,
             },
@@ -737,15 +858,17 @@ pub fn init(
     }
 
     // TODO(indirect): this is just test code
-    var instance_data = try std.ArrayList(DrawInstance).initCapacity(allocator, test_index_count);
+    var instance_data = try std.ArrayList(DrawInstance).initCapacity(allocator, 512);
     errdefer instance_data.deinit();
     {
+        var texture_index: u32 = 0;
         var x: f32 = 0;
-        while (x < 32) : (x += 1) {
+        while (x < 22) : (x += 2) {
             var y: f32 = 0;
-            while (y < 32) : (y += 1) {
+            while (y < 22) : (y += 2) {
+                texture_index += @floatToInt(u32, x * y) % 256;
                 instance_data.appendAssumeCapacity(.{
-                    .texture_index = 0,
+                    .texture_index = texture_index,
                     .tranform = zm.translation(x, y, 0),
                 });
             }
@@ -764,19 +887,6 @@ pub fn init(
     errdefer instance_data_buffer.deinit(vkd, device);
     try instance_data_buffer.scheduleTransfer(0, DrawInstance, instance_data.items);
     try instance_data_buffer.flush(vkd, device);
-
-    // create our indirect draw calls
-    var indirect_commands = try std.ArrayList(vk.DrawIndexedIndirectCommand).initCapacity(allocator, 1);
-    errdefer indirect_commands.deinit();
-    {
-        indirect_commands.appendAssumeCapacity(.{
-            .index_count = @intCast(u32, optimized_indices.len),
-            .instance_count = test_index_count,
-            .first_index = 0,
-            .vertex_offset = 0,
-            .first_instance = 0,
-        });
-    }
 
     // create device memory for our draw calls
     var indirect_commands_buffer = try ImmutableBuffer.init(
@@ -837,14 +947,15 @@ pub fn init(
         .depth_image = depth_image,
         .depth_image_memory = depth_image_memory,
         .depth_image_view = depth_image_view,
-        .test_image = test_image,
-        .test_image_view = test_image_view,
-        .test_image_sampler = test_image_sampler,
+        .instance_images = instance_images,
+        .instance_image_views = instance_image_views,
+        .instances_image_sampler = instances_image_sampler,
         .texture_image_memory = texture_image_memory,
         .instance_data = instance_data,
         .instance_data_buffer = instance_data_buffer,
         .indirect_commands = indirect_commands,
         .indirect_commands_buffer = indirect_commands_buffer,
+        .index_buffer_offset = index_buffer_offset,
     };
 }
 
@@ -912,7 +1023,6 @@ pub fn recreatePresentResources(self: *RenderContext, window: glfw.Window) !void
             self.physical_device,
             self.vkd,
             self.device,
-            self.device_properties.limits.non_coherent_atom_size,
             &[_]vk.Image{self.depth_image},
         );
         errdefer self.vkd.freeMemory(self.device, self.depth_image_memory, null);
@@ -972,10 +1082,16 @@ pub fn deinit(self: RenderContext, allocator: Allocator) void {
     self.vkd.freeMemory(self.device, self.depth_image_memory, null);
     self.vkd.destroyImage(self.device, self.depth_image, null);
 
-    self.vkd.destroySampler(self.device, self.test_image_sampler, null);
-    self.vkd.destroyImageView(self.device, self.test_image_view, null);
+    self.vkd.destroySampler(self.device, self.instances_image_sampler, null);
+    for (self.instance_image_views) |image_view| {
+        self.vkd.destroyImageView(self.device, image_view, null);
+    }
+    allocator.free(self.instance_image_views);
     self.vkd.freeMemory(self.device, self.texture_image_memory, null);
-    self.vkd.destroyImage(self.device, self.test_image, null);
+    for (self.instance_images) |image| {
+        self.vkd.destroyImage(self.device, image, null);
+    }
+    allocator.free(self.instance_images);
 
     self.buffer_staging_buffer.deinit(self.vkd, self.device);
     self.image_staging_buffer.deinit(self.vkd, self.device);
@@ -1121,11 +1237,10 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window) !void {
             &instance_offset,
         );
 
-        const index_buffer_offset = self.vertex_buffer_size;
         self.vkd.cmdBindIndexBuffer(
             command_buffer,
             self.vertex_index_buffer.buffer,
-            index_buffer_offset,
+            self.index_buffer_offset,
             vk.IndexType.uint32,
         );
         self.vkd.cmdBindDescriptorSets(

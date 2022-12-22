@@ -58,14 +58,13 @@ pub inline fn createDeviceImageMemory(
     physical_device: vk.PhysicalDevice,
     vkd: DeviceDispatch,
     device: vk.Device,
-    non_coherent_atom_size: vk.DeviceSize,
     images: []const vk.Image,
 ) !vk.DeviceMemory {
     var allocation_size: vk.DeviceSize = 0;
     var memory_type_bits: u32 = 0;
     for (images) |image| {
         const memory_requirements = vkd.getImageMemoryRequirements(device, image);
-        allocation_size += getAlignedDeviceSize(non_coherent_atom_size, memory_requirements.size);
+        allocation_size += getAlignedDeviceSize(memory_requirements.alignment, memory_requirements.size);
         memory_type_bits |= memory_requirements.memory_type_bits;
     }
 
