@@ -676,6 +676,9 @@ pub fn init(
                 mesh_positions.resize(0) catch unreachable;
                 mesh_text_coords.resize(0) catch unreachable;
                 vertices.resize(0) catch unreachable;
+                remap.resize(0) catch unreachable;
+                optimized_indices.resize(0) catch unreachable;
+                optimized_vertices.resize(0) catch unreachable;
             }
 
             const content_path = try asset_handler.getCPath(allocator, model_init.cgltf_path);
