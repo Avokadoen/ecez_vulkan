@@ -39,13 +39,16 @@ pub fn main() !void {
     });
     defer window.destroy();
 
-    var context = try RenderContext.init(allocator, window, &[_]RenderContext.MeshInitializeContex{ .{
-        .cgltf_path = "models/ScifiHelmet/ScifiHelmet.gltf",
-        .instance_count = 256,
-    }, .{
-        .cgltf_path = "models/BoxTextured/BoxTextured.gltf",
-        .instance_count = 256,
-    } });
+    var context = try RenderContext.init(allocator, window, &[_]RenderContext.MeshInitializeContex{
+        .{
+            .cgltf_path = "models/ScifiHelmet/SciFiHelmet.gltf",
+            .instance_count = 1,
+        },
+        .{
+            .cgltf_path = "models/BoxTextured/BoxTextured.gltf",
+            .instance_count = 1,
+        },
+    });
     defer context.deinit(allocator);
 
     context.handleFramebufferResize(window);

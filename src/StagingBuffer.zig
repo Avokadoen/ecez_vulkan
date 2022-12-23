@@ -52,7 +52,7 @@ const StagingContext = struct {
     ) !StagingContext {
         std.debug.assert(config.size != 0);
 
-        const size = dmem.getAlignedDeviceSize(non_coherent_atom_size, config.size);
+        const size = dmem.pow2Align(non_coherent_atom_size, config.size);
 
         // create device memory and transfer vertices to host
         const buffer = try dmem.createBuffer(
@@ -155,7 +155,7 @@ pub const Buffer = struct {
         destination_offset: vk.DeviceSize,
         comptime T: type,
         data: []const T,
-    ) !void {
+    ) !vk.DeviceSize {
         if (self.ctx.memory_in_flight >= max_transfers_scheduled) {
             return error.OutOfTransferSlots;
         }
@@ -168,7 +168,11 @@ pub const Buffer = struct {
             return error.OutOfMemory;
         }
 
-        const aligned_memory_size = dmem.getAlignedDeviceSize(self.ctx.non_coherent_atom_size, @intCast(vk.DeviceSize, raw_data.len));
+        const aligned_memory_size = dmem.pow2Align(
+            self.ctx.non_coherent_atom_size,
+            @intCast(vk.DeviceSize, raw_data.len),
+        );
+
         var vacant_device_data = self.ctx.device_data[self.ctx.incoherent_memory_bytes..];
         std.mem.copy(u8, vacant_device_data, raw_data);
 
@@ -184,6 +188,8 @@ pub const Buffer = struct {
 
         self.ctx.memory_in_flight += 1;
         self.ctx.incoherent_memory_bytes += aligned_memory_size;
+
+        return aligned_memory_size;
     }
 
     pub fn flushAndCopyToDestination(
@@ -307,7 +313,7 @@ pub const Image = struct {
             return error.OutOfMemory;
         }
 
-        const aligned_memory_size = dmem.getAlignedDeviceSize(self.ctx.non_coherent_atom_size, @intCast(vk.DeviceSize, raw_data.len));
+        const aligned_memory_size = dmem.pow2Align(self.ctx.non_coherent_atom_size, @intCast(vk.DeviceSize, raw_data.len));
         var vacant_device_data = self.ctx.device_data[self.ctx.incoherent_memory_bytes..];
         std.mem.copy(u8, vacant_device_data, raw_data);
 

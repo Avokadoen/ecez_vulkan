@@ -19,7 +19,7 @@ pub inline fn createBuffer(
 ) !vk.Buffer {
     const buffer_info = vk.BufferCreateInfo{
         .flags = .{},
-        .size = getAlignedDeviceSize(non_coherent_atom_size, size),
+        .size = pow2Align(non_coherent_atom_size, size),
         .usage = usage,
         .sharing_mode = .exclusive,
         .queue_family_index_count = 0,
@@ -64,7 +64,7 @@ pub inline fn createDeviceImageMemory(
     var memory_type_bits: u32 = 0;
     for (images) |image| {
         const memory_requirements = vkd.getImageMemoryRequirements(device, image);
-        allocation_size += getAlignedDeviceSize(memory_requirements.alignment, memory_requirements.size);
+        allocation_size += pow2Align(memory_requirements.alignment, memory_requirements.size);
         memory_type_bits |= memory_requirements.memory_type_bits;
     }
 
@@ -102,7 +102,7 @@ pub fn transferMemoryToDevice(
 ) !void {
     const raw_data = std.mem.sliceAsBytes(data);
 
-    const aligned_memory_size = getAlignedDeviceSize(non_coherent_atom_size, @intCast(vk.DeviceSize, raw_data.len));
+    const aligned_memory_size = pow2Align(non_coherent_atom_size, @intCast(vk.DeviceSize, raw_data.len));
 
     var device_data = blk: {
         var raw_device_ptr = try vkd.mapMemory(device, memory, 0, aligned_memory_size, .{});
@@ -121,6 +121,11 @@ pub fn transferMemoryToDevice(
     try vkd.flushMappedMemoryRanges(device, 1, @ptrCast([*]const vk.MappedMemoryRange, &mapped_range));
 }
 
-pub inline fn getAlignedDeviceSize(non_coherent_atom_size: vk.DeviceSize, size: vk.DeviceSize) vk.DeviceSize {
-    return (size + non_coherent_atom_size - 1) & ~(non_coherent_atom_size - 1);
+pub inline fn pow2Align(alignment: vk.DeviceSize, size: vk.DeviceSize) vk.DeviceSize {
+    return (size + alignment - 1) & ~(alignment - 1);
+}
+
+pub inline fn aribtraryAlign(alignment: vk.DeviceSize, size: vk.DeviceSize) vk.DeviceSize {
+    const rem = size % alignment;
+    return if (rem != 0) size + (alignment - rem) else size;
 }

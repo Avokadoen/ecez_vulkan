@@ -86,7 +86,6 @@ const Vertex = struct {
     }
 };
 
-const test_index_count = 32 * 32;
 const DrawInstance = struct {
     pub const binding = 1;
 
@@ -590,7 +589,7 @@ pub fn init(
     errdefer buffer_staging_buffer.deinit(vkd, device);
 
     // TODO: simplfiy buffer aligned creation (createBuffer accept size array and do this internally)
-    // TODO: let the user specify this size (we can let the app crash if they specify the wrong size >:) )
+    // TODO: find a way to query vertex and index size before commiting GPU memory
     // We don't really know how big these buffers must be so we just allocate
     // the biggest size recommend for a chunk of memory (256mb - some leeway)
     const vertex_index_buffer = try ImmutableBuffer.init(
@@ -605,7 +604,7 @@ pub fn init(
 
     var vertex_buffer_size: vk.DeviceSize = 0;
     var index_buffer_size: vk.DeviceSize = 0;
-    const index_buffer_offset = dmem.getAlignedDeviceSize(non_coherent_atom_size, vertex_index_buffer.size / 2);
+    const index_buffer_offset = dmem.pow2Align(non_coherent_atom_size, vertex_index_buffer.size / 2);
 
     var image_memory_offsets = try allocator.alloc(vk.DeviceSize, model_initalizers.len);
     defer allocator.free(image_memory_offsets);
@@ -660,7 +659,6 @@ pub fn init(
         defer index_buffer_size = index_buffer_position - index_buffer_offset;
 
         // counts used by the indirect commands
-        var index_count: u32 = 0;
         var instance_count: u32 = 0;
 
         // TODO: storing all images on CPU is a bit sad ...
@@ -729,7 +727,12 @@ pub fn init(
             // TODO: move this fancy pancy staging behaviour into a staging buffer function instead of copy pasting code?
 
             // attempt to schedule transfer of vertex data, perform a transfer if the stage is out of slots
-            buffer_staging_buffer.scheduleTransferToDst(vertex_index_buffer.buffer, vertex_buffer_position, Vertex, optimized_vertices.items) catch |err| {
+            var vertex_size = buffer_staging_buffer.scheduleTransferToDst(
+                vertex_index_buffer.buffer,
+                vertex_buffer_position,
+                Vertex,
+                optimized_vertices.items,
+            ) catch |err| blk: {
                 // flush all pending memory
                 try buffer_staging_buffer.flushAndCopyToDestination(vkd, device, null);
                 if (err == error.InsufficentStagingSize) {
@@ -745,12 +748,25 @@ pub fn init(
                 } else {
                     // This transfer cant fail because we know the staging buffer has sufficent size (did not hit error.InsufficentStagingSize)
                     // and we have emptied the buffer for pending transfers.
-                    buffer_staging_buffer.scheduleTransferToDst(vertex_index_buffer.buffer, vertex_buffer_position, Vertex, optimized_vertices.items) catch unreachable;
+                    break :blk buffer_staging_buffer.scheduleTransferToDst(
+                        vertex_index_buffer.buffer,
+                        vertex_buffer_position,
+                        Vertex,
+                        optimized_vertices.items,
+                    ) catch unreachable;
                 }
             };
 
+            // Vertex has a bad alignment (20) so we need to do some funky alignment!
+            vertex_size = dmem.aribtraryAlign(@sizeOf(Vertex), vertex_size);
+
             // attempt to schedule transfer to dst, perform a transfer if the stage is out of slots
-            buffer_staging_buffer.scheduleTransferToDst(vertex_index_buffer.buffer, index_buffer_position, u32, optimized_indices.items) catch |err| {
+            const index_size = buffer_staging_buffer.scheduleTransferToDst(
+                vertex_index_buffer.buffer,
+                index_buffer_position,
+                u32,
+                optimized_indices.items,
+            ) catch |err| blk: {
                 try buffer_staging_buffer.flushAndCopyToDestination(vkd, device, null);
                 if (err == error.InsufficentStagingSize) {
                     // TODO:
@@ -758,13 +774,17 @@ pub fn init(
                 } else {
                     // This transfer cant fail because we know the staging buffer has sufficent size (did not hit error.InsufficentStagingSize)
                     // and we have emptied the buffer for pending transfers.
-                    buffer_staging_buffer.scheduleTransferToDst(vertex_index_buffer.buffer, index_buffer_position, u32, optimized_indices.items) catch unreachable;
+                    break :blk buffer_staging_buffer.scheduleTransferToDst(
+                        vertex_index_buffer.buffer,
+                        index_buffer_position,
+                        u32,
+                        optimized_indices.items,
+                    ) catch unreachable;
                 }
             };
 
             // flush data to gpu before we reuse cpu data for next model
             try buffer_staging_buffer.flushAndCopyToDestination(vkd, device, null);
-            index_buffer_position += std.mem.sliceAsBytes(optimized_indices.items).len;
 
             // load image on cpu
             model_base_color_images[i] = blk: {
@@ -779,7 +799,10 @@ pub fn init(
 
             // store the byte size of the image for when we bind the memory later
             // the sizes will be shifted once to get offsets later
-            image_memory_offsets[i] = @intCast(vk.DeviceSize, model_base_color_images[i].imageByteSize());
+            image_memory_offsets[i] = @intCast(
+                vk.DeviceSize,
+                model_base_color_images[i].imageByteSize(),
+            ) + if (i > 0) image_memory_offsets[i - 1] else 0;
 
             const loaded_image_extent = vk.Extent2D{
                 .width = @intCast(u32, model_base_color_images[i].width),
@@ -797,7 +820,12 @@ pub fn init(
                 .old_layout = .undefined,
                 .new_layout = .transfer_dst_optimal,
             });
-            try image_staging_buffer.scheduleTransferToDst(instance_images[i], loaded_image_extent, u8, model_base_color_images[i].pixels.asBytes());
+            try image_staging_buffer.scheduleTransferToDst(
+                instance_images[i],
+                loaded_image_extent,
+                u8,
+                model_base_color_images[i].pixels.asBytes(),
+            );
             try image_staging_buffer.scheduleLayoutTransitionAfterTransfers(instance_images[i], .{
                 .format = .r8g8b8a8_srgb,
                 .old_layout = .transfer_dst_optimal,
@@ -806,15 +834,15 @@ pub fn init(
 
             // populate our indirect commands with some initial state
             indirect_commands.appendAssumeCapacity(vk.DrawIndexedIndirectCommand{
-                .index_count = @intCast(u32, optimized_indices.items.len),
+                .vertex_offset = @intCast(i32, vertex_buffer_position / @sizeOf(Vertex)),
+                .first_index = @intCast(u32, index_buffer_position - index_buffer_offset) / 4,
+                .index_count = @intCast(u32, index_size / 4),
                 .instance_count = model_init.instance_count,
-                .first_index = index_count,
-                .vertex_offset = @intCast(i32, vertex_buffer_position),
                 .first_instance = instance_count,
             });
 
-            vertex_buffer_position += std.mem.sliceAsBytes(optimized_vertices.items).len;
-            index_count += @intCast(u32, optimized_indices.items.len);
+            vertex_buffer_position += vertex_size;
+            index_buffer_position += index_size;
             instance_count += model_init.instance_count;
         }
     }
@@ -861,21 +889,19 @@ pub fn init(
     }
 
     // TODO(indirect): this is just test code
-    var instance_data = try std.ArrayList(DrawInstance).initCapacity(allocator, 512);
+    var instance_data = try std.ArrayList(DrawInstance).initCapacity(allocator, 2);
     errdefer instance_data.deinit();
     {
-        var texture_index: u32 = 0;
-        var x: f32 = 0;
-        while (x < 22) : (x += 2) {
-            var y: f32 = 0;
-            while (y < 22) : (y += 2) {
-                texture_index += @floatToInt(u32, x * y) % 256;
-                instance_data.appendAssumeCapacity(.{
-                    .texture_index = texture_index,
-                    .tranform = zm.translation(x, y, 0),
-                });
-            }
-        }
+        instance_data.appendAssumeCapacity(.{
+            .texture_index = 0,
+            .tranform = zm.translation(-1, 0, 0),
+        });
+        instance_data.appendAssumeCapacity(.{
+            .texture_index = 1,
+            .tranform = zm.translation(1, 0, 0),
+        });
+
+        std.debug.print("\nTODO: test instance data here\n", .{});
     }
 
     var instance_data_buffer = try MutableBuffer.init(
@@ -902,7 +928,12 @@ pub fn init(
         .{ .size = @sizeOf(vk.DrawIndexedIndirectCommand) * indirect_commands.items.len },
     );
     errdefer indirect_commands_buffer.deinit(vkd, device);
-    try buffer_staging_buffer.scheduleTransferToDst(indirect_commands_buffer.buffer, 0, vk.DrawIndexedIndirectCommand, indirect_commands.items);
+    _ = try buffer_staging_buffer.scheduleTransferToDst(
+        indirect_commands_buffer.buffer,
+        0,
+        vk.DrawIndexedIndirectCommand,
+        indirect_commands.items,
+    );
 
     // transfer all data to GPU memory at the end of init
     try buffer_staging_buffer.flushAndCopyToDestination(vkd, device, null);
@@ -1062,9 +1093,9 @@ inline fn calculateCamera(degree_fovy: f32, swapchain_extent: vk.Extent2D) Camer
     const aspect = @intToFloat(f32, swapchain_extent.width) / @intToFloat(f32, swapchain_extent.height);
     return Camera{
         .view = zm.lookAtRh(
-            zm.f32x4(16.0, 16.0, 40.0, 1.0), // pos
-            zm.f32x4(8, 8, 0, 1.0), // target
-            zm.f32x4(0.0, -1.0, 0.0, 0.0), // up
+            zm.f32x4(0.0, 0.0, 5.0, 1.0), // pos
+            zm.f32x4(0.0, 0.0, 1.0, 1.0), // target
+            zm.f32x4(0.0, 1.0, 0.0, 0.0), // up
         ),
         .projection = zm.perspectiveFovRh(fovy, aspect, 0.01, 300),
     };
@@ -1278,7 +1309,12 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window) !void {
         .signal_semaphore_count = 1,
         .p_signal_semaphores = render_finish_semaphore,
     };
-    try self.vkd.queueSubmit(self.primary_graphics_queue, 1, @ptrCast([*]const vk.SubmitInfo, &submit_info), self.in_flight_fences[self.current_frame]);
+    try self.vkd.queueSubmit(
+        self.primary_graphics_queue,
+        1,
+        @ptrCast([*]const vk.SubmitInfo, &submit_info),
+        self.in_flight_fences[self.current_frame],
+    );
 
     const recreate_present_resources = blk: {
         const present_info = vk.PresentInfoKHR{
@@ -1359,7 +1395,7 @@ inline fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki:
             const limits_info = @typeInfo(vk.PhysicalDeviceLimits).Struct;
             limit_grading: inline for (limits_info.fields) |field| {
                 // TODO: check arrays and flags as well
-                if (field.field_type != u32 and field.field_type != f32) {
+                if (field.type != u32 and field.type != f32) {
                     continue :limit_grading;
                 }
 
@@ -1389,7 +1425,7 @@ inline fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki:
         var current_feature_sum: u32 = 0;
         const feature_info = @typeInfo(vk.PhysicalDeviceFeatures).Struct;
         inline for (feature_info.fields) |field| {
-            if (field.field_type != vk.Bool32) {
+            if (field.type != vk.Bool32) {
                 @compileError("unexpected field type"); // something has changed in vk wrapper
             }
 

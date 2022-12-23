@@ -52,7 +52,7 @@ pub fn build(b: *std.build.Builder) void {
     // TODO: -O (optimize), -I (includes)
     //  !always have -g as last entry! (see glslc_len definition)
     const include_shader_debug = b.option(bool, "shader-debug-info", "include shader debug info, default is false") orelse false;
-    const glslc_flags = [_][]const u8{ "glslc", "--target-env=vulkan1.3", "-g" };
+    const glslc_flags = [_][]const u8{ "glslc", "--target-env=vulkan1.2", "-g" };
     const glslc_len = if (include_shader_debug) glslc_flags.len else glslc_flags.len - 1;
     const shader_comp = vkgen.ShaderCompileStep.init(
         b,

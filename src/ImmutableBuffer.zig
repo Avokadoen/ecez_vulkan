@@ -33,7 +33,7 @@ pub inline fn init(
 ) !ImmutableBuffer {
     std.debug.assert(config.size != 0);
 
-    const size = dmem.getAlignedDeviceSize(non_coherent_atom_size, config.size);
+    const size = dmem.pow2Align(non_coherent_atom_size, config.size);
 
     // create device memory and transfer vertices to host
     const buffer = try dmem.createBuffer(

@@ -45,7 +45,7 @@ pub inline fn init(
 ) !MutableBuffer {
     std.debug.assert(config.size != 0);
 
-    const size = dmem.getAlignedDeviceSize(non_coherent_atom_size, config.size);
+    const size = dmem.pow2Align(non_coherent_atom_size, config.size);
 
     // create device memory and transfer vertices to host
     const buffer = try dmem.createBuffer(
@@ -105,7 +105,7 @@ pub inline fn scheduleTransfer(
     var data_slice = self.device_data[offset..];
     std.mem.copy(u8, data_slice, raw_data);
 
-    const aligned_memory_size = dmem.getAlignedDeviceSize(self.non_coherent_atom_size, @intCast(vk.DeviceSize, raw_data.len));
+    const aligned_memory_size = dmem.pow2Align(self.non_coherent_atom_size, @intCast(vk.DeviceSize, raw_data.len));
 
     self.incoherent_memory_ranges[self.incoherent_memory_count] = vk.MappedMemoryRange{
         .memory = self.memory,
