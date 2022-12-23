@@ -258,10 +258,10 @@ pub const Image = struct {
 
     ctx: StagingContext,
 
-    transitions_before_tranfer_in_flight: u32 = 0,
+    transitions_before_transfer_in_flight: u32 = 0,
     image_transitions_before: [max_transfers_scheduled / 2]ImageTransitionJob = undefined,
 
-    transitions_after_tranfer_in_flight: u32 = 0,
+    transitions_after_transfer_in_flight: u32 = 0,
     image_transitions_after: [max_transfers_scheduled / 2]ImageTransitionJob = undefined,
 
     image_destinations: [max_transfers_scheduled]ImageTransferJob = undefined,
@@ -337,16 +337,16 @@ pub const Image = struct {
         image: vk.Image,
         transition: ImageTransition,
     ) !void {
-        if (self.transitions_before_tranfer_in_flight >= max_transfers_scheduled / 2) {
+        if (self.transitions_before_transfer_in_flight >= max_transfers_scheduled / 2) {
             return error.OutOfTransitionBeforeTransferSlots;
         }
 
-        self.image_transitions_before[self.transitions_before_tranfer_in_flight] = ImageTransitionJob{
+        self.image_transitions_before[self.transitions_before_transfer_in_flight] = ImageTransitionJob{
             .image = image,
             .transition = transition,
         };
 
-        self.transitions_before_tranfer_in_flight += 1;
+        self.transitions_before_transfer_in_flight += 1;
     }
 
     pub fn scheduleLayoutTransitionAfterTransfers(
@@ -354,16 +354,16 @@ pub const Image = struct {
         image: vk.Image,
         transition: ImageTransition,
     ) !void {
-        if (self.transitions_after_tranfer_in_flight >= max_transfers_scheduled / 2) {
+        if (self.transitions_after_transfer_in_flight >= max_transfers_scheduled / 2) {
             return error.OutOfTransitionAfterTransferSlots;
         }
 
-        self.image_transitions_after[self.transitions_after_tranfer_in_flight] = ImageTransitionJob{
+        self.image_transitions_after[self.transitions_after_transfer_in_flight] = ImageTransitionJob{
             .image = image,
             .transition = transition,
         };
 
-        self.transitions_after_tranfer_in_flight += 1;
+        self.transitions_after_transfer_in_flight += 1;
     }
 
     pub fn flushAndCopyToDestination(
@@ -375,8 +375,8 @@ pub const Image = struct {
         // TODO: propert errdefers in function
 
         if (self.ctx.memory_in_flight == 0 and
-            self.transitions_before_tranfer_in_flight == 0 and
-            self.transitions_after_tranfer_in_flight == 0)
+            self.transitions_before_transfer_in_flight == 0 and
+            self.transitions_after_transfer_in_flight == 0)
         {
             return;
         }
@@ -391,7 +391,7 @@ pub const Image = struct {
         };
         try vkd.beginCommandBuffer(self.ctx.command_buffer, &begin_info);
 
-        for (self.image_transitions_before[0..self.transitions_before_tranfer_in_flight]) |transition_job| {
+        for (self.image_transitions_before[0..self.transitions_before_transfer_in_flight]) |transition_job| {
             const transition = transition_job.transition;
             try transitionImage(
                 vkd,
@@ -420,14 +420,15 @@ pub const Image = struct {
                 .depth = 1,
             },
         };
-        for (self.image_destinations[0..self.ctx.memory_in_flight]) |dest| {
+        for (self.image_destinations[0..self.ctx.memory_in_flight]) |dest, i| {
+            region.buffer_offset = self.ctx.mapped_ranges[i].offset;
             region.image_extent.width = dest.width;
             region.image_extent.height = dest.height;
 
             vkd.cmdCopyBufferToImage(self.ctx.command_buffer, self.ctx.buffer, dest.image, .transfer_dst_optimal, 1, @ptrCast([*]const vk.BufferImageCopy, &region));
         }
 
-        for (self.image_transitions_after[0..self.transitions_after_tranfer_in_flight]) |transition_job| {
+        for (self.image_transitions_after[0..self.transitions_after_transfer_in_flight]) |transition_job| {
             const transition = transition_job.transition;
             try transitionImage(
                 vkd,
@@ -460,8 +461,8 @@ pub const Image = struct {
 
         self.ctx.memory_in_flight = 0;
         self.ctx.incoherent_memory_bytes = 0;
-        self.transitions_before_tranfer_in_flight = 0;
-        self.transitions_after_tranfer_in_flight = 0;
+        self.transitions_before_transfer_in_flight = 0;
+        self.transitions_after_transfer_in_flight = 0;
     }
 
     inline fn transitionImage(

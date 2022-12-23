@@ -625,6 +625,11 @@ pub fn init(
     var indirect_commands = try std.ArrayList(vk.DrawIndexedIndirectCommand).initCapacity(allocator, model_initalizers.len);
     errdefer indirect_commands.deinit();
 
+    // TODO: storing all images on CPU is a bit sad ...
+    // TODO: proper errdefer clean images
+    var model_base_color_images = try allocator.alloc(zigimg.Image, model_initalizers.len);
+    defer allocator.free(model_base_color_images);
+
     // Load all models and process the data using meshoptimizer
     {
         // prepare some storage for mesh data to be loaded in
@@ -660,11 +665,6 @@ pub fn init(
 
         // counts used by the indirect commands
         var instance_count: u32 = 0;
-
-        // TODO: storing all images on CPU is a bit sad ...
-        // TODO: proper errdefer clean images
-        var model_base_color_images = try allocator.alloc(zigimg.Image, model_initalizers.len);
-        defer allocator.free(model_base_color_images);
 
         for (model_initalizers) |model_init, i| {
             // Do not reuse data from previous iterations (but reuse the memory)
@@ -795,7 +795,6 @@ pub fn init(
 
                 break :blk try zigimg.Image.fromFilePath(allocator, image_path);
             };
-            defer model_base_color_images[i].deinit();
 
             // store the byte size of the image for when we bind the memory later
             // the sizes will be shifted once to get offsets later
@@ -861,6 +860,10 @@ pub fn init(
         errdefer vkd.destroyImageView(device, instance_image_views[i], null);
     }
     try image_staging_buffer.flushAndCopyToDestination(vkd, device, null);
+
+    for (model_base_color_images) |*cpu_image| {
+        cpu_image.deinit();
+    }
 
     {
         var instances_desc_image_info = try allocator.alloc(vk.DescriptorImageInfo, texture_count);

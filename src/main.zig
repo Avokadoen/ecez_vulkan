@@ -41,11 +41,11 @@ pub fn main() !void {
 
     var context = try RenderContext.init(allocator, window, &[_]RenderContext.MeshInitializeContex{
         .{
-            .cgltf_path = "models/ScifiHelmet/SciFiHelmet.gltf",
+            .cgltf_path = "models/BoxTextured/BoxTextured.gltf",
             .instance_count = 1,
         },
         .{
-            .cgltf_path = "models/BoxTextured/BoxTextured.gltf",
+            .cgltf_path = "models/ScifiHelmet/SciFiHelmet.gltf",
             .instance_count = 1,
         },
     });
