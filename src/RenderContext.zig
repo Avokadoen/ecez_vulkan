@@ -32,11 +32,23 @@ const RenderContext = @This();
 // TODO: reduce debug assert, replace with errors
 // TODO: use sync2
 
-pub const MeshHandle = u32;
+pub const MeshHandle = u16;
 
-pub const MeshInitializeContex = struct {
+// TODO: evaluate if we want
+pub const InstanceHandle = packed struct {
+    mesh_handle: MeshHandle,
+    instance_handle: u48,
+};
+
+pub const MesInstancehInitializeContex = struct {
     cgltf_path: []const u8,
     instance_count: u32,
+};
+
+/// Metadata about a given grouping of instance
+const MeshInstanceContext = struct {
+    path_hash: u64,
+    total_instance_count: u32,
 };
 
 const PushConstant = struct {
@@ -186,6 +198,10 @@ vertex_index_buffer: ImmutableBuffer,
 
 camera: Camera,
 
+/// This is used to supply users with handles for any instance when
+/// they request a new object to render
+instance_contexts: []MeshInstanceContext,
+
 instances_desc_set_layout: vk.DescriptorSetLayout,
 instances_desc_set_pool: vk.DescriptorPool,
 instances_desc_set: vk.DescriptorSet,
@@ -206,27 +222,40 @@ depth_image_memory: vk.DeviceMemory,
 texture_image_memory: vk.DeviceMemory,
 
 // TODO: double or triple buffer device data to avoid pipeline bubbles
+// TODO: instance data should not be an internal concept.
+//       it should be supplied by used code each frame!
 instance_data: std.ArrayList(DrawInstance),
 instance_data_buffer: MutableBuffer,
+
 // Store the indirect draw commands containing index offsets and instance count per object
-// on the host
 indirect_commands: std.ArrayList(vk.DrawIndexedIndirectCommand),
-// on the device
 indirect_commands_buffer: ImmutableBuffer,
 
 pub fn init(
     allocator: Allocator,
     window: glfw.Window,
-    model_initalizers: []const MeshInitializeContex,
+    mesh_instance_initalizers: []const MesInstancehInitializeContex,
 ) !RenderContext {
     zmesh.init(allocator);
     errdefer zmesh.deinit();
+
+    const instance_contexts = try allocator.alloc(MeshInstanceContext, mesh_instance_initalizers.len);
+    errdefer allocator.free(instance_contexts);
+    for (mesh_instance_initalizers) |instancing_init, i| {
+        instance_contexts[i] = MeshInstanceContext{
+            .path_hash = std.hash.Murmur3_32.hash(instancing_init.cgltf_path),
+            .total_instance_count = instancing_init.instance_count,
+        };
+    }
 
     const asset_handler = try AssetHandler.init(allocator);
     errdefer asset_handler.deinit(allocator);
 
     // bind the glfw instance proc pointer
-    const vk_proc = @ptrCast(*const fn (instance: vk.Instance, procname: [*:0]const u8) callconv(.C) vk.PfnVoidFunction, &glfw.getInstanceProcAddress);
+    const vk_proc = @ptrCast(
+        *const fn (instance: vk.Instance, procname: [*:0]const u8) callconv(.C) vk.PfnVoidFunction,
+        &glfw.getInstanceProcAddress,
+    );
     const vkb = try BaseDispatch.load(vk_proc);
 
     // get validation layers if we are in debug mode
@@ -290,7 +319,6 @@ pub fn init(
             vki.destroyDebugUtilsMessengerEXT(instance, debug_messenger.?, null);
         }
     }
-
     const physical_device = try selectPhysicalDevice(allocator, instance, vki, surface);
     const device_properties = vki.getPhysicalDeviceProperties(physical_device);
     const non_coherent_atom_size = device_properties.limits.non_coherent_atom_size;
@@ -416,7 +444,7 @@ pub fn init(
     }
 
     // we have one base color texture per mesh
-    const texture_count = @intCast(u32, model_initalizers.len);
+    const texture_count = @intCast(u32, mesh_instance_initalizers.len);
     const instances_desc_set_layout = try createDescriptorSetLayout(vkd, device, texture_count);
     errdefer vkd.destroyDescriptorSetLayout(device, instances_desc_set_layout, null);
 
@@ -606,29 +634,33 @@ pub fn init(
     var index_buffer_size: vk.DeviceSize = 0;
     const index_buffer_offset = dmem.pow2Align(non_coherent_atom_size, vertex_index_buffer.size / 2);
 
-    var image_memory_offsets = try allocator.alloc(vk.DeviceSize, model_initalizers.len);
+    var image_memory_offsets = try allocator.alloc(vk.DeviceSize, mesh_instance_initalizers.len);
     defer allocator.free(image_memory_offsets);
 
     // TODO: errdefer: cleanup vk resources here as well
     // all image resources needed by each model
-    var instance_images = try allocator.alloc(vk.Image, model_initalizers.len);
+    var instance_images = try allocator.alloc(vk.Image, mesh_instance_initalizers.len);
     errdefer allocator.free(instance_images);
 
-    var instance_image_views = try allocator.alloc(vk.ImageView, model_initalizers.len);
+    var instance_image_views = try allocator.alloc(vk.ImageView, mesh_instance_initalizers.len);
     errdefer allocator.free(instance_image_views);
 
     // we use the same sampler for all images
     var instances_image_sampler = try createDefaultSampler(vkd, device, device_properties.limits);
     errdefer vkd.destroySampler(device, instances_image_sampler, null);
 
+    // TODO: use slice instead?
     // create our indirect draw calls
-    var indirect_commands = try std.ArrayList(vk.DrawIndexedIndirectCommand).initCapacity(allocator, model_initalizers.len);
+    var indirect_commands = try std.ArrayList(vk.DrawIndexedIndirectCommand).initCapacity(allocator, mesh_instance_initalizers.len);
     errdefer indirect_commands.deinit();
 
     // TODO: storing all images on CPU is a bit sad ...
     // TODO: proper errdefer clean images
-    var model_base_color_images = try allocator.alloc(zigimg.Image, model_initalizers.len);
+    var model_base_color_images = try allocator.alloc(zigimg.Image, mesh_instance_initalizers.len);
     defer allocator.free(model_base_color_images);
+
+    // counts used by the indirect commands and the instance data list
+    var instance_count: u32 = 0;
 
     // Load all models and process the data using meshoptimizer
     {
@@ -663,10 +695,7 @@ pub fn init(
         var index_buffer_position: vk.DeviceSize = index_buffer_offset;
         defer index_buffer_size = index_buffer_position - index_buffer_offset;
 
-        // counts used by the indirect commands
-        var instance_count: u32 = 0;
-
-        for (model_initalizers) |model_init, i| {
+        for (mesh_instance_initalizers) |model_init, i| {
             // Do not reuse data from previous iterations (but reuse the memory)
             defer {
                 // cant OOM when requesting 0
@@ -836,7 +865,7 @@ pub fn init(
                 .vertex_offset = @intCast(i32, vertex_buffer_position / @sizeOf(Vertex)),
                 .first_index = @intCast(u32, index_buffer_position - index_buffer_offset) / 4,
                 .index_count = @intCast(u32, index_size / 4),
-                .instance_count = model_init.instance_count,
+                .instance_count = 0,
                 .first_instance = instance_count,
             });
 
@@ -891,22 +920,22 @@ pub fn init(
         vkd.updateDescriptorSets(device, instances_desc_type.len, &instances_desc_type, 0, undefined);
     }
 
-    // TODO(indirect): this is just test code
-    var instance_data = try std.ArrayList(DrawInstance).initCapacity(allocator, 2);
+    var instance_data = try std.ArrayList(DrawInstance).initCapacity(allocator, instance_count);
     errdefer instance_data.deinit();
-    {
-        instance_data.appendAssumeCapacity(.{
-            .texture_index = 0,
-            .tranform = zm.translation(-1, 0, 0),
-        });
-        instance_data.appendAssumeCapacity(.{
-            .texture_index = 1,
-            .tranform = zm.translation(1, 0, 0),
-        });
-
-        std.debug.print("\nTODO: test instance data here\n", .{});
+    for (mesh_instance_initalizers) |instancing_init, i| {
+        var j: usize = 0;
+        while (j < instancing_init.instance_count) : (j += 1) {
+            instance_data.appendAssumeCapacity(.{
+                .texture_index = @intCast(u32, i),
+                .tranform = undefined,
+            });
+        }
     }
 
+    const instance_data_size = dmem.pow2Align(
+        non_coherent_atom_size,
+        instance_data.items.len * @sizeOf(DrawInstance),
+    );
     var instance_data_buffer = try MutableBuffer.init(
         vki,
         physical_device,
@@ -914,13 +943,22 @@ pub fn init(
         device,
         non_coherent_atom_size,
         .{ .vertex_buffer_bit = true },
-        .{ .size = @sizeOf(DrawInstance) * instance_data.items.len },
+        .{ .size = instance_data_size * max_frames_in_flight },
     );
     errdefer instance_data_buffer.deinit(vkd, device);
-    try instance_data_buffer.scheduleTransfer(0, DrawInstance, instance_data.items);
+    {
+        var i: usize = 0;
+        while (i < max_frames_in_flight) : (i += 1) {
+            try instance_data_buffer.scheduleTransfer(instance_data_size * i, DrawInstance, instance_data.items);
+        }
+    }
     try instance_data_buffer.flush(vkd, device);
 
     // create device memory for our draw calls
+    const indirect_commands_buffer_size = dmem.pow2Align(
+        non_coherent_atom_size,
+        @sizeOf(vk.DrawIndexedIndirectCommand) * indirect_commands.items.len,
+    );
     var indirect_commands_buffer = try ImmutableBuffer.init(
         vki,
         physical_device,
@@ -928,16 +966,25 @@ pub fn init(
         device,
         non_coherent_atom_size,
         .{ .indirect_buffer_bit = true },
-        .{ .size = @sizeOf(vk.DrawIndexedIndirectCommand) * indirect_commands.items.len },
+        .{ .size = indirect_commands_buffer_size * max_frames_in_flight },
     );
     errdefer indirect_commands_buffer.deinit(vkd, device);
-    _ = try buffer_staging_buffer.scheduleTransferToDst(
-        indirect_commands_buffer.buffer,
-        0,
-        vk.DrawIndexedIndirectCommand,
-        indirect_commands.items,
-    );
+    {
+        const indirect_commands_size = dmem.pow2Align(
+            non_coherent_atom_size,
+            indirect_commands.items.len * @sizeOf(vk.DrawIndexedIndirectCommand),
+        );
 
+        var i: usize = 0;
+        while (i < max_frames_in_flight) : (i += 1) {
+            _ = try buffer_staging_buffer.scheduleTransferToDst(
+                indirect_commands_buffer.buffer,
+                indirect_commands_size * i,
+                vk.DrawIndexedIndirectCommand,
+                indirect_commands.items,
+            );
+        }
+    }
     // transfer all data to GPU memory at the end of init
     try buffer_staging_buffer.flushAndCopyToDestination(vkd, device, null);
 
@@ -988,6 +1035,7 @@ pub fn init(
         .instance_image_views = instance_image_views,
         .instances_image_sampler = instances_image_sampler,
         .texture_image_memory = texture_image_memory,
+        .instance_contexts = instance_contexts,
         .instance_data = instance_data,
         .instance_data_buffer = instance_data_buffer,
         .indirect_commands = indirect_commands,
@@ -1110,6 +1158,7 @@ pub fn deinit(self: RenderContext, allocator: Allocator) void {
     zmesh.deinit();
     self.asset_handler.deinit(allocator);
 
+    allocator.free(self.instance_contexts);
     self.instance_data.deinit();
     self.instance_data_buffer.deinit(self.vkd, self.device);
     self.indirect_commands.deinit();
@@ -1184,7 +1233,26 @@ pub fn deinit(self: RenderContext, allocator: Allocator) void {
 }
 
 pub fn drawFrame(self: *RenderContext, window: glfw.Window) !void {
+    // TODO: do not do this every frame (every nth frame based on config instead, or delta time)
+    // start by updating any pending gpu state
+    {
+        const instance_data_size = dmem.pow2Align(
+            self.nonCoherentAtomSize(),
+            self.instance_data.items.len * @sizeOf(DrawInstance),
+        );
+        try self.instance_data_buffer.scheduleTransfer(
+            instance_data_size * self.current_frame,
+            DrawInstance,
+            self.instance_data.items,
+        );
+    }
+
     _ = try self.vkd.waitForFences(self.device, 1, @ptrCast([*]const vk.Fence, &self.in_flight_fences[self.current_frame]), vk.TRUE, std.math.maxInt(u64));
+
+    // TODO: buffers should have a flush that return the fence in order to wait on all pending transfers instead
+    //       this should also be utilized in the init function!
+    // flush instance data changes to GPU before rendering
+    try self.instance_data_buffer.flush(self.vkd, self.device);
 
     var image_index: u32 = blk: {
         const result = self.vkd.acquireNextImageKHR(self.device, self.swapchain, std.math.maxInt(u64), self.image_available_semaphores[self.current_frame], .null_handle) catch |err| {
@@ -1265,7 +1333,20 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window) !void {
             @ptrCast([*]const vk.Buffer, &self.vertex_index_buffer.buffer),
             &vertex_offsets,
         );
-        const instance_offset = [_]vk.DeviceSize{0};
+        self.vkd.cmdBindIndexBuffer(
+            command_buffer,
+            self.vertex_index_buffer.buffer,
+            self.index_buffer_offset,
+            vk.IndexType.uint32,
+        );
+
+        const instance_offset = [_]vk.DeviceSize{@intCast(
+            vk.DeviceSize,
+            dmem.pow2Align(
+                self.nonCoherentAtomSize(),
+                self.instance_data.items.len * @sizeOf(DrawInstance),
+            ) * self.current_frame,
+        )};
         self.vkd.cmdBindVertexBuffers(
             command_buffer,
             DrawInstance.binding,
@@ -1274,12 +1355,6 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window) !void {
             &instance_offset,
         );
 
-        self.vkd.cmdBindIndexBuffer(
-            command_buffer,
-            self.vertex_index_buffer.buffer,
-            self.index_buffer_offset,
-            vk.IndexType.uint32,
-        );
         self.vkd.cmdBindDescriptorSets(
             command_buffer,
             .graphics,
@@ -1290,10 +1365,18 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window) !void {
             0,
             undefined,
         );
+
+        const index_buffer_offset = @intCast(
+            vk.DeviceSize,
+            dmem.pow2Align(
+                self.nonCoherentAtomSize(),
+                self.indirect_commands.items.len * @sizeOf(vk.DrawIndexedIndirectCommand),
+            ) * self.current_frame,
+        );
         self.vkd.cmdDrawIndexedIndirect(
             command_buffer,
             self.indirect_commands_buffer.buffer,
-            0,
+            index_buffer_offset,
             @intCast(u32, self.indirect_commands.items.len),
             @sizeOf(vk.DrawIndexedIndirectCommand),
         );
@@ -1457,6 +1540,68 @@ inline fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki:
     return selected_device;
 }
 
+// TODO: This function has terrible scaling. I think we should have another function to just grab all handles as well
+//       As a user of the API ypu have all the context you need to infer which handle point to which Model
+pub inline fn getMeshHandle(self: RenderContext, mesh_instance_initalizers_gltf_path: []const u8) !MeshHandle {
+    const needle = std.hash.Murmur3_32.hash(mesh_instance_initalizers_gltf_path);
+    for (self.instance_contexts) |ctx, i| {
+        if (ctx.path_hash == needle) {
+            return @intCast(MeshHandle, i);
+        }
+    }
+    return error.UnrecognizedGltfPath; // this path was most likely not used for initializaiton of RenderContex
+}
+
+pub inline fn getNthMeshHandle(self: RenderContext, nth: usize) MeshHandle {
+    std.debug.assert(nth < self.instance_contexts.len);
+    return @intCast(MeshHandle, nth);
+}
+
+pub inline fn getNewInstance(self: *RenderContext, mesh_handle: MeshHandle) !InstanceHandle {
+    const instance_context = self.instance_contexts[mesh_handle];
+    const active_instance_count = self.indirect_commands.items[mesh_handle].instance_count;
+    if (active_instance_count >= instance_context.total_instance_count) {
+        return error.OutOfInstances; // no more unique instances to use
+    }
+
+    var instance_handle: u64 = active_instance_count;
+    for (self.instance_contexts[0..mesh_handle]) |other_instance_context| {
+        instance_handle += @intCast(u64, other_instance_context.total_instance_count);
+    }
+
+    self.indirect_commands.items[mesh_handle].instance_count += 1;
+
+    // TODO: RC: flushing commands that are potentially in flight
+    //       we should only transfer to buffer area for image frame we are about to draw (in drawFrame)
+    const indirect_commands_size = dmem.pow2Align(
+        self.nonCoherentAtomSize(),
+        self.indirect_commands.items.len * @sizeOf(vk.DrawIndexedIndirectCommand),
+    );
+    var i: usize = 0;
+    while (i < max_frames_in_flight) : (i += 1) {
+        _ = try self.buffer_staging_buffer.scheduleTransferToDst(
+            self.indirect_commands_buffer.buffer,
+            indirect_commands_size * i,
+            vk.DrawIndexedIndirectCommand,
+            self.indirect_commands.items,
+        );
+    }
+
+    // TODO: always flushing is really stupid. Maybe always flush staging in render frame
+    //       or when staging buffer is full (check returned error)
+    try self.buffer_staging_buffer.flushAndCopyToDestination(self.vkd, self.device, null);
+
+    return InstanceHandle{
+        .mesh_handle = mesh_handle,
+        .instance_handle = @intCast(u48, instance_handle),
+    };
+}
+
+pub inline fn setInstanceTransform(self: *RenderContext, instance_handle: InstanceHandle, transform: zm.Mat) void {
+    const instance_index = instance_handle.instance_handle;
+    self.instance_data.items[instance_index].tranform = transform;
+}
+
 pub fn handleFramebufferResize(self: *RenderContext, window: glfw.Window) void {
     const callback = struct {
         pub fn func(_window: glfw.Window, width: u32, height: u32) void {
@@ -1469,6 +1614,10 @@ pub fn handleFramebufferResize(self: *RenderContext, window: glfw.Window) void {
     }.func;
     window.setUserPointer(self);
     window.setFramebufferSizeCallback(callback);
+}
+
+pub inline fn nonCoherentAtomSize(self: RenderContext) vk.DeviceSize {
+    return self.device_properties.limits.non_coherent_atom_size;
 }
 
 pub const SwapchainSupportDetails = struct {
@@ -1743,7 +1892,7 @@ inline fn createRenderPass(vkd: DeviceDispatch, device: vk.Device, swapchain_for
         .flags = .{},
         .format = swapchain_format,
         .samples = .{ .@"1_bit" = true },
-        .load_op = .dont_care,
+        .load_op = .clear,
         .store_op = .store,
         .stencil_load_op = .dont_care,
         .stencil_store_op = .dont_care,
