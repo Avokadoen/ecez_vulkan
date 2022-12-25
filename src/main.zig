@@ -55,7 +55,7 @@ pub fn main() !void {
     context.handleFramebufferResize(window);
 
     const helmet_rotation = zm.rotationZ(std.math.pi);
-    const helmet_mesh_handle = context.getMeshHandle("models/ScifiHelmet/SciFiHelmet.gltf") catch unreachable;
+    const helmet_mesh_handle = context.getNthMeshHandle(0);
 
     const helmet_instance1 = context.getNewInstance(helmet_mesh_handle) catch unreachable;
     context.setInstanceTransform(helmet_instance1, zm.mul(helmet_rotation, zm.translation(-1, 0, 0)));

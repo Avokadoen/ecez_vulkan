@@ -47,7 +47,6 @@ pub const MesInstancehInitializeContex = struct {
 
 /// Metadata about a given grouping of instance
 const MeshInstanceContext = struct {
-    path_hash: u64,
     total_instance_count: u32,
 };
 
@@ -243,7 +242,6 @@ pub fn init(
     errdefer allocator.free(instance_contexts);
     for (mesh_instance_initalizers) |instancing_init, i| {
         instance_contexts[i] = MeshInstanceContext{
-            .path_hash = std.hash.Murmur3_32.hash(instancing_init.cgltf_path),
             .total_instance_count = instancing_init.instance_count,
         };
     }
@@ -1540,18 +1538,6 @@ inline fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki:
     return selected_device;
 }
 
-// TODO: This function has terrible scaling. I think we should have another function to just grab all handles as well
-//       As a user of the API ypu have all the context you need to infer which handle point to which Model
-pub inline fn getMeshHandle(self: RenderContext, mesh_instance_initalizers_gltf_path: []const u8) !MeshHandle {
-    const needle = std.hash.Murmur3_32.hash(mesh_instance_initalizers_gltf_path);
-    for (self.instance_contexts) |ctx, i| {
-        if (ctx.path_hash == needle) {
-            return @intCast(MeshHandle, i);
-        }
-    }
-    return error.UnrecognizedGltfPath; // this path was most likely not used for initializaiton of RenderContex
-}
-
 pub inline fn getNthMeshHandle(self: RenderContext, nth: usize) MeshHandle {
     std.debug.assert(nth < self.instance_contexts.len);
     return @intCast(MeshHandle, nth);
@@ -1888,6 +1874,7 @@ fn messageCallback(
 }
 
 inline fn createRenderPass(vkd: DeviceDispatch, device: vk.Device, swapchain_format: vk.Format, depth_format: vk.Format) !vk.RenderPass {
+    // TODO: dont clear when we have more real use case scenes because we will draw on top anyways
     const color_attachment = vk.AttachmentDescription{
         .flags = .{},
         .format = swapchain_format,
