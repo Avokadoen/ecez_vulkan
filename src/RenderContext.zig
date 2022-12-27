@@ -34,6 +34,16 @@ const RenderContext = @This();
 
 pub const MeshHandle = u16;
 
+pub const UpdateRate = union(enum) {
+    time_seconds: f32, // every nth microsecond
+    every_nth_frame: u32, // every nth frame
+    always: void,
+};
+
+pub const Config = struct {
+    update_rate: UpdateRate = .always,
+};
+
 // TODO: evaluate if we want
 pub const InstanceHandle = packed struct {
     mesh_handle: MeshHandle,
@@ -230,10 +240,15 @@ instance_data_buffer: MutableBuffer,
 indirect_commands: std.ArrayList(vk.DrawIndexedIndirectCommand),
 indirect_commands_buffer: ImmutableBuffer,
 
+update_rate: UpdateRate,
+last_update: UpdateRate,
+missing_updated_frames: u32 = 0,
+
 pub fn init(
     allocator: Allocator,
     window: glfw.Window,
     mesh_instance_initalizers: []const MesInstancehInitializeContex,
+    config: Config,
 ) !RenderContext {
     zmesh.init(allocator);
     errdefer zmesh.deinit();
@@ -1039,6 +1054,8 @@ pub fn init(
         .indirect_commands = indirect_commands,
         .indirect_commands_buffer = indirect_commands_buffer,
         .index_buffer_offset = index_buffer_offset,
+        .update_rate = config.update_rate,
+        .last_update = config.update_rate,
     };
 }
 
@@ -1230,10 +1247,31 @@ pub fn deinit(self: RenderContext, allocator: Allocator) void {
     self.vki.destroyInstance(self.instance, null);
 }
 
-pub fn drawFrame(self: *RenderContext, window: glfw.Window) !void {
-    // TODO: do not do this every frame (every nth frame based on config instead, or delta time)
-    // start by updating any pending gpu state
-    {
+pub fn drawFrame(self: *RenderContext, window: glfw.Window, delta_time: f32) !void {
+    // TODO: utilize comptime for this when we introduce the component logic (issue #23)?
+    switch (self.update_rate) {
+        .always => self.missing_updated_frames = max_frames_in_flight,
+        .every_nth_frame => |frame| {
+            if (self.last_update.every_nth_frame >= frame) {
+                self.last_update.every_nth_frame = 0;
+                self.missing_updated_frames = max_frames_in_flight;
+            } else {
+                self.last_update.every_nth_frame += 1;
+            }
+        },
+        .time_seconds => |ms| {
+            if (self.last_update.time_seconds >= ms) {
+                self.last_update.time_seconds = 0;
+                self.missing_updated_frames = max_frames_in_flight;
+            } else {
+                self.last_update.time_seconds += delta_time;
+            }
+        },
+    }
+
+    if (self.missing_updated_frames > 0) {
+        self.missing_updated_frames -= 1;
+        // start by updating any pending gpu state
         const instance_data_size = dmem.pow2Align(
             self.nonCoherentAtomSize(),
             self.instance_data.items.len * @sizeOf(DrawInstance),

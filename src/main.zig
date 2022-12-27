@@ -49,6 +49,8 @@ pub fn main() !void {
             .cgltf_path = "models/BoxTextured/BoxTextured.gltf",
             .instance_count = 1,
         },
+    }, .{
+        .update_rate = .{ .time_seconds = 0.05 },
     });
 
     defer context.deinit(allocator);
@@ -80,7 +82,7 @@ pub fn main() !void {
         context.setInstanceTransform(helmet_instance2, test_transform);
 
         try glfw.pollEvents();
-        try context.drawFrame(window);
+        try context.drawFrame(window, delta_time);
 
         // TODO: proper input handling? (out of project scope)
         if (window.getKey(.escape) == .press) {
