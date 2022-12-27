@@ -1944,6 +1944,8 @@ inline fn createRenderPass(vkd: DeviceDispatch, device: vk.Device, swapchain_for
 }
 
 const AssetHandler = struct {
+    const prefix = "../../assets/";
+
     exe_path: []const u8,
 
     pub fn init(allocator: Allocator) !AssetHandler {
@@ -1958,15 +1960,11 @@ const AssetHandler = struct {
     }
 
     pub inline fn getPath(self: AssetHandler, allocator: Allocator, file_path: []const u8) ![]const u8 {
-        const prefix = "../../assets/";
-
         const join_path = [_][]const u8{ self.exe_path, prefix, file_path };
         return std.fs.path.resolve(allocator, join_path[0..]);
     }
 
     pub inline fn getCPath(self: AssetHandler, allocator: Allocator, file_path: []const u8) ![:0]const u8 {
-        const prefix = "../../assets/";
-
         const join_path = [_][]const u8{ self.exe_path, prefix, file_path };
         var absolute_file_path = try std.fs.path.resolve(allocator, &join_path);
         defer allocator.free(absolute_file_path);
