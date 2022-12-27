@@ -50,6 +50,7 @@ pub fn main() !void {
             .instance_count = 1,
         },
     });
+
     defer context.deinit(allocator);
 
     context.handleFramebufferResize(window);
@@ -80,5 +81,10 @@ pub fn main() !void {
 
         try glfw.pollEvents();
         try context.drawFrame(window);
+
+        // TODO: proper input handling? (out of project scope)
+        if (window.getKey(.escape) == .press) {
+            window.setShouldClose(true);
+        }
     }
 }
