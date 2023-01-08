@@ -10,6 +10,7 @@ const ArrayList = std.ArrayList;
 const glfw = @import("deps/mach-glfw/build.zig");
 const zmath = @import("deps/zmath/build.zig");
 const zmesh = @import("deps/zmesh/build.zig");
+const zgui = @import("deps/zgui/build.zig");
 
 const vkgen = @import("deps/vulkan-zig/generator/index.zig");
 
@@ -42,6 +43,12 @@ pub fn build(b: *std.build.Builder) void {
     exe.addPackage(zmesh_pkg);
     zmesh.link(exe, zmesh_options);
 
+    // link zgui
+    const zgui_options = zgui.BuildOptionsStep.init(b, .{ .backend = .no_backend });
+    const zgui_pkg = zgui.getPkg(&.{zgui_options.getPkg()});
+    exe.addPackage(zgui_pkg);
+    zgui.link(exe, zgui_options);
+
     // Create a step that generates vk.zig (stored in zig-cache) from the provided vulkan registry.
     const gen = vkgen.VkGenerateStep.init(b, thisDir() ++ "/deps/vk.xml", "vk.zig");
     // Add the generated file as package to the final executable
@@ -59,12 +66,26 @@ pub fn build(b: *std.build.Builder) void {
         glslc_flags[0..glslc_len],
         "assets/shaders",
     );
-    _ = shader_comp.add("assets/shaders/shader.vert", .{
+
+    // compile the mesh shaders
+    _ = shader_comp.add("assets/shaders/mesh.vert", .{
         .entry_point = null,
         .stage = .vertex,
         .output_filename = null,
     });
-    _ = shader_comp.add("assets/shaders/shader.frag", .{
+    _ = shader_comp.add("assets/shaders/mesh.frag", .{
+        .entry_point = null,
+        .stage = .fragment,
+        .output_filename = null,
+    });
+
+    // compile the ui shaders
+    _ = shader_comp.add("assets/shaders/ui.vert", .{
+        .entry_point = null,
+        .stage = .vertex,
+        .output_filename = null,
+    });
+    _ = shader_comp.add("assets/shaders/ui.frag", .{
         .entry_point = null,
         .stage = .fragment,
         .output_filename = null,

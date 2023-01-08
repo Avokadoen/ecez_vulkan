@@ -6,7 +6,6 @@ const vk_dispatch = @import("vk_dispatch.zig");
 const InstanceDispatch = vk_dispatch.InstanceDispatch;
 const DeviceDispatch = vk_dispatch.DeviceDispatch;
 
-const command = @import("command.zig");
 const dmem = @import("device_memory.zig");
 const sync = @import("sync.zig");
 
@@ -105,19 +104,20 @@ pub inline fn scheduleTransfer(
     var data_slice = self.device_data[offset..];
     std.mem.copy(u8, data_slice, raw_data);
 
-    const aligned_memory_size = dmem.pow2Align(self.non_coherent_atom_size, @intCast(vk.DeviceSize, raw_data.len));
-
     self.incoherent_memory_ranges[self.incoherent_memory_count] = vk.MappedMemoryRange{
         .memory = self.memory,
         .offset = offset,
-        .size = aligned_memory_size,
+        .size = dmem.pow2Align(self.non_coherent_atom_size, @intCast(vk.DeviceSize, raw_data.len)),
     };
 
     self.incoherent_memory_count += 1;
 }
 
 pub inline fn flush(self: *MutableBuffer, vkd: DeviceDispatch, device: vk.Device) !void {
-    if (self.incoherent_memory_count == 0) return;
+    if (self.incoherent_memory_count == 0) {
+        return;
+    }
+
     try vkd.flushMappedMemoryRanges(device, self.incoherent_memory_count, &self.incoherent_memory_ranges);
     self.incoherent_memory_count = 0;
 }

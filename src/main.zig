@@ -40,6 +40,7 @@ pub fn main() !void {
     });
     defer window.destroy();
 
+    const box_count = 10_000;
     var context = try RenderContext.init(allocator, window, &[_]RenderContext.MesInstancehInitializeContex{
         .{
             .cgltf_path = "models/ScifiHelmet/SciFiHelmet.gltf",
@@ -47,10 +48,10 @@ pub fn main() !void {
         },
         .{
             .cgltf_path = "models/BoxTextured/BoxTextured.gltf",
-            .instance_count = 1,
+            .instance_count = box_count,
         },
     }, .{
-        .update_rate = .{ .time_seconds = 0.05 },
+        .update_rate = .{ .time_seconds = 0.01 },
     });
 
     defer context.deinit(allocator);
@@ -68,12 +69,17 @@ pub fn main() !void {
     context.setInstanceTransform(helmet_instance2, test_transform);
 
     const box_mesh_handle = context.getNthMeshHandle(1);
-    const box_instance = context.getNewInstance(box_mesh_handle) catch unreachable;
-    context.setInstanceTransform(box_instance, zm.translation(1, 0, 0));
+    var box_instances: [box_count]RenderContext.InstanceHandle = undefined;
+    for (box_instances) |*box| {
+        box.* = context.getNewInstance(box_mesh_handle) catch unreachable;
+        context.setInstanceTransform(box.*, zm.translation(1, 0, 0));
+    }
 
     var then = std.time.microTimestamp();
     // Wait for the user to close the window.
     while (!window.shouldClose()) {
+        try glfw.pollEvents();
+
         const now = std.time.microTimestamp();
         const delta_time = @intToFloat(f32, now - then) / std.time.us_per_s;
         then = now;
@@ -81,7 +87,10 @@ pub fn main() !void {
         test_transform = zm.mul(zm.rotationY(std.math.pi * delta_time), test_transform);
         context.setInstanceTransform(helmet_instance2, test_transform);
 
-        try glfw.pollEvents();
+        for (box_instances) |*box| {
+            context.setInstanceTransform(box.*, zm.translation(1, 0, 0));
+        }
+
         try context.drawFrame(window, delta_time);
 
         // TODO: proper input handling? (out of project scope)
