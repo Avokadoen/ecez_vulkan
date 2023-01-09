@@ -40,7 +40,7 @@ const RenderContext = @This();
 
 // TODO: make enable_imgui = false functional
 // TODO: make this configurable in build
-const enable_imgui = true;
+const enable_imgui = false;
 
 pub const MeshHandle = u16;
 
@@ -242,7 +242,7 @@ texture_image_memory: vk.DeviceMemory,
 
 // TODO: double or triple buffer device data to avoid pipeline bubbles
 // TODO: instance data should not be an internal concept.
-//       it should be supplied by used code each frame!
+//       it should be supplied by user code each frame!
 instance_data: std.ArrayList(DrawInstance),
 instance_data_buffer: MutableBuffer,
 
@@ -255,6 +255,7 @@ last_update: UpdateRate,
 missing_updated_frames: u32 = 0,
 
 // TODO: only members if imgui enabled
+// TODO: should not take memory if imgui_enabled == false
 imgui_pipeline: ImguiPipeline,
 editor: Editor,
 
@@ -1022,7 +1023,7 @@ pub fn init(
         }
     }
 
-    const imgui_pipeline = try ImguiPipeline.init(
+    const imgui_pipeline = if (enable_imgui) try ImguiPipeline.init(
         allocator,
         asset_handler,
         vki,
@@ -1034,9 +1035,9 @@ pub fn init(
         @intCast(u32, swapchain_images.len),
         render_pass,
         &image_staging_buffer,
-    );
+    ) else undefined;
 
-    const editor = Editor.init();
+    const editor = if (enable_imgui) Editor.init() else undefined;
 
     // transfer all data to GPU memory at the end of init
     try image_staging_buffer.flushAndCopyToDestination(vkd, device, null);
@@ -1213,7 +1214,9 @@ inline fn calculateCamera(degree_fovy: f32, swapchain_extent: vk.Extent2D) Camer
 pub fn deinit(self: RenderContext, allocator: Allocator) void {
     self.vkd.deviceWaitIdle(self.device) catch {};
 
-    self.imgui_pipeline.deinit(allocator, self.vkd, self.device);
+    if (enable_imgui) {
+        self.imgui_pipeline.deinit(allocator, self.vkd, self.device);
+    }
 
     zmesh.deinit();
     self.asset_handler.deinit(allocator);
@@ -2052,17 +2055,16 @@ inline fn createRenderPass(vkd: DeviceDispatch, device: vk.Device, swapchain_for
         .dependency_flags = .{ .by_region_bit = true },
     };
 
-    const len_modifier = if (enable_imgui) 0 else -1;
     const attachments = [_]vk.AttachmentDescription{ game_color_attachment, game_depth_attachment, gui_color_attachment };
     const subpasses = [_]vk.SubpassDescription{ game_subpass, gui_subpass };
     const subpass_dependencies = [_]vk.SubpassDependency{ game_subpass_dependency, gui_subpass_dependency };
     const render_pass_info = vk.RenderPassCreateInfo{
         .flags = .{},
-        .attachment_count = attachments.len + len_modifier,
+        .attachment_count = attachments.len - if (enable_imgui) 0 else 1,
         .p_attachments = &attachments,
-        .subpass_count = subpasses.len + len_modifier,
+        .subpass_count = subpasses.len - if (enable_imgui) 0 else 1,
         .p_subpasses = &subpasses,
-        .dependency_count = subpass_dependencies.len + len_modifier,
+        .dependency_count = subpass_dependencies.len - if (enable_imgui) 0 else 1,
         .p_dependencies = &subpass_dependencies,
     };
     return vkd.createRenderPass(device, &render_pass_info, null);
