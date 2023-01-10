@@ -66,12 +66,12 @@ pub fn init(
     zgui.init(allocator);
     errdefer zgui.deinit();
 
-    {
-        const font_path = try asset_handler.getCPath(allocator, "fonts/quinque-five-font/Quinquefive-K7qep.ttf");
-        defer allocator.free(font_path);
-        const font = zgui.io.addFontFromFile(font_path, 8.0);
-        zgui.io.setDefaultFont(font);
-    }
+    // {
+    //     const font_path = try asset_handler.getCPath(allocator, "fonts/quinque-five-font/Quinquefive-K7qep.ttf");
+    //     defer allocator.free(font_path);
+    //     const font = zgui.io.addFontFromFile(font_path, 8.0);
+    //     zgui.io.setDefaultFont(font);
+    // }
 
     // Create font texture
     var font_atlas_width: i32 = undefined;
@@ -536,23 +536,16 @@ inline fn updateBuffers(self: *ImguiPipeline, vkd: DeviceDispatch, device: vk.De
     if (index_size == 0 or vertex_size == 0) {
         return; // nothing to draw
     }
-    // TODO: we can actually handle this case by swapping the MutableBuffer in the error event of a schedule transfer
-    std.debug.assert((vertex_size + index_size) < self.vertex_index_buffer.size);
 
-    // update next frame offsets
-    const next_frame = (current_frame + 1) % self.swapchain_count;
-    if (next_frame == 0) {
-        self.vertex_buffer_offsets[next_frame] = 0;
-    } else {
-        self.vertex_buffer_offsets[next_frame] = dmem.pow2Align(self.non_coherent_atom_size, self.vertex_buffer_offsets[current_frame] + vertex_size + index_size);
-    }
-
-    var vertex_offset: vk.DeviceSize = self.vertex_buffer_offsets[current_frame];
-    var index_offset: vk.DeviceSize = dmem.pow2Align(self.non_coherent_atom_size, vertex_offset + vertex_size);
-
-    // update current frame index_offset
-    self.index_buffer_offsets[current_frame] = index_offset;
     {
+        var vertex_offset: vk.DeviceSize = self.vertex_buffer_offsets[current_frame];
+        var index_offset: vk.DeviceSize = vertex_offset + vertex_size;
+        // TODO: we can actually handle this case by swapping the MutableBuffer in the error event of a schedule transfer
+        std.debug.assert((index_offset + index_size) < self.vertex_index_buffer.size);
+
+        // update current frame index_offset
+        self.index_buffer_offsets[current_frame] = index_offset;
+
         const command_lists = draw_data.cmd_lists[0..@intCast(usize, draw_data.cmd_lists_count)];
         for (command_lists) |command_list| {
             // transfer vertex data for this command list
@@ -573,6 +566,17 @@ inline fn updateBuffers(self: *ImguiPipeline, vkd: DeviceDispatch, device: vk.De
         }
         // send changes to GPU
         try self.vertex_index_buffer.flush(vkd, device);
+    }
+
+    // update next frame offsets
+    const next_frame = (current_frame + 1) % self.swapchain_count;
+    if (next_frame == 0) {
+        self.vertex_buffer_offsets[next_frame] = 0;
+    } else {
+        self.vertex_buffer_offsets[next_frame] = dmem.pow2Align(
+            self.non_coherent_atom_size,
+            self.vertex_buffer_offsets[current_frame] + vertex_size + index_size,
+        );
     }
 }
 
@@ -622,10 +626,6 @@ inline fn recordCommandBuffer(self: ImguiPipeline, vkd: DeviceDispatch, command_
     };
     vkd.cmdPushConstants(command_buffer, self.pipeline_layout, .{ .vertex_bit = true }, 0, @sizeOf(PushConstant), &push_constant);
 
-    // Render commands
-    var vertex_offset: i32 = 0;
-    var index_offset: u32 = 0;
-
     if (draw_data.cmd_lists_count > 0) {
         vkd.cmdBindVertexBuffers(
             command_buffer,
@@ -641,6 +641,9 @@ inline fn recordCommandBuffer(self: ImguiPipeline, vkd: DeviceDispatch, command_
             .uint16,
         );
 
+        // Render commands
+        var vertex_offset: i32 = 0;
+        var index_offset: u32 = 0;
         const command_lists = draw_data.cmd_lists[0..@intCast(usize, draw_data.cmd_lists_count)];
         for (command_lists) |command_list| {
             const command_buffer_length = command_list.getCmdBufferLength();
@@ -672,7 +675,7 @@ inline fn recordCommandBuffer(self: ImguiPipeline, vkd: DeviceDispatch, command_
                 );
                 index_offset += draw_command.elem_count;
             }
-            vertex_offset += command_buffer_length;
+            vertex_offset += command_list.getVertexBufferLength();
         }
     }
 }

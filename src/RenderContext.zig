@@ -1333,6 +1333,11 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window, delta_time: f32) !vo
 
     _ = try self.vkd.waitForFences(self.device, 1, @ptrCast([*]const vk.Fence, &self.in_flight_fences[self.current_frame]), vk.TRUE, std.math.maxInt(u64));
 
+    if (enable_imgui) {
+        self.imgui_pipeline.updateDisplay(self.swapchain_extent);
+        self.editor.newFrame(self.swapchain_extent.width, self.swapchain_extent.height);
+    }
+
     // TODO: buffers should have a flush that return the fence in order to wait on all pending transfers instead
     //       this should also be utilized in the init function!
     // flush instance data changes to GPU before rendering
@@ -1467,8 +1472,6 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window, delta_time: f32) !vo
 
         // draw editor
         if (enable_imgui) {
-            self.imgui_pipeline.updateDisplay(self.swapchain_extent);
-            self.editor.newFrame(self.swapchain_extent.width, self.swapchain_extent.height);
             try self.imgui_pipeline.draw(self.vkd, self.device, command_buffer, self.current_frame);
         }
 
