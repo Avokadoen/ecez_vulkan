@@ -2,7 +2,6 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const vk = @import("vulkan");
-
 const zgui = @import("zgui");
 
 const vk_dispatch = @import("vk_dispatch.zig");
@@ -15,9 +14,11 @@ const MutableBuffer = @import("MutableBuffer.zig");
 const StagingBuffer = @import("StagingBuffer.zig");
 const dmem = @import("device_memory.zig");
 
+// based on sascha's imgui example
+
 // TODO: do I even need all this logic?? https://github.com/GameTechDev/MetricsGui/blob/master/imgui/examples/imgui_impl_vulkan.h
 
-const vertex_index_buffer_size = 1 * dmem.bytes_in_megabyte;
+const vertex_index_buffer_size = 8 * dmem.bytes_in_megabyte;
 
 const AssetHandler = @import("AssetHandler.zig");
 

@@ -56,6 +56,10 @@ pub fn main() !void {
 
     defer context.deinit(allocator);
 
+    // TODO: editor should not be part of render context
+    if (RenderContext.enable_imgui) {
+        context.editor.setEditorInput(window);
+    }
     context.handleFramebufferResize(window);
 
     const helmet_rotation = zm.rotationZ(std.math.pi);

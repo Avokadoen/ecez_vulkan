@@ -40,7 +40,7 @@ const RenderContext = @This();
 
 // TODO: make enable_imgui = false functional
 // TODO: make this configurable in build
-const enable_imgui = false;
+pub const enable_imgui = true;
 
 pub const MeshHandle = u16;
 
