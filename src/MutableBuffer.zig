@@ -16,15 +16,15 @@ const TransferDestination = struct {
     offset: vk.DeviceSize,
 };
 
-const max_transfers_scheduled = 32;
+const unset_offset = std.math.maxInt(vk.DeviceSize);
 
 size: vk.DeviceSize,
 buffer: vk.Buffer,
 memory: vk.DeviceMemory,
 
 // memory still not flushed
-incoherent_memory_ranges: [max_transfers_scheduled]vk.MappedMemoryRange = undefined,
-incoherent_memory_count: u32 = 0,
+incoherent_memory_offset: vk.DeviceSize = unset_offset,
+incoherent_memory_size: vk.DeviceSize = 0,
 
 non_coherent_atom_size: vk.DeviceSize,
 
@@ -92,10 +92,6 @@ pub inline fn scheduleTransfer(
     comptime T: type,
     data: []const T,
 ) !void {
-    if (self.incoherent_memory_count >= max_transfers_scheduled) {
-        return error.OutOfTransferSlots;
-    }
-
     const raw_data = std.mem.sliceAsBytes(data);
     if (offset + raw_data.len > self.size) {
         return error.OutOfMemory;
@@ -104,20 +100,28 @@ pub inline fn scheduleTransfer(
     var data_slice = self.device_data[offset..];
     std.mem.copy(u8, data_slice, raw_data);
 
-    self.incoherent_memory_ranges[self.incoherent_memory_count] = vk.MappedMemoryRange{
-        .memory = self.memory,
-        .offset = offset,
-        .size = dmem.pow2Align(self.non_coherent_atom_size, @intCast(vk.DeviceSize, raw_data.len)),
-    };
+    // assign our current flush offset
+    self.incoherent_memory_offset = @min(self.incoherent_memory_offset, offset);
 
-    self.incoherent_memory_count += 1;
+    // calculate out current flush size
+    const transfer_cursor = offset + @intCast(vk.DeviceSize, raw_data.len);
+    const buffer_cursor = self.incoherent_memory_offset + self.incoherent_memory_size;
+    const rightmost_cursor = @max(transfer_cursor, buffer_cursor);
+    self.incoherent_memory_size = rightmost_cursor - self.incoherent_memory_offset;
 }
 
 pub inline fn flush(self: *MutableBuffer, vkd: DeviceDispatch, device: vk.Device) !void {
-    if (self.incoherent_memory_count == 0) {
+    if (self.incoherent_memory_offset == 0) {
         return;
     }
 
-    try vkd.flushMappedMemoryRanges(device, self.incoherent_memory_count, &self.incoherent_memory_ranges);
-    self.incoherent_memory_count = 0;
+    const flush_range = [_]vk.MappedMemoryRange{.{
+        .memory = self.memory,
+        .offset = self.incoherent_memory_offset,
+        .size = dmem.pow2Align(self.non_coherent_atom_size, self.incoherent_memory_size),
+    }};
+    try vkd.flushMappedMemoryRanges(device, flush_range.len, &flush_range);
+
+    self.incoherent_memory_offset = unset_offset;
+    self.incoherent_memory_size = 0;
 }
