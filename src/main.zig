@@ -58,7 +58,7 @@ pub fn main() !void {
 
     // TODO: editor should not be part of render context
     if (RenderContext.enable_imgui) {
-        context.editor.setEditorInput(window);
+        context.editor.setEditorInput();
     }
     context.handleFramebufferResize(window);
 

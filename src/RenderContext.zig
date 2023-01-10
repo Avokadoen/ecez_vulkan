@@ -1037,7 +1037,7 @@ pub fn init(
         &image_staging_buffer,
     ) else undefined;
 
-    const editor = if (enable_imgui) Editor.init() else undefined;
+    const editor = if (enable_imgui) try Editor.init(window) else undefined;
 
     // transfer all data to GPU memory at the end of init
     try image_staging_buffer.flushAndCopyToDestination(vkd, device, null);

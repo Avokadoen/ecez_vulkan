@@ -8,7 +8,19 @@ const glfw = @import("glfw");
 /// Editor for making scenes
 const Editor = @This();
 
-pub fn init() Editor {
+window: glfw.Window,
+
+pointing_hand: glfw.Cursor,
+arrow: glfw.Cursor,
+ibeam: glfw.Cursor,
+crosshair: glfw.Cursor,
+resize_ns: glfw.Cursor,
+resize_ew: glfw.Cursor,
+resize_nesw: glfw.Cursor,
+resize_nwse: glfw.Cursor,
+not_allowed: glfw.Cursor,
+
+pub fn init(window: glfw.Window) !Editor {
     // Color scheme
     const StyleCol = zgui.StyleCol;
     const style = zgui.getStyle();
@@ -18,11 +30,54 @@ pub fn init() Editor {
     style.setColor(StyleCol.header, [4]f32{ 0.1, 0.1, 0.1, 0.8 });
     style.setColor(StyleCol.check_mark, [4]f32{ 0, 1, 0, 1 });
 
-    return Editor{};
+    const pointing_hand = try glfw.Cursor.createStandard(.pointing_hand);
+    errdefer pointing_hand.destroy();
+    const arrow = try glfw.Cursor.createStandard(.arrow);
+    errdefer arrow.destroy();
+    const ibeam = try glfw.Cursor.createStandard(.ibeam);
+    errdefer ibeam.destroy();
+    const crosshair = try glfw.Cursor.createStandard(.crosshair);
+    errdefer crosshair.destroy();
+    const resize_ns = try glfw.Cursor.createStandard(.resize_ns);
+    errdefer resize_ns.destroy();
+    const resize_ew = try glfw.Cursor.createStandard(.resize_ew);
+    errdefer resize_ew.destroy();
+    const resize_nesw = try glfw.Cursor.createStandard(.resize_nesw);
+    errdefer resize_nesw.destroy();
+    const resize_nwse = try glfw.Cursor.createStandard(.resize_nwse);
+    errdefer resize_nwse.destroy();
+    const not_allowed = try glfw.Cursor.createStandard(.not_allowed);
+    errdefer not_allowed.destroy();
+
+    return Editor{
+        .window = window,
+        .pointing_hand = pointing_hand,
+        .arrow = arrow,
+        .ibeam = ibeam,
+        .crosshair = crosshair,
+        .resize_ns = resize_ns,
+        .resize_ew = resize_ew,
+        .resize_nesw = resize_nesw,
+        .resize_nwse = resize_nwse,
+        .not_allowed = not_allowed,
+    };
 }
 
 pub fn newFrame(self: Editor, frame_width: u32, frame_height: u32) void {
-    _ = self;
+    // NOTE: getting cursor must be done before calling zgui.newFrame
+    switch (zgui.getMouseCursor()) {
+        .none => self.window.setCursor(self.pointing_hand) catch {},
+        .arrow => self.window.setCursor(self.arrow) catch {},
+        .text_input => self.window.setCursor(self.ibeam) catch {},
+        .resize_all => self.window.setCursor(self.crosshair) catch {},
+        .resize_ns => self.window.setCursor(self.resize_ns) catch {},
+        .resize_ew => self.window.setCursor(self.resize_ew) catch {},
+        .resize_nesw => self.window.setCursor(self.resize_nesw) catch {},
+        .resize_nwse => self.window.setCursor(self.resize_nwse) catch {},
+        .hand => self.window.setCursor(self.pointing_hand) catch {},
+        .not_allowed => self.window.setCursor(self.not_allowed) catch {},
+        .count => self.window.setCursor(self.ibeam) catch {},
+    }
 
     zgui.newFrame();
     defer zgui.render();
@@ -72,15 +127,25 @@ pub fn newFrame(self: Editor, frame_width: u32, frame_height: u32) void {
     // }
 }
 
-/// register input so only editor handles glfw input
-pub fn setEditorInput(self: Editor, window: glfw.Window) void {
-    _ = self;
+pub fn deinit(self: Editor) void {
+    self.pointing_hand.destroy();
+    self.arrow.destroy();
+    self.ibeam.destroy();
+    self.crosshair.destroy();
+    self.resize_ns.destroy();
+    self.resize_ew.destroy();
+    self.resize_nesw.destroy();
+    self.resize_nwse.destroy();
+    self.not_allowed.destroy();
+}
 
-    _ = window.setKeyCallback(keyCallback);
-    _ = window.setCharCallback(charCallback);
-    _ = window.setMouseButtonCallback(mouseButtonCallback);
-    _ = window.setCursorPosCallback(cursorPosCallback);
-    _ = window.setScrollCallback(scrollCallback);
+/// register input so only editor handles glfw input
+pub fn setEditorInput(self: Editor) void {
+    _ = self.window.setKeyCallback(keyCallback);
+    _ = self.window.setCharCallback(charCallback);
+    _ = self.window.setMouseButtonCallback(mouseButtonCallback);
+    _ = self.window.setCursorPosCallback(cursorPosCallback);
+    _ = self.window.setScrollCallback(scrollCallback);
 }
 
 pub fn keyCallback(window: glfw.Window, key: glfw.Key, scancode: i32, action: glfw.Action, mods: glfw.Mods) void {
