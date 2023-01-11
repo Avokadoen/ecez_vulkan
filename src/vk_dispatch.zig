@@ -46,6 +46,7 @@ pub const DeviceDispatch = vk.DeviceWrapper(.{
     .cmdDrawIndexed = true,
     .cmdDrawIndexedIndirect = true,
     .cmdEndRenderPass = true,
+    .cmdNextSubpass = true,
     .cmdPipelineBarrier = true,
     .cmdPushConstants = true,
     .cmdSetScissor = true,

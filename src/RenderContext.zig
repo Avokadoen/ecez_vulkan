@@ -14,12 +14,18 @@ const BaseDispatch = vk_dispatch.BaseDispatch;
 const InstanceDispatch = vk_dispatch.InstanceDispatch;
 const DeviceDispatch = vk_dispatch.DeviceDispatch;
 
+const AssetHandler = @import("AssetHandler.zig");
+const Editor = @import("Editor.zig");
+
+const pipeline_utils = @import("pipeline_utils.zig");
+
+const ImguiPipeline = @import("ImguiPipeline.zig");
+
 const StagingBuffer = @import("StagingBuffer.zig");
 const ImmutableBuffer = @import("ImmutableBuffer.zig");
 const MutableBuffer = @import("MutableBuffer.zig");
 const QueueFamilyIndices = @import("QueueFamilyIndices.zig");
 
-const command = @import("command.zig");
 const sync = @import("sync.zig");
 const dmem = @import("device_memory.zig");
 const application_ext_layers = @import("application_ext_layers.zig");
@@ -31,6 +37,10 @@ const RenderContext = @This();
 
 // TODO: reduce debug assert, replace with errors
 // TODO: use sync2
+
+// TODO: make enable_imgui = false functional
+// TODO: make this configurable in build
+pub const enable_imgui = true;
 
 pub const MeshHandle = u16;
 
@@ -73,38 +83,6 @@ const PushConstant = struct {
 const Camera = struct {
     view: zm.Mat,
     projection: zm.Mat,
-};
-
-const Vertex = struct {
-    pub const binding = 0;
-
-    pos: [3]f32,
-    text_coord: [2]f32,
-
-    pub fn getBindingDescription() vk.VertexInputBindingDescription {
-        return vk.VertexInputBindingDescription{
-            .binding = binding,
-            .stride = @sizeOf(Vertex),
-            .input_rate = .vertex,
-        };
-    }
-
-    pub fn getAttributeDescriptions() [2]vk.VertexInputAttributeDescription {
-        return [_]vk.VertexInputAttributeDescription{
-            .{
-                .location = 0,
-                .binding = binding,
-                .format = .r32g32b32_sfloat,
-                .offset = @offsetOf(Vertex, "pos"),
-            },
-            .{
-                .location = 1,
-                .binding = binding,
-                .format = .r32g32_sfloat,
-                .offset = @offsetOf(Vertex, "text_coord"),
-            },
-        };
-    }
 };
 
 const DrawInstance = struct {
@@ -152,6 +130,38 @@ const DrawInstance = struct {
                 .binding = binding,
                 .format = .r32g32b32a32_sfloat,
                 .offset = @offsetOf(DrawInstance, "tranform") + @sizeOf(zm.F32x4) * 3,
+            },
+        };
+    }
+};
+
+pub const MeshVertex = struct {
+    pub const binding = 0;
+
+    pos: [3]f32,
+    text_coord: [2]f32,
+
+    pub fn getBindingDescription() vk.VertexInputBindingDescription {
+        return vk.VertexInputBindingDescription{
+            .binding = binding,
+            .stride = @sizeOf(MeshVertex),
+            .input_rate = .vertex,
+        };
+    }
+
+    pub fn getAttributeDescriptions() [2]vk.VertexInputAttributeDescription {
+        return [_]vk.VertexInputAttributeDescription{
+            .{
+                .location = 0,
+                .binding = binding,
+                .format = .r32g32b32_sfloat,
+                .offset = @offsetOf(MeshVertex, "pos"),
+            },
+            .{
+                .location = 1,
+                .binding = binding,
+                .format = .r32g32_sfloat,
+                .offset = @offsetOf(MeshVertex, "text_coord"),
             },
         };
     }
@@ -232,7 +242,7 @@ texture_image_memory: vk.DeviceMemory,
 
 // TODO: double or triple buffer device data to avoid pipeline bubbles
 // TODO: instance data should not be an internal concept.
-//       it should be supplied by used code each frame!
+//       it should be supplied by user code each frame!
 instance_data: std.ArrayList(DrawInstance),
 instance_data_buffer: MutableBuffer,
 
@@ -243,6 +253,11 @@ indirect_commands_buffer: ImmutableBuffer,
 update_rate: UpdateRate,
 last_update: UpdateRate,
 missing_updated_frames: u32 = 0,
+
+// TODO: only members if imgui enabled
+// TODO: should not take memory if imgui_enabled == false
+imgui_pipeline: ImguiPipeline,
+editor: Editor,
 
 pub fn init(
     allocator: Allocator,
@@ -540,7 +555,12 @@ pub fn init(
         }
 
         for (pools) |*pool| {
-            pool.* = try command.createPool(vkd, device, queue_family_indices.graphicsIndex());
+            const pool_info = vk.CommandPoolCreateInfo{
+                .flags = .{},
+                .queue_family_index = queue_family_indices.graphicsIndex(),
+            };
+
+            pool.* = try vkd.createCommandPool(device, &pool_info, null);
         }
         break :blk pools;
     };
@@ -556,7 +576,12 @@ pub fn init(
         errdefer allocator.free(buffers);
 
         for (buffers) |*cmd_buffer, i| {
-            cmd_buffer.* = try command.createBuffer(vkd, device, command_pools[i]);
+            const cmd_buffer_info = vk.CommandBufferAllocateInfo{
+                .command_pool = command_pools[i],
+                .level = .primary,
+                .command_buffer_count = 1,
+            };
+            try vkd.allocateCommandBuffers(device, &cmd_buffer_info, @ptrCast([*]vk.CommandBuffer, cmd_buffer));
         }
         break :blk buffers;
     };
@@ -690,7 +715,7 @@ pub fn init(
         var mesh_text_coords = std.ArrayList([2]f32).init(allocator);
         defer mesh_text_coords.deinit();
 
-        var vertices = std.ArrayList(Vertex).init(allocator);
+        var vertices = std.ArrayList(MeshVertex).init(allocator);
         defer vertices.deinit();
 
         var remap = std.ArrayList(u32).init(allocator);
@@ -699,7 +724,7 @@ pub fn init(
         var optimized_indices = std.ArrayList(u32).init(allocator);
         defer optimized_indices.deinit();
 
-        var optimized_vertices = std.ArrayList(Vertex).init(allocator);
+        var optimized_vertices = std.ArrayList(MeshVertex).init(allocator);
         defer optimized_vertices.deinit();
 
         var vertex_buffer_position: vk.DeviceSize = 0;
@@ -740,7 +765,7 @@ pub fn init(
 
             try vertices.ensureUnusedCapacity(mesh_positions.items.len);
             for (mesh_positions.items) |pos, j| {
-                vertices.appendAssumeCapacity(Vertex{
+                vertices.appendAssumeCapacity(MeshVertex{
                     .pos = pos,
                     .text_coord = mesh_text_coords.items[j],
                 });
@@ -750,7 +775,7 @@ pub fn init(
             const num_unique_vertices = zmesh.opt.generateVertexRemap(
                 remap.items, // 'vertex remap' (destination)
                 null, // non-optimized indices
-                Vertex, // Zig type describing your vertex
+                MeshVertex, // Zig type describing your vertex
                 vertices.items, // non-optimized vertices
             );
 
@@ -758,10 +783,10 @@ pub fn init(
             zmesh.opt.remapIndexBuffer(optimized_indices.items, mesh_indices.items, remap.items);
 
             try optimized_vertices.resize(num_unique_vertices);
-            zmesh.opt.remapVertexBuffer(Vertex, optimized_vertices.items, vertices.items, remap.items);
+            zmesh.opt.remapVertexBuffer(MeshVertex, optimized_vertices.items, vertices.items, remap.items);
 
             zmesh.opt.optimizeVertexCache(optimized_indices.items, optimized_indices.items, optimized_vertices.items.len);
-            zmesh.opt.optimizeOverdraw(optimized_indices.items, optimized_indices.items, Vertex, optimized_vertices.items, 1.05);
+            zmesh.opt.optimizeOverdraw(optimized_indices.items, optimized_indices.items, MeshVertex, optimized_vertices.items, 1.05);
             // TODO: utilize meshoptimizer quantization here
             // TODO: LOD!
 
@@ -772,7 +797,7 @@ pub fn init(
             var vertex_size = buffer_staging_buffer.scheduleTransferToDst(
                 vertex_index_buffer.buffer,
                 vertex_buffer_position,
-                Vertex,
+                MeshVertex,
                 optimized_vertices.items,
             ) catch |err| blk: {
                 // flush all pending memory
@@ -793,14 +818,14 @@ pub fn init(
                     break :blk buffer_staging_buffer.scheduleTransferToDst(
                         vertex_index_buffer.buffer,
                         vertex_buffer_position,
-                        Vertex,
+                        MeshVertex,
                         optimized_vertices.items,
                     ) catch unreachable;
                 }
             };
 
-            // Vertex has a bad alignment (20) so we need to do some funky alignment!
-            vertex_size = dmem.aribtraryAlign(@sizeOf(Vertex), vertex_size);
+            // MeshVertex has a bad alignment (20) so we need to do some funky alignment!
+            vertex_size = dmem.aribtraryAlign(@sizeOf(MeshVertex), vertex_size);
 
             // attempt to schedule transfer to dst, perform a transfer if the stage is out of slots
             const index_size = buffer_staging_buffer.scheduleTransferToDst(
@@ -875,7 +900,7 @@ pub fn init(
 
             // populate our indirect commands with some initial state
             indirect_commands.appendAssumeCapacity(vk.DrawIndexedIndirectCommand{
-                .vertex_offset = @intCast(i32, vertex_buffer_position / @sizeOf(Vertex)),
+                .vertex_offset = @intCast(i32, vertex_buffer_position / @sizeOf(MeshVertex)),
                 .first_index = @intCast(u32, index_buffer_position - index_buffer_offset) / 4,
                 .index_count = @intCast(u32, index_size / 4),
                 .instance_count = 0,
@@ -901,7 +926,6 @@ pub fn init(
         instance_image_views[i] = try createDefaultImageView(vkd, device, vk_image, .r8g8b8a8_srgb, .{ .color_bit = true });
         errdefer vkd.destroyImageView(device, instance_image_views[i], null);
     }
-    try image_staging_buffer.flushAndCopyToDestination(vkd, device, null);
 
     for (model_base_color_images) |*cpu_image| {
         cpu_image.deinit();
@@ -998,7 +1022,25 @@ pub fn init(
             );
         }
     }
+
+    const imgui_pipeline = if (enable_imgui) try ImguiPipeline.init(
+        allocator,
+        asset_handler,
+        vki,
+        physical_device,
+        vkd,
+        device,
+        non_coherent_atom_size,
+        swapchain_extent,
+        @intCast(u32, swapchain_images.len),
+        render_pass,
+        &image_staging_buffer,
+    ) else undefined;
+
+    const editor = if (enable_imgui) try Editor.init(window) else undefined;
+
     // transfer all data to GPU memory at the end of init
+    try image_staging_buffer.flushAndCopyToDestination(vkd, device, null);
     try buffer_staging_buffer.flushAndCopyToDestination(vkd, device, null);
 
     return RenderContext{
@@ -1056,6 +1098,8 @@ pub fn init(
         .index_buffer_offset = index_buffer_offset,
         .update_rate = config.update_rate,
         .last_update = config.update_rate,
+        .imgui_pipeline = imgui_pipeline,
+        .editor = editor,
     };
 }
 
@@ -1159,7 +1203,7 @@ inline fn calculateCamera(degree_fovy: f32, swapchain_extent: vk.Extent2D) Camer
     const aspect = @intToFloat(f32, swapchain_extent.width) / @intToFloat(f32, swapchain_extent.height);
     return Camera{
         .view = zm.lookAtRh(
-            zm.f32x4(0.0, 0.0, 5.0, 1.0), // pos
+            zm.f32x4(0.0, 0.0, 4.0, 1.0), // pos
             zm.f32x4(0.0, 0.0, 1.0, 1.0), // target
             zm.f32x4(0.0, 1.0, 0.0, 0.0), // up
         ),
@@ -1169,6 +1213,10 @@ inline fn calculateCamera(degree_fovy: f32, swapchain_extent: vk.Extent2D) Camer
 
 pub fn deinit(self: RenderContext, allocator: Allocator) void {
     self.vkd.deviceWaitIdle(self.device) catch {};
+
+    if (enable_imgui) {
+        self.imgui_pipeline.deinit(allocator, self.vkd, self.device);
+    }
 
     zmesh.deinit();
     self.asset_handler.deinit(allocator);
@@ -1285,6 +1333,11 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window, delta_time: f32) !vo
 
     _ = try self.vkd.waitForFences(self.device, 1, @ptrCast([*]const vk.Fence, &self.in_flight_fences[self.current_frame]), vk.TRUE, std.math.maxInt(u64));
 
+    if (enable_imgui) {
+        self.imgui_pipeline.updateDisplay(self.swapchain_extent);
+        self.editor.newFrame(self.swapchain_extent.width, self.swapchain_extent.height);
+    }
+
     // TODO: buffers should have a flush that return the fence in order to wait on all pending transfers instead
     //       this should also be utilized in the init function!
     // flush instance data changes to GPU before rendering
@@ -1364,7 +1417,7 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window, delta_time: f32) !vo
         const vertex_offsets = [_]vk.DeviceSize{0};
         self.vkd.cmdBindVertexBuffers(
             command_buffer,
-            Vertex.binding,
+            MeshVertex.binding,
             1,
             @ptrCast([*]const vk.Buffer, &self.vertex_index_buffer.buffer),
             &vertex_offsets,
@@ -1416,6 +1469,11 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window, delta_time: f32) !vo
             @intCast(u32, self.indirect_commands.items.len),
             @sizeOf(vk.DrawIndexedIndirectCommand),
         );
+
+        // draw editor
+        if (enable_imgui) {
+            try self.imgui_pipeline.draw(self.vkd, self.device, command_buffer, self.current_frame);
+        }
 
         self.vkd.cmdEndRenderPass(command_buffer);
         try self.vkd.endCommandBuffer(command_buffer);
@@ -1912,8 +1970,13 @@ fn messageCallback(
 }
 
 inline fn createRenderPass(vkd: DeviceDispatch, device: vk.Device, swapchain_format: vk.Format, depth_format: vk.Format) !vk.RenderPass {
+    const common_color_attachment_ref = vk.AttachmentReference{
+        .attachment = 0,
+        .layout = .color_attachment_optimal,
+    };
+
     // TODO: dont clear when we have more real use case scenes because we will draw on top anyways
-    const color_attachment = vk.AttachmentDescription{
+    const game_color_attachment = vk.AttachmentDescription{
         .flags = .{},
         .format = swapchain_format,
         .samples = .{ .@"1_bit" = true },
@@ -1924,12 +1987,7 @@ inline fn createRenderPass(vkd: DeviceDispatch, device: vk.Device, swapchain_for
         .initial_layout = .undefined,
         .final_layout = .present_src_khr,
     };
-    const color_attachment_ref = vk.AttachmentReference{
-        .attachment = 0,
-        .layout = .color_attachment_optimal,
-    };
-
-    const depth_attachment = vk.AttachmentDescription{
+    const game_depth_attachment = vk.AttachmentDescription{
         .flags = .{},
         .format = depth_format,
         .samples = .{ .@"1_bit" = true },
@@ -1940,25 +1998,49 @@ inline fn createRenderPass(vkd: DeviceDispatch, device: vk.Device, swapchain_for
         .initial_layout = .undefined,
         .final_layout = .depth_stencil_attachment_optimal,
     };
-    const depth_attachment_ref = vk.AttachmentReference{
+    const game_depth_attachment_ref = vk.AttachmentReference{
         .attachment = 1,
         .layout = .depth_stencil_attachment_optimal,
     };
-
-    const subpass = vk.SubpassDescription{
+    const game_subpass = vk.SubpassDescription{
         .flags = .{},
         .pipeline_bind_point = .graphics,
         .input_attachment_count = 0,
         .p_input_attachments = undefined,
         .color_attachment_count = 1,
-        .p_color_attachments = @ptrCast([*]const vk.AttachmentReference, &color_attachment_ref),
+        .p_color_attachments = @ptrCast([*]const vk.AttachmentReference, &common_color_attachment_ref),
         .p_resolve_attachments = null,
-        .p_depth_stencil_attachment = &depth_attachment_ref,
+        .p_depth_stencil_attachment = &game_depth_attachment_ref,
         .preserve_attachment_count = 0,
         .p_preserve_attachments = undefined,
     };
 
-    const subpass_dependency = vk.SubpassDependency{
+    const gui_color_attachment = vk.AttachmentDescription{
+        .flags = .{},
+        .format = swapchain_format,
+        .samples = .{ .@"1_bit" = true },
+        .load_op = .load,
+        .store_op = .store,
+        .stencil_load_op = .dont_care,
+        .stencil_store_op = .dont_care,
+        .initial_layout = .present_src_khr,
+        .final_layout = .present_src_khr,
+    };
+    const gui_subpass = vk.SubpassDescription{
+        .flags = .{},
+        .pipeline_bind_point = .graphics,
+        .input_attachment_count = 0,
+        .p_input_attachments = undefined,
+        .color_attachment_count = 1,
+        .p_color_attachments = @ptrCast([*]const vk.AttachmentReference, &common_color_attachment_ref),
+        .p_resolve_attachments = null,
+        .p_depth_stencil_attachment = null,
+        .preserve_attachment_count = 0,
+        .p_preserve_attachments = undefined,
+    };
+
+    // we are rendering the gui on top of the game view
+    const game_subpass_dependency = vk.SubpassDependency{
         .src_subpass = vk.SUBPASS_EXTERNAL,
         .dst_subpass = 0,
         .src_stage_mask = .{ .color_attachment_output_bit = true, .early_fragment_tests_bit = true },
@@ -1967,67 +2049,32 @@ inline fn createRenderPass(vkd: DeviceDispatch, device: vk.Device, swapchain_for
         .dst_access_mask = .{ .color_attachment_write_bit = true, .depth_stencil_attachment_write_bit = true },
         .dependency_flags = .{},
     };
+    const gui_subpass_dependency = vk.SubpassDependency{
+        .src_subpass = 0,
+        .dst_subpass = 1,
+        .src_stage_mask = .{ .color_attachment_output_bit = true },
+        .dst_stage_mask = .{ .color_attachment_output_bit = true },
+        .src_access_mask = .{ .color_attachment_write_bit = true },
+        .dst_access_mask = .{ .color_attachment_read_bit = true, .color_attachment_write_bit = true },
+        .dependency_flags = .{ .by_region_bit = true },
+    };
 
-    const attachments = [_]vk.AttachmentDescription{ color_attachment, depth_attachment };
+    const attachments = [_]vk.AttachmentDescription{ game_color_attachment, game_depth_attachment, gui_color_attachment };
+    const subpasses = [_]vk.SubpassDescription{ game_subpass, gui_subpass };
+    const subpass_dependencies = [_]vk.SubpassDependency{ game_subpass_dependency, gui_subpass_dependency };
     const render_pass_info = vk.RenderPassCreateInfo{
         .flags = .{},
-        .attachment_count = attachments.len,
+        .attachment_count = attachments.len - if (enable_imgui) 0 else 1,
         .p_attachments = &attachments,
-        .subpass_count = 1,
-        .p_subpasses = @ptrCast([*]const vk.SubpassDescription, &subpass),
-        .dependency_count = 1,
-        .p_dependencies = @ptrCast([*]const vk.SubpassDependency, &subpass_dependency),
+        .subpass_count = subpasses.len - if (enable_imgui) 0 else 1,
+        .p_subpasses = &subpasses,
+        .dependency_count = subpass_dependencies.len - if (enable_imgui) 0 else 1,
+        .p_dependencies = &subpass_dependencies,
     };
     return vkd.createRenderPass(device, &render_pass_info, null);
 }
 
-const AssetHandler = struct {
-    const prefix = "../../assets/";
-
-    exe_path: []const u8,
-
-    pub fn init(allocator: Allocator) !AssetHandler {
-        const exe_path = try std.fs.selfExePathAlloc(allocator);
-        return AssetHandler{
-            .exe_path = exe_path,
-        };
-    }
-
-    pub fn deinit(self: AssetHandler, allocator: Allocator) void {
-        allocator.free(self.exe_path);
-    }
-
-    pub inline fn getPath(self: AssetHandler, allocator: Allocator, file_path: []const u8) ![]const u8 {
-        const join_path = [_][]const u8{ self.exe_path, prefix, file_path };
-        return std.fs.path.resolve(allocator, join_path[0..]);
-    }
-
-    pub inline fn getCPath(self: AssetHandler, allocator: Allocator, file_path: []const u8) ![:0]const u8 {
-        const join_path = [_][]const u8{ self.exe_path, prefix, file_path };
-        var absolute_file_path = try std.fs.path.resolve(allocator, &join_path);
-        defer allocator.free(absolute_file_path);
-
-        return std.cstr.addNullByte(allocator, absolute_file_path);
-    }
-};
-
-/// caller must deinit returned memory
-pub fn readFile(allocator: Allocator, absolute_path: []const u8) ![]u8 {
-    const file = try std.fs.openFileAbsolute(absolute_path, .{ .mode = .read_only });
-    defer file.close();
-
-    var reader = file.reader();
-    const file_size = (try reader.context.stat()).size;
-
-    var buffer = try allocator.alloc(u8, file_size);
-    errdefer allocator.free(buffer);
-
-    const read = try reader.readAll(buffer);
-    std.debug.assert(read == file_size);
-
-    return buffer;
-}
-
+// TODO: remove this, copy code inline instead
 inline fn createGraphicsPipeline(
     allocator: Allocator,
     asset_handler: AssetHandler,
@@ -2038,14 +2085,14 @@ inline fn createGraphicsPipeline(
     pipeline_layout: vk.PipelineLayout,
 ) !vk.Pipeline {
     const vert_bytes = blk: {
-        const path = try asset_handler.getPath(allocator, "shaders/shader.vert.spv");
+        const path = try asset_handler.getPath(allocator, "shaders/mesh.vert.spv");
         defer allocator.free(path);
-        const bytes = try readFile(allocator, path);
+        const bytes = try pipeline_utils.readFile(allocator, path);
         break :blk bytes;
     };
     defer allocator.free(vert_bytes);
 
-    const vert_module = try createShaderModule(vkd, device, vert_bytes);
+    const vert_module = try pipeline_utils.createShaderModule(vkd, device, vert_bytes);
     defer vkd.destroyShaderModule(device, vert_module, null);
 
     const vert_stage_info = vk.PipelineShaderStageCreateInfo{
@@ -2057,14 +2104,14 @@ inline fn createGraphicsPipeline(
     };
 
     const frag_bytes = blk: {
-        const path = try asset_handler.getPath(allocator, "shaders/shader.frag.spv");
+        const path = try asset_handler.getPath(allocator, "shaders/mesh.frag.spv");
         defer allocator.free(path);
-        const bytes = try readFile(allocator, path);
+        const bytes = try pipeline_utils.readFile(allocator, path);
         break :blk bytes;
     };
     defer allocator.free(frag_bytes);
 
-    const frag_module = try createShaderModule(vkd, device, frag_bytes);
+    const frag_module = try pipeline_utils.createShaderModule(vkd, device, frag_bytes);
     defer vkd.destroyShaderModule(device, frag_module, null);
 
     const frag_stage_info = vk.PipelineShaderStageCreateInfo{
@@ -2081,10 +2128,10 @@ inline fn createGraphicsPipeline(
     };
 
     const binding_descriptions = [_]vk.VertexInputBindingDescription{
-        Vertex.getBindingDescription(),
+        MeshVertex.getBindingDescription(),
         DrawInstance.getBindingDescription(),
     };
-    const attribute_descriptions = Vertex.getAttributeDescriptions() ++ DrawInstance.getAttributeDescriptions();
+    const attribute_descriptions = MeshVertex.getAttributeDescriptions() ++ DrawInstance.getAttributeDescriptions();
     const vertex_input_info = vk.PipelineVertexInputStateCreateInfo{
         .flags = .{},
         .vertex_binding_description_count = binding_descriptions.len,
@@ -2230,16 +2277,6 @@ inline fn createGraphicsPipeline(
     return pipeline;
 }
 
-inline fn createShaderModule(vkd: DeviceDispatch, device: vk.Device, shader_code: []const u8) !vk.ShaderModule {
-    std.debug.assert(@mod(shader_code.len, 4) == 0);
-    const create_info = vk.ShaderModuleCreateInfo{
-        .flags = .{},
-        .code_size = shader_code.len,
-        .p_code = @ptrCast([*]const u32, @alignCast(@alignOf(u32), shader_code.ptr)),
-    };
-    return vkd.createShaderModule(device, &create_info, null);
-}
-
 inline fn instantiateImageViews(
     image_views: []vk.ImageView,
     vkd: DeviceDispatch,
@@ -2278,11 +2315,12 @@ inline fn instantiateFramebuffer(
     }
 
     for (framebuffers) |*framebuffer, i| {
-        const attachments = [_]vk.ImageView{ swapchain_image_views[i], depth_image_view };
+        const attachments = [_]vk.ImageView{ swapchain_image_views[i], depth_image_view, swapchain_image_views[i] };
+        const attachments_len = if (enable_imgui) attachments.len else attachments.len - 1;
         const framebuffer_info = vk.FramebufferCreateInfo{
             .flags = .{},
             .render_pass = render_pass,
-            .attachment_count = attachments.len,
+            .attachment_count = attachments_len,
             .p_attachments = &attachments,
             .width = swapchain_extent.width,
             .height = swapchain_extent.height,

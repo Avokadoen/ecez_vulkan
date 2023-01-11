@@ -6,7 +6,6 @@ const vk_dispatch = @import("vk_dispatch.zig");
 const InstanceDispatch = vk_dispatch.InstanceDispatch;
 const DeviceDispatch = vk_dispatch.DeviceDispatch;
 
-const command = @import("command.zig");
 const dmem = @import("device_memory.zig");
 const sync = @import("sync.zig");
 

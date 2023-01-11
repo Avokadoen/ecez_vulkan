@@ -6,7 +6,6 @@ const vk_dispatch = @import("vk_dispatch.zig");
 const InstanceDispatch = vk_dispatch.InstanceDispatch;
 const DeviceDispatch = vk_dispatch.DeviceDispatch;
 
-const command = @import("command.zig");
 const dmem = @import("device_memory.zig");
 const sync = @import("sync.zig");
 
@@ -74,10 +73,20 @@ const StagingContext = struct {
         errdefer vkd.freeMemory(device, memory, null);
         try vkd.bindBufferMemory(device, buffer, memory, 0);
 
-        const command_pool = try command.createPool(vkd, device, transfer_family_index);
+        const pool_info = vk.CommandPoolCreateInfo{
+            .flags = .{ .reset_command_buffer_bit = true },
+            .queue_family_index = transfer_family_index,
+        };
+        const command_pool = try vkd.createCommandPool(device, &pool_info, null);
         errdefer vkd.destroyCommandPool(device, command_pool, null);
 
-        const command_buffer = try command.createBuffer(vkd, device, command_pool);
+        var command_buffer: vk.CommandBuffer = undefined;
+        const cmd_buffer_info = vk.CommandBufferAllocateInfo{
+            .command_pool = command_pool,
+            .level = .primary,
+            .command_buffer_count = 1,
+        };
+        try vkd.allocateCommandBuffers(device, &cmd_buffer_info, @ptrCast([*]vk.CommandBuffer, &command_buffer));
 
         const transfer_fence = try sync.createFence(vkd, device, false);
         errdefer vkd.destroyFence(device, transfer_fence, null);
