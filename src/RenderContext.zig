@@ -2014,16 +2014,6 @@ inline fn createRenderPass(vkd: DeviceDispatch, device: vk.Device, swapchain_for
         .preserve_attachment_count = 0,
         .p_preserve_attachments = undefined,
     };
-    // we are rendering the gui on top of the game view
-    const game_subpass_dependency = vk.SubpassDependency{
-        .src_subpass = vk.SUBPASS_EXTERNAL,
-        .dst_subpass = 0,
-        .src_stage_mask = .{ .color_attachment_output_bit = true, .early_fragment_tests_bit = true },
-        .dst_stage_mask = .{ .color_attachment_output_bit = true, .early_fragment_tests_bit = true },
-        .src_access_mask = .{},
-        .dst_access_mask = .{ .color_attachment_write_bit = true, .depth_stencil_attachment_write_bit = true },
-        .dependency_flags = .{},
-    };
 
     const gui_color_attachment = vk.AttachmentDescription{
         .flags = .{},
@@ -2048,13 +2038,24 @@ inline fn createRenderPass(vkd: DeviceDispatch, device: vk.Device, swapchain_for
         .preserve_attachment_count = 0,
         .p_preserve_attachments = undefined,
     };
+
+    // we are rendering the gui on top of the game view
+    const game_subpass_dependency = vk.SubpassDependency{
+        .src_subpass = vk.SUBPASS_EXTERNAL,
+        .dst_subpass = 0,
+        .src_stage_mask = .{ .color_attachment_output_bit = true, .early_fragment_tests_bit = true },
+        .dst_stage_mask = .{ .color_attachment_output_bit = true, .early_fragment_tests_bit = true },
+        .src_access_mask = .{},
+        .dst_access_mask = .{ .color_attachment_write_bit = true, .depth_stencil_attachment_write_bit = true },
+        .dependency_flags = .{},
+    };
     const gui_subpass_dependency = vk.SubpassDependency{
         .src_subpass = 0,
         .dst_subpass = 1,
         .src_stage_mask = .{ .color_attachment_output_bit = true },
         .dst_stage_mask = .{ .color_attachment_output_bit = true },
-        .src_access_mask = .{ .color_attachment_read_bit = true },
-        .dst_access_mask = .{ .color_attachment_write_bit = true },
+        .src_access_mask = .{ .color_attachment_write_bit = true },
+        .dst_access_mask = .{ .color_attachment_read_bit = true, .color_attachment_write_bit = true },
         .dependency_flags = .{ .by_region_bit = true },
     };
 
