@@ -1,12 +1,57 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 const zgui = @import("zgui");
 const glfw = @import("glfw");
+
+const RenderContext = @import("RenderContext.zig");
+const MeshHandle = RenderContext.MeshHandle;
+const InstanceHandle = RenderContext.InstanceHandle;
+
+// TODO: try using ecez to make the Editor! :)
+
+const ObjectMetadata = struct {
+    name: [:0]const u8,
+
+    pub fn init(allocator: Allocator, name: []const u8, index: u32) !ObjectMetadata {
+        const hash_fluff = "##" ++ [_]u8{
+            @intCast(u8, index & 0xFF),
+            @intCast(u8, (index >> 8) & 0xFF),
+            @intCast(u8, (index >> 16) & 0xFF),
+            @intCast(u8, (index >> 24) & 0xFF),
+        };
+        const name_clone = try allocator.alloc(u8, name.len + hash_fluff.len + 1);
+        errdefer allocator.free(name_clone);
+
+        std.mem.copy(u8, name_clone, name);
+        std.mem.copy(u8, name_clone[name.len..], hash_fluff);
+        name_clone[name_clone.len - 1] = 0;
+
+        return ObjectMetadata{
+            .name = name_clone[0 .. name_clone.len - 1 :0],
+        };
+    }
+
+    pub fn deinit(self: ObjectMetadata, allocator: Allocator) void {
+        allocator.free(self.name);
+    }
+};
+
+const PersistentState = struct {
+    selected_instance: ?InstanceHandle = null,
+};
+
+/// This type maps an instance handle with a name and other metadata in the editor
+const EditorObjectMap = std.AutoArrayHashMap(InstanceHandle, ObjectMetadata);
 
 // TODO: editor should not be part of renderer
 
 /// Editor for making scenes
 const Editor = @This();
+
+allocator: Allocator,
+instance_metadata_map: EditorObjectMap,
+persistent_state: PersistentState,
 
 pointing_hand: glfw.Cursor,
 arrow: glfw.Cursor,
@@ -18,7 +63,35 @@ resize_nesw: glfw.Cursor,
 resize_nwse: glfw.Cursor,
 not_allowed: glfw.Cursor,
 
-pub fn init() !Editor {
+pub fn init(allocator: Allocator, instance_handles: [][]const InstanceHandle) !Editor {
+    var instance_metadata_map = EditorObjectMap.init(allocator);
+    errdefer {
+        for (instance_metadata_map.values()) |value| {
+            value.deinit(allocator);
+        }
+        instance_metadata_map.deinit();
+    }
+
+    const total_handle_count = blk: {
+        var count: usize = 0;
+        for (instance_handles) |handles| {
+            count += handles.len;
+        }
+        break :blk count;
+    };
+
+    try instance_metadata_map.ensureUnusedCapacity(total_handle_count);
+    for (instance_handles) |handles| {
+        for (handles) |handle, i| {
+            const metadata = try ObjectMetadata.init(allocator, "TODO", @intCast(u32, i));
+            instance_metadata_map.putAssumeCapacity(handle, metadata);
+        }
+    }
+
+    const persistent_state = PersistentState{
+        .selected_instance = null,
+    };
+
     // Color scheme
     const StyleCol = zgui.StyleCol;
     const style = zgui.getStyle();
@@ -48,6 +121,9 @@ pub fn init() !Editor {
     errdefer not_allowed.destroy();
 
     return Editor{
+        .allocator = allocator,
+        .instance_metadata_map = instance_metadata_map,
+        .persistent_state = persistent_state,
         .pointing_hand = pointing_hand,
         .arrow = arrow,
         .ibeam = ibeam,
@@ -60,7 +136,7 @@ pub fn init() !Editor {
     };
 }
 
-pub fn newFrame(self: Editor, window: glfw.Window, delta_time: f32) !void {
+pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
     const frame_size = try window.getFramebufferSize();
     zgui.io.setDisplaySize(@intToFloat(f32, frame_size.width), @intToFloat(f32, frame_size.height));
     zgui.io.setDisplayFramebufferScale(1.0, 1.0);
@@ -153,9 +229,9 @@ pub fn newFrame(self: Editor, window: glfw.Window, delta_time: f32) !void {
         _ = zgui.begin("Object List", .{ .popen = null, .flags = .{
             .menu_bar = false,
             .no_move = true,
-            .no_resize = true,
-            .no_scrollbar = true,
-            .no_scroll_with_mouse = true,
+            .no_resize = false,
+            .no_scrollbar = false,
+            .no_scroll_with_mouse = false,
             .no_collapse = true,
         } });
         defer zgui.end();
@@ -167,10 +243,21 @@ pub fn newFrame(self: Editor, window: glfw.Window, delta_time: f32) !void {
                 zgui.text("create new object", .{});
             }
 
-            if (zgui.treeNode("hello ")) {
-                defer zgui.treePop();
+            // selected instance is either our persistent user selction, or an invalid/unlikely InstanceHandle.
+            var invalid_instance: u64 = std.math.maxInt(u64);
+            var selected_instance = self.persistent_state.selected_instance orelse @bitCast(InstanceHandle, invalid_instance);
 
-                zgui.text("world!", .{});
+            var instance_metadata_iterator = self.instance_metadata_map.iterator();
+            while (instance_metadata_iterator.next()) |kv_instance_metadata| {
+                const instance_handle: InstanceHandle = kv_instance_metadata.key_ptr.*;
+                const metadata: *ObjectMetadata = kv_instance_metadata.value_ptr;
+
+                if (zgui.selectable(metadata.name, .{
+                    .selected = instance_handle.instance_handle == selected_instance.instance_handle,
+                    .flags = .{ .allow_double_click = false },
+                })) {
+                    self.persistent_state.selected_instance = instance_handle;
+                }
             }
         }
     }
@@ -184,9 +271,9 @@ pub fn newFrame(self: Editor, window: glfw.Window, delta_time: f32) !void {
         _ = zgui.begin("Object Inspector", .{ .popen = null, .flags = .{
             .menu_bar = false,
             .no_move = true,
-            .no_resize = true,
-            .no_scrollbar = true,
-            .no_scroll_with_mouse = true,
+            .no_resize = false,
+            .no_scrollbar = false,
+            .no_scroll_with_mouse = false,
             .no_collapse = true,
         } });
         defer zgui.end();
@@ -201,7 +288,12 @@ pub fn newFrame(self: Editor, window: glfw.Window, delta_time: f32) !void {
     }
 }
 
-pub fn deinit(self: Editor) void {
+pub fn deinit(self: *Editor) void {
+    for (self.instance_metadata_map.values()) |value| {
+        value.deinit(self.allocator);
+    }
+    self.instance_metadata_map.deinit();
+
     self.pointing_hand.destroy();
     self.arrow.destroy();
     self.ibeam.destroy();

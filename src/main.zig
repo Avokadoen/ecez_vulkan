@@ -42,11 +42,11 @@ pub fn main() !void {
     });
     defer window.destroy();
 
-    const box_count = 10_000;
+    const box_count = 100;
     var context = try RenderContext.init(allocator, window, &[_]RenderContext.MesInstancehInitializeContex{
         .{
             .cgltf_path = "models/ScifiHelmet/SciFiHelmet.gltf",
-            .instance_count = 2,
+            .instance_count = 100,
         },
         .{
             .cgltf_path = "models/BoxTextured/BoxTextured.gltf",
@@ -76,7 +76,10 @@ pub fn main() !void {
         context.setInstanceTransform(box.*, zm.translation(1, 0, 0));
     }
 
-    const editor = try Editor.init();
+    // TODO: helmets also
+    var editor = try Editor.init(allocator, &[_][]const RenderContext.InstanceHandle{&box_instances});
+    defer editor.deinit();
+
     // register input callbacks for the editor
     editor.setEditorInput(window);
 
