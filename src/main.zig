@@ -3,6 +3,8 @@ const std = @import("std");
 const glfw = @import("glfw");
 const zm = @import("zmath");
 
+const Editor = @import("Editor.zig");
+
 const RenderContext = @import("RenderContext.zig");
 
 const PositionComp = struct {
@@ -53,13 +55,8 @@ pub fn main() !void {
     }, .{
         .update_rate = .{ .time_seconds = 0.01 },
     });
-
     defer context.deinit(allocator);
 
-    // TODO: editor should not be part of render context
-    if (RenderContext.enable_imgui) {
-        context.editor.setEditorInput();
-    }
     context.handleFramebufferResize(window);
 
     const helmet_rotation = zm.rotationZ(std.math.pi);
@@ -79,6 +76,10 @@ pub fn main() !void {
         context.setInstanceTransform(box.*, zm.translation(1, 0, 0));
     }
 
+    const editor = try Editor.init();
+    // register input callbacks for the editor
+    editor.setEditorInput(window);
+
     var then = std.time.microTimestamp();
     // Wait for the user to close the window.
     while (!window.shouldClose()) {
@@ -91,10 +92,11 @@ pub fn main() !void {
         test_transform = zm.mul(zm.rotationY(std.math.pi * delta_time), test_transform);
         context.setInstanceTransform(helmet_instance2, test_transform);
 
-        for (box_instances) |*box| {
-            context.setInstanceTransform(box.*, zm.translation(1, 0, 0));
+        for (box_instances) |box| {
+            context.setInstanceTransform(box, zm.translation(1, 0, 0));
         }
 
+        try editor.newFrame(window, delta_time);
         try context.drawFrame(window, delta_time);
 
         // TODO: proper input handling? (out of project scope)

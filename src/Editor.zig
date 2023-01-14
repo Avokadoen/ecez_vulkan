@@ -8,8 +8,6 @@ const glfw = @import("glfw");
 /// Editor for making scenes
 const Editor = @This();
 
-window: glfw.Window,
-
 pointing_hand: glfw.Cursor,
 arrow: glfw.Cursor,
 ibeam: glfw.Cursor,
@@ -20,7 +18,7 @@ resize_nesw: glfw.Cursor,
 resize_nwse: glfw.Cursor,
 not_allowed: glfw.Cursor,
 
-pub fn init(window: glfw.Window) !Editor {
+pub fn init() !Editor {
     // Color scheme
     const StyleCol = zgui.StyleCol;
     const style = zgui.getStyle();
@@ -50,7 +48,6 @@ pub fn init(window: glfw.Window) !Editor {
     errdefer not_allowed.destroy();
 
     return Editor{
-        .window = window,
         .pointing_hand = pointing_hand,
         .arrow = arrow,
         .ibeam = ibeam,
@@ -63,21 +60,24 @@ pub fn init(window: glfw.Window) !Editor {
     };
 }
 
-pub fn newFrame(self: Editor, frame_width: u32, frame_height: u32, delta_time: f32) void {
+pub fn newFrame(self: Editor, window: glfw.Window, delta_time: f32) !void {
+    const frame_size = try window.getFramebufferSize();
+    zgui.io.setDisplaySize(@intToFloat(f32, frame_size.width), @intToFloat(f32, frame_size.height));
+    zgui.io.setDisplayFramebufferScale(1.0, 1.0);
 
     // NOTE: getting cursor must be done before calling zgui.newFrame
     switch (zgui.getMouseCursor()) {
-        .none => self.window.setCursor(self.pointing_hand) catch {},
-        .arrow => self.window.setCursor(self.arrow) catch {},
-        .text_input => self.window.setCursor(self.ibeam) catch {},
-        .resize_all => self.window.setCursor(self.crosshair) catch {},
-        .resize_ns => self.window.setCursor(self.resize_ns) catch {},
-        .resize_ew => self.window.setCursor(self.resize_ew) catch {},
-        .resize_nesw => self.window.setCursor(self.resize_nesw) catch {},
-        .resize_nwse => self.window.setCursor(self.resize_nwse) catch {},
-        .hand => self.window.setCursor(self.pointing_hand) catch {},
-        .not_allowed => self.window.setCursor(self.not_allowed) catch {},
-        .count => self.window.setCursor(self.ibeam) catch {},
+        .none => window.setCursor(self.pointing_hand) catch {},
+        .arrow => window.setCursor(self.arrow) catch {},
+        .text_input => window.setCursor(self.ibeam) catch {},
+        .resize_all => window.setCursor(self.crosshair) catch {},
+        .resize_ns => window.setCursor(self.resize_ns) catch {},
+        .resize_ew => window.setCursor(self.resize_ew) catch {},
+        .resize_nesw => window.setCursor(self.resize_nesw) catch {},
+        .resize_nwse => window.setCursor(self.resize_nwse) catch {},
+        .hand => window.setCursor(self.pointing_hand) catch {},
+        .not_allowed => window.setCursor(self.not_allowed) catch {},
+        .count => window.setCursor(self.ibeam) catch {},
     }
 
     zgui.newFrame();
@@ -146,11 +146,11 @@ pub fn newFrame(self: Editor, frame_width: u32, frame_height: u32, delta_time: f
 
     // define Entity List
     {
-        const width = @intToFloat(f32, frame_width / 8);
+        const width = @intToFloat(f32, frame_size.width) / 8;
 
-        zgui.setNextWindowSize(.{ .w = width, .h = @intToFloat(f32, frame_height), .cond = .always });
+        zgui.setNextWindowSize(.{ .w = width, .h = @intToFloat(f32, frame_size.height), .cond = .always });
         zgui.setNextWindowPos(.{ .x = 0, .y = header_height, .cond = .always });
-        _ = zgui.begin("Entity List", .{ .popen = null, .flags = .{
+        _ = zgui.begin("Object List", .{ .popen = null, .flags = .{
             .menu_bar = false,
             .no_move = true,
             .no_resize = true,
@@ -177,11 +177,11 @@ pub fn newFrame(self: Editor, frame_width: u32, frame_height: u32, delta_time: f
 
     // define Entity Inspector
     {
-        const width = @intToFloat(f32, frame_width / 8);
+        const width = @intToFloat(f32, frame_size.width) / 8;
 
-        zgui.setNextWindowSize(.{ .w = width, .h = @intToFloat(f32, frame_height), .cond = .always });
-        zgui.setNextWindowPos(.{ .x = @intToFloat(f32, frame_width) - width, .y = header_height, .cond = .always });
-        _ = zgui.begin("Entity Inspector", .{ .popen = null, .flags = .{
+        zgui.setNextWindowSize(.{ .w = width, .h = @intToFloat(f32, frame_size.height), .cond = .always });
+        zgui.setNextWindowPos(.{ .x = @intToFloat(f32, frame_size.width) - width, .y = header_height, .cond = .always });
+        _ = zgui.begin("Object Inspector", .{ .popen = null, .flags = .{
             .menu_bar = false,
             .no_move = true,
             .no_resize = true,
@@ -214,12 +214,13 @@ pub fn deinit(self: Editor) void {
 }
 
 /// register input so only editor handles glfw input
-pub fn setEditorInput(self: Editor) void {
-    _ = self.window.setKeyCallback(keyCallback);
-    _ = self.window.setCharCallback(charCallback);
-    _ = self.window.setMouseButtonCallback(mouseButtonCallback);
-    _ = self.window.setCursorPosCallback(cursorPosCallback);
-    _ = self.window.setScrollCallback(scrollCallback);
+pub fn setEditorInput(self: Editor, window: glfw.Window) void {
+    _ = self;
+    _ = window.setKeyCallback(keyCallback);
+    _ = window.setCharCallback(charCallback);
+    _ = window.setMouseButtonCallback(mouseButtonCallback);
+    _ = window.setCursorPosCallback(cursorPosCallback);
+    _ = window.setScrollCallback(scrollCallback);
 }
 
 pub fn keyCallback(window: glfw.Window, key: glfw.Key, scancode: i32, action: glfw.Action, mods: glfw.Mods) void {

@@ -15,7 +15,6 @@ const InstanceDispatch = vk_dispatch.InstanceDispatch;
 const DeviceDispatch = vk_dispatch.DeviceDispatch;
 
 const AssetHandler = @import("AssetHandler.zig");
-const Editor = @import("Editor.zig");
 
 const pipeline_utils = @import("pipeline_utils.zig");
 
@@ -258,7 +257,6 @@ missing_updated_frames: u32 = 0,
 // TODO: only members if imgui enabled
 // TODO: should not take memory if imgui_enabled == false
 imgui_pipeline: ImguiPipeline,
-editor: Editor,
 
 pub fn init(
     allocator: Allocator,
@@ -1038,8 +1036,6 @@ pub fn init(
         &image_staging_buffer,
     ) else undefined;
 
-    const editor = if (enable_imgui) try Editor.init(window) else undefined;
-
     // transfer all data to GPU memory at the end of init
     try image_staging_buffer.flushAndCopyToDestination(vkd, device, null);
     try buffer_staging_buffer.flushAndCopyToDestination(vkd, device, null);
@@ -1100,7 +1096,6 @@ pub fn init(
         .update_rate = config.update_rate,
         .last_update = config.update_rate,
         .imgui_pipeline = imgui_pipeline,
-        .editor = editor,
     };
 }
 
@@ -1336,7 +1331,6 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window, delta_time: f32) !vo
 
     if (enable_imgui) {
         self.imgui_pipeline.updateDisplay(self.swapchain_extent);
-        self.editor.newFrame(self.swapchain_extent.width, self.swapchain_extent.height, delta_time);
     }
 
     // TODO: buffers should have a flush that return the fence in order to wait on all pending transfers instead
@@ -1471,7 +1465,7 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window, delta_time: f32) !vo
             @sizeOf(vk.DrawIndexedIndirectCommand),
         );
 
-        // draw editor
+        // draw imgui content
         if (enable_imgui) {
             try self.imgui_pipeline.draw(self.vkd, self.device, command_buffer, self.current_frame);
         }
