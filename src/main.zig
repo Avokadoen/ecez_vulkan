@@ -85,7 +85,7 @@ pub fn main() !void {
         try glfw.pollEvents();
 
         const now = std.time.microTimestamp();
-        const delta_time = @intToFloat(f32, now - then) / std.time.us_per_s;
+        const delta_time = @max(@intToFloat(f32, now - then) / std.time.us_per_s, 0.000001);
         then = now;
 
         test_transform = zm.mul(zm.rotationY(std.math.pi * delta_time), test_transform);
