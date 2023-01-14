@@ -1335,7 +1335,7 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window, delta_time: f32) !vo
 
     if (enable_imgui) {
         self.imgui_pipeline.updateDisplay(self.swapchain_extent);
-        self.editor.newFrame(self.swapchain_extent.width, self.swapchain_extent.height);
+        self.editor.newFrame(self.swapchain_extent.width, self.swapchain_extent.height, delta_time);
     }
 
     // TODO: buffers should have a flush that return the fence in order to wait on all pending transfers instead

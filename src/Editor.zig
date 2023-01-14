@@ -63,7 +63,8 @@ pub fn init(window: glfw.Window) !Editor {
     };
 }
 
-pub fn newFrame(self: Editor, frame_width: u32, frame_height: u32) void {
+pub fn newFrame(self: Editor, frame_width: u32, frame_height: u32, delta_time: f32) void {
+
     // NOTE: getting cursor must be done before calling zgui.newFrame
     switch (zgui.getMouseCursor()) {
         .none => self.window.setCursor(self.pointing_hand) catch {},
@@ -82,49 +83,100 @@ pub fn newFrame(self: Editor, frame_width: u32, frame_height: u32) void {
     zgui.newFrame();
     defer zgui.render();
 
-    _ = frame_width;
-    _ = frame_height;
+    zgui.io.setDeltaTime(delta_time);
 
-    // const style = zgui.getStyle();
     var b = true;
     _ = zgui.showDemoWindow(&b);
+
     // define editor header
-    // {
-    //     const rounding = style.window_rounding;
-    //     defer style.window_rounding = rounding;
+    const header_height = blk1: {
+        if (zgui.beginMainMenuBar() == false) {
+            break :blk1 0;
+        }
+        defer zgui.endMainMenuBar();
 
-    //     style.window_rounding = 0;
+        blk2: {
+            if (zgui.beginMenu("File", true) == false) {
+                break :blk2;
+            }
+            defer zgui.endMenu();
 
-    //     zgui.setNextWindowSize(.{ .w = @intToFloat(f32, frame_width), .h = @intToFloat(f32, frame_height), .cond = .always });
-    //     _ = zgui.begin("main menu", .{ .popen = null, .flags = .{
-    //         .menu_bar = true,
-    //         .no_move = true,
-    //         .no_resize = true,
-    //         .no_title_bar = false,
-    //         .no_scrollbar = true,
-    //         .no_scroll_with_mouse = true,
-    //         .no_collapse = true,
-    //         .no_background = true,
-    //     } });
+            if (zgui.menuItem("Export", .{})) {
+                std.debug.print("export", .{});
+            }
 
-    //     blk: {
-    //         if (zgui.beginMenuBar() == false) {
-    //             break :blk;
-    //         }
-    //         defer zgui.endMenuBar();
+            if (zgui.menuItem("Import", .{})) {
+                std.debug.print("import", .{});
+            }
+        }
 
-    //         if (zgui.beginMenu("Hello world", true) == false) {
-    //             break :blk;
-    //         }
-    //         defer zgui.endMenu();
+        blk2: {
+            if (zgui.beginMenu("Window", true) == false) {
+                break :blk2;
+            }
+            defer zgui.endMenu();
 
-    //         if (zgui.menuItem("Camera", .{})) {
-    //             @import("std").debug.print("awesome", .{});
-    //         }
-    //     }
+            if (zgui.menuItem("Object list", .{})) {
+                std.debug.print("object list", .{});
+            }
 
-    //     defer zgui.end();
-    // }
+            if (zgui.menuItem("Debug log", .{})) {
+                std.debug.print("debug log", .{});
+            }
+        }
+
+        break :blk1 zgui.getWindowHeight();
+    };
+
+    // define Entity List
+    {
+        const width = @intToFloat(f32, frame_width / 8);
+
+        zgui.setNextWindowSize(.{ .w = width, .h = @intToFloat(f32, frame_height), .cond = .always });
+        zgui.setNextWindowPos(.{ .x = 0, .y = header_height, .cond = .always });
+        _ = zgui.begin("Entity List", .{ .popen = null, .flags = .{
+            .menu_bar = false,
+            .no_move = true,
+            .no_resize = true,
+            .no_scrollbar = true,
+            .no_scroll_with_mouse = true,
+            .no_collapse = true,
+        } });
+        defer zgui.end();
+
+        {
+            if (zgui.treeNode("hello ")) {
+                defer zgui.treePop();
+
+                zgui.text("world!", .{});
+            }
+        }
+    }
+
+    // define Entity Inspector
+    {
+        const width = @intToFloat(f32, frame_width / 8);
+
+        zgui.setNextWindowSize(.{ .w = width, .h = @intToFloat(f32, frame_height), .cond = .always });
+        zgui.setNextWindowPos(.{ .x = @intToFloat(f32, frame_width) - width, .y = header_height, .cond = .always });
+        _ = zgui.begin("Entity Inspector", .{ .popen = null, .flags = .{
+            .menu_bar = false,
+            .no_move = true,
+            .no_resize = true,
+            .no_scrollbar = true,
+            .no_scroll_with_mouse = true,
+            .no_collapse = true,
+        } });
+        defer zgui.end();
+
+        {
+            if (zgui.treeNode("hello ")) {
+                defer zgui.treePop();
+
+                zgui.text("world!", .{});
+            }
+        }
+    }
 }
 
 pub fn deinit(self: Editor) void {
