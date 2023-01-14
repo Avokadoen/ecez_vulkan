@@ -3046,6 +3046,7 @@ pub const endTooltip = zguiEndTooltip;
 extern fn zguiBeginTooltip() void;
 extern fn zguiEndTooltip() void;
 
+pub const beginPopupContextWindow = zguiBeginPopupContextWindow;
 pub const PopupFlags = packed struct(u32) {
     mouse_button_left: bool = false,
     mouse_button_right: bool = false,
@@ -3069,6 +3070,7 @@ pub fn openPopup(str_id: [:0]const u8, flags: PopupFlags) void {
 pub const endPopup = zguiEndPopup;
 /// `pub fn closeCurrentPopup() void`
 pub const closeCurrentPopup = zguiCloseCurrentPopup;
+extern fn zguiBeginPopupContextWindow() bool;
 extern fn zguiBeginPopupModal(name: [*:0]const u8, popen: ?*bool, flags: WindowFlags) bool;
 extern fn zguiEndPopup() void;
 extern fn zguiOpenPopup(str_id: [*:0]const u8, flags: PopupFlags) void;

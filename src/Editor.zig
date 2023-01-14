@@ -108,6 +108,10 @@ pub fn newFrame(self: Editor, frame_width: u32, frame_height: u32, delta_time: f
             if (zgui.menuItem("Import", .{})) {
                 std.debug.print("import", .{});
             }
+
+            if (zgui.menuItem("Load new model", .{})) {
+                std.debug.print("load new model", .{});
+            }
         }
 
         blk2: {
@@ -116,12 +120,24 @@ pub fn newFrame(self: Editor, frame_width: u32, frame_height: u32, delta_time: f
             }
             defer zgui.endMenu();
 
+            // TODO: array that defines each window, loop them here to make them toggleable
             if (zgui.menuItem("Object list", .{})) {
                 std.debug.print("object list", .{});
             }
 
             if (zgui.menuItem("Debug log", .{})) {
                 std.debug.print("debug log", .{});
+            }
+        }
+
+        blk2: {
+            if (zgui.beginMenu("Objects", true) == false) {
+                break :blk2;
+            }
+            defer zgui.endMenu();
+
+            if (zgui.menuItem("Create new", .{})) {
+                std.debug.print("create new object", .{});
             }
         }
 
@@ -145,6 +161,12 @@ pub fn newFrame(self: Editor, frame_width: u32, frame_height: u32, delta_time: f
         defer zgui.end();
 
         {
+            if (zgui.beginPopupContextWindow()) {
+                defer zgui.endPopup();
+
+                zgui.text("create new object", .{});
+            }
+
             if (zgui.treeNode("hello ")) {
                 defer zgui.treePop();
 
