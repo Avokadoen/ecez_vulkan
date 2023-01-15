@@ -42,43 +42,40 @@ pub fn main() !void {
     });
     defer window.destroy();
 
-    const box_count = 100;
-    var context = try RenderContext.init(allocator, window, &[_]RenderContext.MesInstancehInitializeContex{
+    var editor = try Editor.init(allocator, window, &[_]RenderContext.MeshInstancehInitializeContex{
         .{
             .cgltf_path = "models/ScifiHelmet/SciFiHelmet.gltf",
             .instance_count = 100,
         },
         .{
             .cgltf_path = "models/BoxTextured/BoxTextured.gltf",
-            .instance_count = box_count,
+            .instance_count = 100,
         },
-    }, .{
-        .update_rate = .never,
     });
-    defer context.deinit(allocator);
-
-    context.handleFramebufferResize(window);
-
-    const helmet_rotation = zm.rotationZ(std.math.pi);
-    const helmet_mesh_handle = context.getNthMeshHandle(0);
-
-    const helmet_instance1 = context.getNewInstance(helmet_mesh_handle) catch unreachable;
-    context.setInstanceTransform(helmet_instance1, zm.mul(helmet_rotation, zm.translation(-1, 0, 0)));
-
-    var test_transform = zm.mul(helmet_rotation, zm.translation(0, 0, 0));
-    const helmet_instance2 = context.getNewInstance(helmet_mesh_handle) catch unreachable;
-    context.setInstanceTransform(helmet_instance2, test_transform);
-
-    const box_mesh_handle = context.getNthMeshHandle(1);
-    var box_instances: [box_count]RenderContext.InstanceHandle = undefined;
-    for (box_instances) |*box| {
-        box.* = context.getNewInstance(box_mesh_handle) catch unreachable;
-        context.setInstanceTransform(box.*, zm.translation(1, 0, 0));
-    }
-
-    // TODO: helmets also
-    var editor = try Editor.init(allocator, &[_][]const RenderContext.InstanceHandle{&box_instances});
     defer editor.deinit();
+
+    // handle if user resize window
+    editor.render_context.handleFramebufferResize(window);
+
+    // TODO: make a test scene while file format facilities are not in place
+    {
+        const helmet_rotation = zm.rotationZ(std.math.pi);
+        const helmet_mesh_handle = editor.getNthMeshHandle(0);
+
+        const helmet_instance1 = editor.getNewInstance(helmet_mesh_handle) catch unreachable;
+        editor.setInstanceTransform(helmet_instance1, zm.mul(helmet_rotation, zm.translation(-1, 0, 0)));
+
+        var test_transform = zm.mul(helmet_rotation, zm.translation(0, 0, 0));
+        const helmet_instance2 = editor.getNewInstance(helmet_mesh_handle) catch unreachable;
+        editor.setInstanceTransform(helmet_instance2, test_transform);
+
+        const box_mesh_handle = editor.getNthMeshHandle(1);
+        var box_instances: [100]RenderContext.InstanceHandle = undefined;
+        for (box_instances) |*box| {
+            box.* = editor.getNewInstance(box_mesh_handle) catch unreachable;
+            editor.setInstanceTransform(box.*, zm.translation(1, 0, 0));
+        }
+    }
 
     // register input callbacks for the editor
     editor.setEditorInput(window);
@@ -93,7 +90,6 @@ pub fn main() !void {
         then = now;
 
         try editor.newFrame(window, delta_time);
-        try context.drawFrame(window, delta_time);
 
         // TODO: proper input handling? (out of project scope)
         if (window.getKey(.escape) == .press) {

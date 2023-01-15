@@ -61,7 +61,7 @@ pub const InstanceHandle = packed struct {
     padding: u16 = 0,
 };
 
-pub const MesInstancehInitializeContex = struct {
+pub const MeshInstancehInitializeContex = struct {
     cgltf_path: []const u8,
     instance_count: u32,
 };
@@ -218,6 +218,7 @@ vertex_index_buffer: ImmutableBuffer,
 
 camera: Camera,
 
+// TODO: rename model_contexts
 /// This is used to supply users with handles for any instance when
 /// they request a new object to render
 instance_contexts: []MeshInstanceContext,
@@ -262,7 +263,7 @@ imgui_pipeline: ImguiPipeline,
 pub fn init(
     allocator: Allocator,
     window: glfw.Window,
-    mesh_instance_initalizers: []const MesInstancehInitializeContex,
+    mesh_instance_initalizers: []const MeshInstancehInitializeContex,
     config: Config,
 ) !RenderContext {
     zmesh.init(allocator);
@@ -1332,13 +1333,10 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window, delta_time: f32) !vo
     _ = try self.vkd.waitForFences(self.device, 1, @ptrCast([*]const vk.Fence, &self.in_flight_fences[self.current_frame]), vk.TRUE, std.math.maxInt(u64));
 
     if (enable_imgui) {
+        // flush instance data changes to GPU before rendering
+        try self.instance_data_buffer.flush(self.vkd, self.device);
         self.imgui_pipeline.updateDisplay(self.swapchain_extent);
     }
-
-    // TODO: buffers should have a flush that return the fence in order to wait on all pending transfers instead
-    //       this should also be utilized in the init function!
-    // flush instance data changes to GPU before rendering
-    try self.instance_data_buffer.flush(self.vkd, self.device);
 
     var image_index: u32 = blk: {
         const result = self.vkd.acquireNextImageKHR(self.device, self.swapchain, std.math.maxInt(u64), self.image_available_semaphores[self.current_frame], .null_handle) catch |err| {

@@ -4,9 +4,12 @@ const Allocator = std.mem.Allocator;
 const zgui = @import("zgui");
 const glfw = @import("glfw");
 
+const zm = @import("zmath");
+
 const RenderContext = @import("RenderContext.zig");
 const MeshHandle = RenderContext.MeshHandle;
 const InstanceHandle = RenderContext.InstanceHandle;
+const MeshInstancehInitializeContex = RenderContext.MeshInstancehInitializeContex;
 
 // TODO: try using ecez to make the Editor! :)
 
@@ -86,7 +89,9 @@ resize_nesw: glfw.Cursor,
 resize_nwse: glfw.Cursor,
 not_allowed: glfw.Cursor,
 
-pub fn init(allocator: Allocator, instance_handles: [][]const InstanceHandle) !Editor {
+render_context: RenderContext,
+
+pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers: []const MeshInstancehInitializeContex) !Editor {
     var instance_metadata_map = EditorObjectMap.init(allocator);
     errdefer {
         for (instance_metadata_map.values()) |value| {
@@ -95,21 +100,11 @@ pub fn init(allocator: Allocator, instance_handles: [][]const InstanceHandle) !E
         instance_metadata_map.deinit();
     }
 
-    const total_handle_count = blk: {
-        var count: usize = 0;
-        for (instance_handles) |handles| {
-            count += handles.len;
-        }
-        break :blk count;
-    };
-
-    try instance_metadata_map.ensureUnusedCapacity(total_handle_count);
-    for (instance_handles) |handles| {
-        for (handles) |handle, i| {
-            const metadata = try ObjectMetadata.init(allocator, "TODO", @intCast(u32, i));
-            instance_metadata_map.putAssumeCapacity(handle, metadata);
-        }
-    }
+    // TODO: load random stuff while we dont have a scene format to load from ...
+    var render_context = try RenderContext.init(allocator, window, mesh_instance_initalizers, .{
+        .update_rate = .manually,
+    });
+    errdefer render_context.deinit(allocator);
 
     const persistent_state = PersistentState{
         .selected_instance = null,
@@ -159,6 +154,7 @@ pub fn init(allocator: Allocator, instance_handles: [][]const InstanceHandle) !E
         .resize_nesw = resize_nesw,
         .resize_nwse = resize_nwse,
         .not_allowed = not_allowed,
+        .render_context = render_context,
     };
 }
 
@@ -183,158 +179,162 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
     }
 
     zgui.newFrame();
-    defer zgui.render();
+    { // imgui render block
+        defer zgui.render();
 
-    zgui.io.setDeltaTime(delta_time);
+        zgui.io.setDeltaTime(delta_time);
 
-    var b = true;
-    _ = zgui.showDemoWindow(&b);
+        var b = true;
+        _ = zgui.showDemoWindow(&b);
 
-    // define editor header
-    const header_height = blk1: {
-        if (zgui.beginMainMenuBar() == false) {
-            break :blk1 0;
-        }
-        defer zgui.endMainMenuBar();
-
-        blk2: {
-            if (zgui.beginMenu("File", true) == false) {
-                break :blk2;
+        // define editor header
+        const header_height = blk1: {
+            if (zgui.beginMainMenuBar() == false) {
+                break :blk1 0;
             }
-            defer zgui.endMenu();
+            defer zgui.endMainMenuBar();
 
-            if (zgui.menuItem("Export", .{})) {
-                std.debug.print("export", .{});
-            }
+            blk2: {
+                if (zgui.beginMenu("File", true) == false) {
+                    break :blk2;
+                }
+                defer zgui.endMenu();
 
-            if (zgui.menuItem("Import", .{})) {
-                std.debug.print("import", .{});
-            }
+                if (zgui.menuItem("Export", .{})) {
+                    std.debug.print("export", .{});
+                }
 
-            if (zgui.menuItem("Load new model", .{})) {
-                std.debug.print("load new model", .{});
-            }
-        }
+                if (zgui.menuItem("Import", .{})) {
+                    std.debug.print("import", .{});
+                }
 
-        blk2: {
-            if (zgui.beginMenu("Window", true) == false) {
-                break :blk2;
-            }
-            defer zgui.endMenu();
-
-            // TODO: array that defines each window, loop them here to make them toggleable
-            if (zgui.menuItem("Object list", .{})) {
-                std.debug.print("object list", .{});
+                if (zgui.menuItem("Load new model", .{})) {
+                    std.debug.print("load new model", .{});
+                }
             }
 
-            if (zgui.menuItem("Debug log", .{})) {
-                std.debug.print("debug log", .{});
+            blk2: {
+                if (zgui.beginMenu("Window", true) == false) {
+                    break :blk2;
+                }
+                defer zgui.endMenu();
+
+                // TODO: array that defines each window, loop them here to make them toggleable
+                if (zgui.menuItem("Object list", .{})) {
+                    std.debug.print("object list", .{});
+                }
+
+                if (zgui.menuItem("Debug log", .{})) {
+                    std.debug.print("debug log", .{});
+                }
             }
-        }
 
-        blk2: {
-            if (zgui.beginMenu("Objects", true) == false) {
-                break :blk2;
+            blk2: {
+                if (zgui.beginMenu("Objects", true) == false) {
+                    break :blk2;
+                }
+                defer zgui.endMenu();
+
+                if (zgui.menuItem("Create new", .{})) {
+                    std.debug.print("create new object", .{});
+                }
             }
-            defer zgui.endMenu();
 
-            if (zgui.menuItem("Create new", .{})) {
-                std.debug.print("create new object", .{});
-            }
-        }
+            break :blk1 zgui.getWindowHeight();
+        };
 
-        break :blk1 zgui.getWindowHeight();
-    };
-
-    // define Object List
-    {
-        const width = @intToFloat(f32, frame_size.width) / 8;
-
-        zgui.setNextWindowSize(.{ .w = width, .h = @intToFloat(f32, frame_size.height), .cond = .always });
-        zgui.setNextWindowPos(.{ .x = 0, .y = header_height, .cond = .always });
-        _ = zgui.begin("Object List", .{ .popen = null, .flags = .{
-            .menu_bar = false,
-            .no_move = true,
-            .no_resize = false,
-            .no_scrollbar = false,
-            .no_scroll_with_mouse = false,
-            .no_collapse = true,
-        } });
-        defer zgui.end();
-
+        // define Object List
         {
-            if (zgui.beginPopupContextWindow()) {
-                defer zgui.endPopup();
+            const width = @intToFloat(f32, frame_size.width) / 8;
 
-                zgui.text("create new object", .{});
-            }
+            zgui.setNextWindowSize(.{ .w = width, .h = @intToFloat(f32, frame_size.height), .cond = .always });
+            zgui.setNextWindowPos(.{ .x = 0, .y = header_height, .cond = .always });
+            _ = zgui.begin("Object List", .{ .popen = null, .flags = .{
+                .menu_bar = false,
+                .no_move = true,
+                .no_resize = false,
+                .no_scrollbar = false,
+                .no_scroll_with_mouse = false,
+                .no_collapse = true,
+            } });
+            defer zgui.end();
 
-            // selected instance is either our persistent user selction, or an invalid/unlikely InstanceHandle.
-            var invalid_instance: u64 = std.math.maxInt(u64);
-            var selected_instance = self.persistent_state.selected_instance orelse @bitCast(InstanceHandle, invalid_instance);
+            {
+                if (zgui.beginPopupContextWindow()) {
+                    defer zgui.endPopup();
 
-            var instance_metadata_iterator = self.instance_metadata_map.iterator();
-            while (instance_metadata_iterator.next()) |kv_instance_metadata| {
-                const instance_handle: InstanceHandle = kv_instance_metadata.key_ptr.*;
-                const metadata: *ObjectMetadata = kv_instance_metadata.value_ptr;
+                    zgui.text("create new object", .{});
+                }
 
-                // if user is renaming the selectable
-                if (self.persistent_state.renaming_instance_in_list and instance_handle.instance_handle == selected_instance.instance_handle) {
-                    if (zgui.inputText("##rename_instance_field", .{
-                        .buf = &self.persistent_state.renaming_input_buffer,
-                        .flags = .{ .enter_returns_true = true },
-                    })) {
-                        const new_len = std.mem.indexOf(u8, &self.persistent_state.renaming_input_buffer, &[_]u8{0}).?;
+                // selected instance is either our persistent user selction, or an invalid/unlikely InstanceHandle.
+                var invalid_instance: u64 = std.math.maxInt(u64);
+                var selected_instance = self.persistent_state.selected_instance orelse @bitCast(InstanceHandle, invalid_instance);
 
-                        // if enter is pressed
-                        if (new_len == self.persistent_state.renaming_input_len) {
-                            self.persistent_state.renaming_input_len = 0;
-                            self.persistent_state.renaming_instance_in_list = false;
+                var instance_metadata_iterator = self.instance_metadata_map.iterator();
+                while (instance_metadata_iterator.next()) |kv_instance_metadata| {
+                    const instance_handle: InstanceHandle = kv_instance_metadata.key_ptr.*;
+                    const metadata: *ObjectMetadata = kv_instance_metadata.value_ptr;
 
-                            metadata.rename(self.allocator, self.persistent_state.renaming_input_buffer[0..new_len]) catch {
-                                std.debug.print("OOM: failed to rename instance", .{});
-                            };
-                        } else {
-                            self.persistent_state.renaming_input_len = new_len;
+                    // if user is renaming the selectable
+                    if (self.persistent_state.renaming_instance_in_list and instance_handle.instance_handle == selected_instance.instance_handle) {
+                        if (zgui.inputText("##rename_instance_field", .{
+                            .buf = &self.persistent_state.renaming_input_buffer,
+                            .flags = .{ .enter_returns_true = true },
+                        })) {
+                            const new_len = std.mem.indexOf(u8, &self.persistent_state.renaming_input_buffer, &[_]u8{0}).?;
+
+                            // if enter is pressed
+                            if (new_len == self.persistent_state.renaming_input_len) {
+                                self.persistent_state.renaming_input_len = 0;
+                                self.persistent_state.renaming_instance_in_list = false;
+
+                                metadata.rename(self.allocator, self.persistent_state.renaming_input_buffer[0..new_len]) catch {
+                                    std.debug.print("OOM: failed to rename instance", .{});
+                                };
+                            } else {
+                                self.persistent_state.renaming_input_len = new_len;
+                            }
+                        }
+                    } else {
+                        if (zgui.selectable(metadata.name, .{
+                            .selected = instance_handle.instance_handle == selected_instance.instance_handle,
+                            .flags = .{ .allow_double_click = true },
+                        })) {
+                            self.persistent_state.renaming_instance_in_list = zgui.isItemHovered(.{}) and zgui.isMouseDoubleClicked(zgui.MouseButton.left);
+                            self.persistent_state.selected_instance = instance_handle;
                         }
                     }
-                } else {
-                    if (zgui.selectable(metadata.name, .{
-                        .selected = instance_handle.instance_handle == selected_instance.instance_handle,
-                        .flags = .{ .allow_double_click = true },
-                    })) {
-                        self.persistent_state.renaming_instance_in_list = zgui.isItemHovered(.{}) and zgui.isMouseDoubleClicked(zgui.MouseButton.left);
-                        self.persistent_state.selected_instance = instance_handle;
-                    }
+                }
+            }
+        }
+
+        // define Object Inspector
+        {
+            const width = @intToFloat(f32, frame_size.width) / 8;
+
+            zgui.setNextWindowSize(.{ .w = width, .h = @intToFloat(f32, frame_size.height), .cond = .always });
+            zgui.setNextWindowPos(.{ .x = @intToFloat(f32, frame_size.width) - width, .y = header_height, .cond = .always });
+            _ = zgui.begin("Object Inspector", .{ .popen = null, .flags = .{
+                .menu_bar = false,
+                .no_move = true,
+                .no_resize = false,
+                .no_scrollbar = false,
+                .no_scroll_with_mouse = false,
+                .no_collapse = true,
+            } });
+            defer zgui.end();
+
+            {
+                if (zgui.treeNode("hello ")) {
+                    defer zgui.treePop();
+
+                    zgui.text("world!", .{});
                 }
             }
         }
     }
 
-    // define Object Inspector
-    {
-        const width = @intToFloat(f32, frame_size.width) / 8;
-
-        zgui.setNextWindowSize(.{ .w = width, .h = @intToFloat(f32, frame_size.height), .cond = .always });
-        zgui.setNextWindowPos(.{ .x = @intToFloat(f32, frame_size.width) - width, .y = header_height, .cond = .always });
-        _ = zgui.begin("Object Inspector", .{ .popen = null, .flags = .{
-            .menu_bar = false,
-            .no_move = true,
-            .no_resize = false,
-            .no_scrollbar = false,
-            .no_scroll_with_mouse = false,
-            .no_collapse = true,
-        } });
-        defer zgui.end();
-
-        {
-            if (zgui.treeNode("hello ")) {
-                defer zgui.treePop();
-
-                zgui.text("world!", .{});
-            }
-        }
-    }
+    try self.render_context.drawFrame(window, delta_time);
 }
 
 pub fn deinit(self: *Editor) void {
@@ -352,6 +352,8 @@ pub fn deinit(self: *Editor) void {
     self.resize_nesw.destroy();
     self.resize_nwse.destroy();
     self.not_allowed.destroy();
+
+    self.render_context.deinit(self.allocator);
 }
 
 /// register input so only editor handles glfw input
@@ -418,6 +420,28 @@ pub fn scrollCallback(window: glfw.Window, xoffset: f64, yoffset: f64) void {
     _ = window;
 
     zgui.io.addMouseWheelEvent(@floatCast(f32, xoffset), @floatCast(f32, yoffset));
+}
+
+pub fn getNthMeshHandle(self: *Editor, nth: usize) MeshHandle {
+    return self.render_context.getNthMeshHandle(nth);
+}
+
+/// This function mirrors RenderContext getNewInstance and should be used instead of the render context function.
+/// This enables the editor to records changes in the scene so that it can display new objects for the editor user
+pub fn getNewInstance(self: *Editor, mesh_handle: MeshHandle) !InstanceHandle {
+    const new_instance = self.render_context.getNewInstance(mesh_handle) catch |err| {
+        // if this fails we will end in an inconsistent state!
+        std.debug.panic("attemped to get new instance {d} failed with error {any}", .{ mesh_handle, err });
+    };
+
+    const metadata = try ObjectMetadata.init(self.allocator, "new object", @intCast(u32, self.instance_metadata_map.count()));
+    try self.instance_metadata_map.put(new_instance, metadata);
+
+    return new_instance;
+}
+
+pub fn setInstanceTransform(self: *Editor, instance_handle: InstanceHandle, transform: zm.Mat) void {
+    self.render_context.setInstanceTransform(instance_handle, transform);
 }
 
 inline fn mapGlfwKeyToImgui(key: glfw.Key) zgui.Key {
