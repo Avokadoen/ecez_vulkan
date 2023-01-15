@@ -53,7 +53,7 @@ pub fn main() !void {
             .instance_count = box_count,
         },
     }, .{
-        .update_rate = .{ .time_seconds = 0.01 },
+        .update_rate = .never,
     });
     defer context.deinit(allocator);
 
@@ -91,13 +91,6 @@ pub fn main() !void {
         const now = std.time.microTimestamp();
         const delta_time = @max(@intToFloat(f32, now - then) / std.time.us_per_s, 0.000001);
         then = now;
-
-        test_transform = zm.mul(zm.rotationY(std.math.pi * delta_time), test_transform);
-        context.setInstanceTransform(helmet_instance2, test_transform);
-
-        for (box_instances) |box| {
-            context.setInstanceTransform(box, zm.translation(1, 0, 0));
-        }
 
         try editor.newFrame(window, delta_time);
         try context.drawFrame(window, delta_time);

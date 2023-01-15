@@ -47,6 +47,7 @@ pub const UpdateRate = union(enum) {
     time_seconds: f32, // every nth microsecond
     every_nth_frame: u32, // every nth frame
     always: void,
+    manually: void,
 };
 
 pub const Config = struct {
@@ -252,7 +253,7 @@ indirect_commands_buffer: ImmutableBuffer,
 
 update_rate: UpdateRate,
 last_update: UpdateRate,
-missing_updated_frames: u32 = 0,
+missing_updated_frames: u32 = max_frames_in_flight,
 
 // TODO: only members if imgui enabled
 // TODO: should not take memory if imgui_enabled == false
@@ -1311,6 +1312,7 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window, delta_time: f32) !vo
                 self.last_update.time_seconds += delta_time;
             }
         },
+        .manually => {},
     }
 
     if (self.missing_updated_frames > 0) {
