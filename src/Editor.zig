@@ -12,6 +12,7 @@ const InstanceHandle = RenderContext.InstanceHandle;
 const MeshInstancehInitializeContex = RenderContext.MeshInstancehInitializeContex;
 
 // TODO: try using ecez to make the Editor! :)
+// TODO: controllable scene camera
 
 const ObjectMetadata = struct {
     name: [:0]const u8,
@@ -62,7 +63,6 @@ const ObjectMetadata = struct {
 
 const PersistentState = struct {
     selected_instance: ?InstanceHandle,
-    renaming_input_len: usize,
     renaming_input_buffer: [128]u8,
     renaming_instance_in_list: bool,
 
@@ -112,7 +112,6 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
 
     var persistent_state = PersistentState{
         .selected_instance = null,
-        .renaming_input_len = 0,
         .renaming_input_buffer = undefined,
         .renaming_instance_in_list = false,
         .mesh_names_len = 0,
@@ -222,10 +221,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
             }
             defer zgui.endMainMenuBar();
 
-            blk2: {
-                if (zgui.beginMenu("File", true) == false) {
-                    break :blk2;
-                }
+            if (zgui.beginMenu("File", true)) {
                 defer zgui.endMenu();
 
                 if (zgui.menuItem("Export", .{})) {
@@ -241,10 +237,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 }
             }
 
-            blk2: {
-                if (zgui.beginMenu("Window", true) == false) {
-                    break :blk2;
-                }
+            if (zgui.beginMenu("Window", true)) {
                 defer zgui.endMenu();
 
                 // TODO: array that defines each window, loop them here to make them toggleable
@@ -257,14 +250,18 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 }
             }
 
-            blk2: {
-                if (zgui.beginMenu("Objects", true) == false) {
-                    break :blk2;
-                }
+            if (zgui.beginMenu("Objects", true)) {
                 defer zgui.endMenu();
 
-                if (zgui.menuItem("Create new", .{})) {
-                    std.debug.print("create new object", .{}); // TODO: create new object functionality
+                // TODO: shortcut
+                if (zgui.beginMenu("Create new", true)) {
+                    defer zgui.endMenu();
+
+                    for (self.persistent_state.mesh_names[0..self.persistent_state.mesh_names_len]) |mesh_name, nth_mesh| {
+                        if (zgui.menuItem(mesh_name, .{})) {
+                            try self.createNewObjectCommand(nth_mesh);
+                        }
+                    }
                 }
             }
 
@@ -291,14 +288,9 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 if (zgui.beginPopupContextWindow()) {
                     defer zgui.endPopup();
 
-                    for (self.persistent_state.mesh_names[0..self.persistent_state.mesh_names_len]) |mesh_name, i| {
+                    for (self.persistent_state.mesh_names[0..self.persistent_state.mesh_names_len]) |mesh_name, nth_mesh| {
                         if (zgui.button(mesh_name, .{})) {
-                            const mesh_handle = self.getNthMeshHandle(i);
-                            const new_instance = try self.getNewInstance(mesh_handle);
-                            self.setInstanceTransform(new_instance, zm.translation(0, 0, 0));
-
-                            // manually tell renderer to send new transforms to GPU
-                            self.render_context.missing_updated_frames = RenderContext.max_frames_in_flight;
+                            try self.createNewObjectCommand(nth_mesh);
                         }
                     }
                 }
@@ -320,16 +312,13 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                         })) {
                             const new_len = std.mem.indexOf(u8, &self.persistent_state.renaming_input_buffer, &[_]u8{0}).?;
 
-                            // if enter is pressed
-                            if (new_len == self.persistent_state.renaming_input_len) {
-                                self.persistent_state.renaming_input_len = 0;
-                                self.persistent_state.renaming_instance_in_list = false;
-
+                            if (new_len > 0) {
                                 metadata.rename(self.allocator, self.persistent_state.renaming_input_buffer[0..new_len]) catch {
                                     std.debug.print("OOM: failed to rename instance", .{});
                                 };
-                            } else {
-                                self.persistent_state.renaming_input_len = new_len;
+
+                                self.persistent_state.renaming_instance_in_list = false;
+                                std.mem.set(u8, &self.persistent_state.renaming_input_buffer, 0);
                             }
                         }
                     } else {
@@ -469,6 +458,7 @@ pub fn getNthMeshHandle(self: *Editor, nth: usize) MeshHandle {
     return self.render_context.getNthMeshHandle(nth);
 }
 
+// TODO: new instance should take a name argument!
 /// This function mirrors RenderContext getNewInstance and should be used instead of the render context function.
 /// This enables the editor to records changes in the scene so that it can display new objects for the editor user
 pub fn getNewInstance(self: *Editor, mesh_handle: MeshHandle) !InstanceHandle {
@@ -490,6 +480,15 @@ pub fn setInstanceTransform(self: *Editor, instance_handle: InstanceHandle, tran
 pub fn renameInstance(self: *Editor, instance_handle: InstanceHandle, name: []const u8) !void {
     var instance_entry = self.instance_metadata_map.getEntry(instance_handle).?;
     try instance_entry.value_ptr.rename(self.allocator, name);
+}
+
+inline fn createNewObjectCommand(self: *Editor, nth_mesh: usize) !void {
+    const mesh_handle = self.getNthMeshHandle(nth_mesh);
+    const new_instance = try self.getNewInstance(mesh_handle);
+    self.setInstanceTransform(new_instance, zm.translation(0, 0, 0));
+
+    // manually tell renderer to send new transforms to GPU
+    self.render_context.missing_updated_frames = RenderContext.max_frames_in_flight;
 }
 
 inline fn mapGlfwKeyToImgui(key: glfw.Key) zgui.Key {
