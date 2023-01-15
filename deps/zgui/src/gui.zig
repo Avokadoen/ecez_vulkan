@@ -561,6 +561,10 @@ pub fn setNextWindowBgAlpha(args: SetNextWindowBgAlpha) void {
     zguiSetNextWindowBgAlpha(args.alpha);
 }
 extern fn zguiSetNextWindowBgAlpha(alpha: f32) void;
+
+/// `pub fn setKeyboardFocusHere(offset: i32) void`
+pub const setKeyboardFocusHere = zguiSetKeyboardFocusHere;
+extern fn zguiSetKeyboardFocusHere(offset: i32) void;
 //--------------------------------------------------------------------------------------------------
 const Begin = struct {
     popen: ?*bool = null,

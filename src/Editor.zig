@@ -62,13 +62,19 @@ const ObjectMetadata = struct {
 };
 
 const PersistentState = struct {
-    selected_instance: ?InstanceHandle,
-    renaming_input_buffer: [128]u8,
-    renaming_instance_in_list: bool,
+    const ObjectList = struct {
+        renaming_buffer: [128]u8,
+        first_rename_draw: bool,
+        renaming_instance: bool,
+    };
 
+    // common state
+    selected_instance: ?InstanceHandle,
     mesh_names_len: usize,
     mesh_names: [128][:0]const u8,
     selected_mesh_index: usize,
+
+    object_list: ObjectList,
 };
 
 /// This type maps an instance handle with a name and other metadata in the editor
@@ -112,11 +118,14 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
 
     var persistent_state = PersistentState{
         .selected_instance = null,
-        .renaming_input_buffer = undefined,
-        .renaming_instance_in_list = false,
         .mesh_names_len = 0,
         .mesh_names = undefined,
         .selected_mesh_index = 0,
+        .object_list = .{
+            .renaming_buffer = undefined,
+            .first_rename_draw = false,
+            .renaming_instance = false,
+        },
     };
 
     var initialized_mesh_names: usize = 0;
@@ -305,20 +314,25 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                     const metadata: *ObjectMetadata = kv_instance_metadata.value_ptr;
 
                     // if user is renaming the selectable
-                    if (self.persistent_state.renaming_instance_in_list and instance_handle.instance_handle == selected_instance.instance_handle) {
+                    if (self.persistent_state.object_list.renaming_instance and instance_handle.instance_handle == selected_instance.instance_handle) {
+
+                        // make sure the user can start typing as soon as they initiate renaming
+                        if (self.persistent_state.object_list.first_rename_draw) {
+                            zgui.setKeyboardFocusHere(0);
+                            self.persistent_state.object_list.first_rename_draw = false;
+                        }
+
                         if (zgui.inputText("##rename_instance_field", .{
-                            .buf = &self.persistent_state.renaming_input_buffer,
+                            .buf = &self.persistent_state.object_list.renaming_buffer,
                             .flags = .{ .enter_returns_true = true },
                         })) {
-                            const new_len = std.mem.indexOf(u8, &self.persistent_state.renaming_input_buffer, &[_]u8{0}).?;
+                            const new_len = std.mem.indexOf(u8, &self.persistent_state.object_list.renaming_buffer, &[_]u8{0}).?;
 
                             if (new_len > 0) {
-                                metadata.rename(self.allocator, self.persistent_state.renaming_input_buffer[0..new_len]) catch {
-                                    std.debug.print("OOM: failed to rename instance", .{});
-                                };
+                                try metadata.rename(self.allocator, self.persistent_state.object_list.renaming_buffer[0..new_len]);
 
-                                self.persistent_state.renaming_instance_in_list = false;
-                                std.mem.set(u8, &self.persistent_state.renaming_input_buffer, 0);
+                                self.persistent_state.object_list.renaming_instance = false;
+                                std.mem.set(u8, &self.persistent_state.object_list.renaming_buffer, 0);
                             }
                         }
                     } else {
@@ -326,7 +340,8 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                             .selected = instance_handle.instance_handle == selected_instance.instance_handle,
                             .flags = .{ .allow_double_click = true },
                         })) {
-                            self.persistent_state.renaming_instance_in_list = zgui.isItemHovered(.{}) and zgui.isMouseDoubleClicked(zgui.MouseButton.left);
+                            self.persistent_state.object_list.first_rename_draw = true;
+                            self.persistent_state.object_list.renaming_instance = zgui.isItemHovered(.{}) and zgui.isMouseDoubleClicked(zgui.MouseButton.left);
                             self.persistent_state.selected_instance = instance_handle;
                         }
                         // TODO: ability to copy a object
