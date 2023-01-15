@@ -13,6 +13,7 @@ const MeshInstancehInitializeContex = RenderContext.MeshInstancehInitializeConte
 
 // TODO: try using ecez to make the Editor! :)
 // TODO: controllable scene camera
+// TODO: Object list and inspector should have a preferences option in the header to adjust width of the window
 
 const ObjectMetadata = struct {
     name: [:0]const u8,
@@ -45,6 +46,7 @@ const ObjectMetadata = struct {
             @intCast(u8, (self.index >> 16) & 0xFF),
             @intCast(u8, (self.index >> 24) & 0xFF),
         };
+
         const name_clone = try allocator.alloc(u8, name.len + hash_fluff.len + 1);
         errdefer allocator.free(name_clone);
 
@@ -54,6 +56,11 @@ const ObjectMetadata = struct {
 
         allocator.free(self.name);
         self.name = name_clone[0 .. name_clone.len - 1 :0];
+    }
+
+    pub inline fn getDisplayName(self: ObjectMetadata) []const u8 {
+        // name - "##xyzw"
+        return self.name[0 .. self.name.len - 6];
     }
 
     pub fn deinit(self: ObjectMetadata, allocator: Allocator) void {
@@ -68,6 +75,10 @@ const PersistentState = struct {
         renaming_instance: bool,
     };
 
+    const ObjectInspector = struct {
+        name_buffer: [128]u8,
+    };
+
     // common state
     selected_instance: ?InstanceHandle,
     mesh_names_len: usize,
@@ -75,6 +86,7 @@ const PersistentState = struct {
     selected_mesh_index: usize,
 
     object_list: ObjectList,
+    object_inspector: ObjectInspector,
 };
 
 /// This type maps an instance handle with a name and other metadata in the editor
@@ -125,6 +137,9 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
             .renaming_buffer = undefined,
             .first_rename_draw = false,
             .renaming_instance = false,
+        },
+        .object_inspector = .{
+            .name_buffer = undefined,
         },
     };
 
@@ -279,7 +294,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
         // define Object List
         {
-            const width = @intToFloat(f32, frame_size.width) / 8;
+            const width = @intToFloat(f32, frame_size.width) / 6;
 
             zgui.setNextWindowSize(.{ .w = width, .h = @intToFloat(f32, frame_size.height), .cond = .always });
             zgui.setNextWindowPos(.{ .x = 0, .y = header_height, .cond = .always });
@@ -294,6 +309,8 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
             defer zgui.end();
 
             {
+                // TODO: only have this is none of the selectables are hovered
+                //       also have object related popup with actions: delete, copy, more? ... ?
                 if (zgui.beginPopupContextWindow()) {
                     defer zgui.endPopup();
 
@@ -322,7 +339,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                             self.persistent_state.object_list.first_rename_draw = false;
                         }
 
-                        if (zgui.inputText("##rename_instance_field", .{
+                        if (zgui.inputText("##object_list_rename", .{
                             .buf = &self.persistent_state.object_list.renaming_buffer,
                             .flags = .{ .enter_returns_true = true },
                         })) {
@@ -330,6 +347,11 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
                             if (new_len > 0) {
                                 try metadata.rename(self.allocator, self.persistent_state.object_list.renaming_buffer[0..new_len]);
+
+                                // set object name field to current selection
+                                const display_name = metadata.getDisplayName();
+                                std.mem.copy(u8, &self.persistent_state.object_inspector.name_buffer, display_name);
+                                self.persistent_state.object_inspector.name_buffer[display_name.len] = 0;
 
                                 self.persistent_state.object_list.renaming_instance = false;
                                 std.mem.set(u8, &self.persistent_state.object_list.renaming_buffer, 0);
@@ -340,11 +362,15 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                             .selected = instance_handle.instance_handle == selected_instance.instance_handle,
                             .flags = .{ .allow_double_click = true },
                         })) {
+                            // set object name field to current selection
+                            const display_name = metadata.getDisplayName();
+                            std.mem.copy(u8, &self.persistent_state.object_inspector.name_buffer, display_name);
+                            self.persistent_state.object_inspector.name_buffer[display_name.len] = 0;
+
                             self.persistent_state.object_list.first_rename_draw = true;
                             self.persistent_state.object_list.renaming_instance = zgui.isItemHovered(.{}) and zgui.isMouseDoubleClicked(zgui.MouseButton.left);
                             self.persistent_state.selected_instance = instance_handle;
                         }
-                        // TODO: ability to copy a object
                     }
                 }
             }
@@ -352,7 +378,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
         // define Object Inspector
         {
-            const width = @intToFloat(f32, frame_size.width) / 8;
+            const width = @intToFloat(f32, frame_size.width) / 6;
 
             zgui.setNextWindowSize(.{ .w = width, .h = @intToFloat(f32, frame_size.height), .cond = .always });
             zgui.setNextWindowPos(.{ .x = @intToFloat(f32, frame_size.width) - width, .y = header_height, .cond = .always });
@@ -366,12 +392,29 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
             } });
             defer zgui.end();
 
-            {
-                // TODO: display selected instance components and transform
-                if (zgui.treeNode("hello ")) {
-                    defer zgui.treePop();
+            if (self.persistent_state.selected_instance) |selected_instance| {
+                zgui.text("Name: ", .{});
+                zgui.sameLine(.{});
+                if (zgui.inputText("##object_inspector_rename", .{
+                    .buf = &self.persistent_state.object_inspector.name_buffer,
+                    .flags = .{ .enter_returns_true = true },
+                })) {
+                    const new_len = std.mem.indexOf(u8, &self.persistent_state.object_inspector.name_buffer, &[_]u8{0}).?;
 
-                    zgui.text("world!", .{});
+                    if (new_len > 0) {
+                        var instance_metadata_entry = self.instance_metadata_map.getPtr(selected_instance).?;
+                        try instance_metadata_entry.rename(self.allocator, self.persistent_state.object_inspector.name_buffer[0..new_len]);
+                    }
+                }
+
+                var selected_transform = self.render_context.getInstanceTransform(selected_instance);
+                var position: [4]f32 = selected_transform[3];
+                zgui.text("Position: ", .{});
+                zgui.sameLine(.{});
+                if (zgui.inputFloat3("##object_inspector_position", .{ .v = position[0..3] })) {
+                    selected_transform[3] = @as(zm.F32x4, position);
+                    self.render_context.setInstanceTransform(selected_instance, selected_transform);
+                    self.render_context.signalUpdate();
                 }
             }
         }
@@ -493,8 +536,8 @@ pub fn setInstanceTransform(self: *Editor, instance_handle: InstanceHandle, tran
 }
 
 pub fn renameInstance(self: *Editor, instance_handle: InstanceHandle, name: []const u8) !void {
-    var instance_entry = self.instance_metadata_map.getEntry(instance_handle).?;
-    try instance_entry.value_ptr.rename(self.allocator, name);
+    var instance = self.instance_metadata_map.getPtr(instance_handle).?;
+    try instance.rename(self.allocator, name);
 }
 
 inline fn createNewObjectCommand(self: *Editor, nth_mesh: usize) !void {
@@ -503,7 +546,7 @@ inline fn createNewObjectCommand(self: *Editor, nth_mesh: usize) !void {
     self.setInstanceTransform(new_instance, zm.translation(0, 0, 0));
 
     // manually tell renderer to send new transforms to GPU
-    self.render_context.missing_updated_frames = RenderContext.max_frames_in_flight;
+    self.render_context.signalUpdate();
 }
 
 inline fn mapGlfwKeyToImgui(key: glfw.Key) zgui.Key {

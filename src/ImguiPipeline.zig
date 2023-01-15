@@ -66,12 +66,12 @@ pub fn init(
     zgui.init(allocator);
     errdefer zgui.deinit();
 
-    // {
-    //     const font_path = try asset_handler.getCPath(allocator, "fonts/quinque-five-font/Quinquefive-K7qep.ttf");
-    //     defer allocator.free(font_path);
-    //     const font = zgui.io.addFontFromFile(font_path, 8.0);
-    //     zgui.io.setDefaultFont(font);
-    // }
+    {
+        const font_path = try asset_handler.getCPath(allocator, "fonts/quinque-five-font/Quinquefive-K7qep.ttf");
+        defer allocator.free(font_path);
+        const font = zgui.io.addFontFromFile(font_path, 10.0);
+        zgui.io.setDefaultFont(font);
+    }
 
     // Create font texture
     var font_atlas_width: i32 = undefined;

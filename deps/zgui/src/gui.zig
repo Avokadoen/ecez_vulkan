@@ -3053,6 +3053,7 @@ pub const endTooltip = zguiEndTooltip;
 extern fn zguiBeginTooltip() void;
 extern fn zguiEndTooltip() void;
 
+/// `pub fn beginPopupContextWindow() bool`
 pub const beginPopupContextWindow = zguiBeginPopupContextWindow;
 pub const PopupFlags = packed struct(u32) {
     mouse_button_left: bool = false,

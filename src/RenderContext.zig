@@ -90,7 +90,7 @@ const DrawInstance = struct {
     pub const binding = 1;
 
     texture_index: u32,
-    tranform: zm.Mat,
+    transform: zm.Mat,
 
     pub fn getBindingDescription() vk.VertexInputBindingDescription {
         return vk.VertexInputBindingDescription{
@@ -112,25 +112,25 @@ const DrawInstance = struct {
                 .location = 3,
                 .binding = binding,
                 .format = .r32g32b32a32_sfloat,
-                .offset = @offsetOf(DrawInstance, "tranform") + @sizeOf(zm.F32x4) * 0,
+                .offset = @offsetOf(DrawInstance, "transform") + @sizeOf(zm.F32x4) * 0,
             },
             .{
                 .location = 4,
                 .binding = binding,
                 .format = .r32g32b32a32_sfloat,
-                .offset = @offsetOf(DrawInstance, "tranform") + @sizeOf(zm.F32x4) * 1,
+                .offset = @offsetOf(DrawInstance, "transform") + @sizeOf(zm.F32x4) * 1,
             },
             .{
                 .location = 5,
                 .binding = binding,
                 .format = .r32g32b32a32_sfloat,
-                .offset = @offsetOf(DrawInstance, "tranform") + @sizeOf(zm.F32x4) * 2,
+                .offset = @offsetOf(DrawInstance, "transform") + @sizeOf(zm.F32x4) * 2,
             },
             .{
                 .location = 6,
                 .binding = binding,
                 .format = .r32g32b32a32_sfloat,
-                .offset = @offsetOf(DrawInstance, "tranform") + @sizeOf(zm.F32x4) * 3,
+                .offset = @offsetOf(DrawInstance, "transform") + @sizeOf(zm.F32x4) * 3,
             },
         };
     }
@@ -965,7 +965,7 @@ pub fn init(
         while (j < instancing_init.instance_count) : (j += 1) {
             instance_data.appendAssumeCapacity(.{
                 .texture_index = @intCast(u32, i),
-                .tranform = undefined,
+                .transform = undefined,
             });
         }
     }
@@ -1291,6 +1291,11 @@ pub fn deinit(self: RenderContext, allocator: Allocator) void {
     }
 
     self.vki.destroyInstance(self.instance, null);
+}
+
+/// manually signal renderer to update all buffers
+pub inline fn signalUpdate(self: *RenderContext) void {
+    self.missing_updated_frames = max_frames_in_flight;
 }
 
 pub fn drawFrame(self: *RenderContext, window: glfw.Window, delta_time: f32) !void {
@@ -1676,7 +1681,12 @@ pub inline fn getNewInstance(self: *RenderContext, mesh_handle: MeshHandle) !Ins
 
 pub inline fn setInstanceTransform(self: *RenderContext, instance_handle: InstanceHandle, transform: zm.Mat) void {
     const instance_index = instance_handle.instance_handle;
-    self.instance_data.items[instance_index].tranform = transform;
+    self.instance_data.items[instance_index].transform = transform;
+}
+
+pub inline fn getInstanceTransform(self: *RenderContext, instance_handle: InstanceHandle) zm.Mat {
+    const instance_index = instance_handle.instance_handle;
+    return self.instance_data.items[instance_index].transform;
 }
 
 pub fn handleFramebufferResize(self: *RenderContext, window: glfw.Window) void {
