@@ -65,6 +65,10 @@ const PersistentState = struct {
     renaming_input_len: usize,
     renaming_input_buffer: [128]u8,
     renaming_instance_in_list: bool,
+
+    mesh_names_len: usize,
+    mesh_names: [128][:0]const u8,
+    selected_mesh_index: usize,
 };
 
 /// This type maps an instance handle with a name and other metadata in the editor
@@ -106,12 +110,36 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
     });
     errdefer render_context.deinit(allocator);
 
-    const persistent_state = PersistentState{
+    var persistent_state = PersistentState{
         .selected_instance = null,
         .renaming_input_len = 0,
         .renaming_input_buffer = undefined,
         .renaming_instance_in_list = false,
+        .mesh_names_len = 0,
+        .mesh_names = undefined,
+        .selected_mesh_index = 0,
     };
+
+    var initialized_mesh_names: usize = 0;
+    errdefer {
+        var i: usize = 0;
+        while (i < initialized_mesh_names) : (i += 1) {
+            allocator.free(persistent_state.mesh_names[i]);
+        }
+    }
+    persistent_state.mesh_names_len = mesh_instance_initalizers.len;
+    for (persistent_state.mesh_names[0..persistent_state.mesh_names_len]) |*mesh_name, i| {
+        var path_iter = std.mem.splitBackwards(u8, mesh_instance_initalizers[i].cgltf_path, "/");
+        const file_name = path_iter.first();
+        var mesh_name_iter = std.mem.split(u8, file_name, ".");
+        const only_file_name = mesh_name_iter.first();
+
+        var mesh_name_mem = try allocator.alloc(u8, only_file_name.len + 1);
+        std.mem.copy(u8, mesh_name_mem, only_file_name);
+        mesh_name_mem[only_file_name.len] = 0;
+
+        mesh_name.* = mesh_name_mem[0..only_file_name.len :0];
+    }
 
     // Color scheme
     const StyleCol = zgui.StyleCol;
@@ -201,15 +229,15 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 defer zgui.endMenu();
 
                 if (zgui.menuItem("Export", .{})) {
-                    std.debug.print("export", .{});
+                    std.debug.print("export", .{}); // TODO: export scene
                 }
 
                 if (zgui.menuItem("Import", .{})) {
-                    std.debug.print("import", .{});
+                    std.debug.print("import", .{}); // TODO: import scene
                 }
 
                 if (zgui.menuItem("Load new model", .{})) {
-                    std.debug.print("load new model", .{});
+                    std.debug.print("load new model", .{}); // TODO: load new model
                 }
             }
 
@@ -221,11 +249,11 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
                 // TODO: array that defines each window, loop them here to make them toggleable
                 if (zgui.menuItem("Object list", .{})) {
-                    std.debug.print("object list", .{});
+                    std.debug.print("object list", .{}); // TODO: toggle object list window
                 }
 
                 if (zgui.menuItem("Debug log", .{})) {
-                    std.debug.print("debug log", .{});
+                    std.debug.print("debug log", .{}); // TODO: toggle debug log window
                 }
             }
 
@@ -236,7 +264,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 defer zgui.endMenu();
 
                 if (zgui.menuItem("Create new", .{})) {
-                    std.debug.print("create new object", .{});
+                    std.debug.print("create new object", .{}); // TODO: create new object functionality
                 }
             }
 
@@ -263,7 +291,16 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 if (zgui.beginPopupContextWindow()) {
                     defer zgui.endPopup();
 
-                    zgui.text("create new object", .{});
+                    for (self.persistent_state.mesh_names[0..self.persistent_state.mesh_names_len]) |mesh_name, i| {
+                        if (zgui.button(mesh_name, .{})) {
+                            const mesh_handle = self.getNthMeshHandle(i);
+                            const new_instance = try self.getNewInstance(mesh_handle);
+                            self.setInstanceTransform(new_instance, zm.translation(0, 0, 0));
+
+                            // manually tell renderer to send new transforms to GPU
+                            self.render_context.missing_updated_frames = RenderContext.max_frames_in_flight;
+                        }
+                    }
                 }
 
                 // selected instance is either our persistent user selction, or an invalid/unlikely InstanceHandle.
@@ -303,6 +340,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                             self.persistent_state.renaming_instance_in_list = zgui.isItemHovered(.{}) and zgui.isMouseDoubleClicked(zgui.MouseButton.left);
                             self.persistent_state.selected_instance = instance_handle;
                         }
+                        // TODO: ability to copy a object
                     }
                 }
             }
@@ -325,6 +363,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
             defer zgui.end();
 
             {
+                // TODO: display selected instance components and transform
                 if (zgui.treeNode("hello ")) {
                     defer zgui.treePop();
 
@@ -338,6 +377,10 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 }
 
 pub fn deinit(self: *Editor) void {
+    for (self.persistent_state.mesh_names[0..self.persistent_state.mesh_names_len]) |mesh_name| {
+        self.allocator.free(mesh_name);
+    }
+
     for (self.instance_metadata_map.values()) |value| {
         value.deinit(self.allocator);
     }
@@ -442,6 +485,11 @@ pub fn getNewInstance(self: *Editor, mesh_handle: MeshHandle) !InstanceHandle {
 
 pub fn setInstanceTransform(self: *Editor, instance_handle: InstanceHandle, transform: zm.Mat) void {
     self.render_context.setInstanceTransform(instance_handle, transform);
+}
+
+pub fn renameInstance(self: *Editor, instance_handle: InstanceHandle, name: []const u8) !void {
+    var instance_entry = self.instance_metadata_map.getEntry(instance_handle).?;
+    try instance_entry.value_ptr.rename(self.allocator, name);
 }
 
 inline fn mapGlfwKeyToImgui(key: glfw.Key) zgui.Key {

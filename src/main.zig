@@ -62,19 +62,14 @@ pub fn main() !void {
         const helmet_rotation = zm.rotationZ(std.math.pi);
         const helmet_mesh_handle = editor.getNthMeshHandle(0);
 
-        const helmet_instance1 = editor.getNewInstance(helmet_mesh_handle) catch unreachable;
-        editor.setInstanceTransform(helmet_instance1, zm.mul(helmet_rotation, zm.translation(-1, 0, 0)));
-
-        var test_transform = zm.mul(helmet_rotation, zm.translation(0, 0, 0));
-        const helmet_instance2 = editor.getNewInstance(helmet_mesh_handle) catch unreachable;
-        editor.setInstanceTransform(helmet_instance2, test_transform);
+        const helmet = editor.getNewInstance(helmet_mesh_handle) catch unreachable;
+        editor.setInstanceTransform(helmet, zm.mul(helmet_rotation, zm.translation(-1, 0, 0)));
+        try editor.renameInstance(helmet, "helmet");
 
         const box_mesh_handle = editor.getNthMeshHandle(1);
-        var box_instances: [100]RenderContext.InstanceHandle = undefined;
-        for (box_instances) |*box| {
-            box.* = editor.getNewInstance(box_mesh_handle) catch unreachable;
-            editor.setInstanceTransform(box.*, zm.translation(1, 0, 0));
-        }
+        const box = editor.getNewInstance(box_mesh_handle) catch unreachable;
+        editor.setInstanceTransform(box, zm.translation(1, 0, 0));
+        try editor.renameInstance(box, "box");
     }
 
     // register input callbacks for the editor
@@ -90,10 +85,5 @@ pub fn main() !void {
         then = now;
 
         try editor.newFrame(window, delta_time);
-
-        // TODO: proper input handling? (out of project scope)
-        if (window.getKey(.escape) == .press) {
-            window.setShouldClose(true);
-        }
     }
 }

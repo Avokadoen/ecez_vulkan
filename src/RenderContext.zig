@@ -30,7 +30,7 @@ const dmem = @import("device_memory.zig");
 const application_ext_layers = @import("application_ext_layers.zig");
 
 pub const is_debug_build = builtin.mode == .Debug;
-const max_frames_in_flight = 2;
+pub const max_frames_in_flight = 2;
 
 const RenderContext = @This();
 
