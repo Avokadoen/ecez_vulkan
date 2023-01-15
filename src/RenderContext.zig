@@ -2040,7 +2040,7 @@ inline fn createRenderPass(vkd: DeviceDispatch, device: vk.Device, swapchain_for
     const game_subpass_dependency = vk.SubpassDependency{
         .src_subpass = vk.SUBPASS_EXTERNAL,
         .dst_subpass = 0,
-        .src_stage_mask = .{ .top_of_pipe_bit = true },
+        .src_stage_mask = .{ .color_attachment_output_bit = true, .early_fragment_tests_bit = true },
         .dst_stage_mask = .{ .color_attachment_output_bit = true, .early_fragment_tests_bit = true },
         .src_access_mask = .{},
         .dst_access_mask = .{ .color_attachment_write_bit = true, .depth_stencil_attachment_write_bit = true },
