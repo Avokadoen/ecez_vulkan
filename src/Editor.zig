@@ -12,6 +12,7 @@ const InstanceHandle = RenderContext.InstanceHandle;
 
 const ObjectMetadata = struct {
     name: [:0]const u8,
+    index: u32,
 
     pub fn init(allocator: Allocator, name: []const u8, index: u32) !ObjectMetadata {
         const hash_fluff = "##" ++ [_]u8{
@@ -29,7 +30,26 @@ const ObjectMetadata = struct {
 
         return ObjectMetadata{
             .name = name_clone[0 .. name_clone.len - 1 :0],
+            .index = index,
         };
+    }
+
+    pub fn rename(self: *ObjectMetadata, allocator: Allocator, name: []const u8) !void {
+        const hash_fluff = "##" ++ [_]u8{
+            @intCast(u8, self.index & 0xFF),
+            @intCast(u8, (self.index >> 8) & 0xFF),
+            @intCast(u8, (self.index >> 16) & 0xFF),
+            @intCast(u8, (self.index >> 24) & 0xFF),
+        };
+        const name_clone = try allocator.alloc(u8, name.len + hash_fluff.len + 1);
+        errdefer allocator.free(name_clone);
+
+        std.mem.copy(u8, name_clone, name);
+        std.mem.copy(u8, name_clone[name.len..], hash_fluff);
+        name_clone[name_clone.len - 1] = 0;
+
+        allocator.free(self.name);
+        self.name = name_clone[0 .. name_clone.len - 1 :0];
     }
 
     pub fn deinit(self: ObjectMetadata, allocator: Allocator) void {
@@ -38,7 +58,10 @@ const ObjectMetadata = struct {
 };
 
 const PersistentState = struct {
-    selected_instance: ?InstanceHandle = null,
+    selected_instance: ?InstanceHandle,
+    renaming_input_len: usize,
+    renaming_input_buffer: [128]u8,
+    renaming_instance_in_list: bool,
 };
 
 /// This type maps an instance handle with a name and other metadata in the editor
@@ -90,6 +113,9 @@ pub fn init(allocator: Allocator, instance_handles: [][]const InstanceHandle) !E
 
     const persistent_state = PersistentState{
         .selected_instance = null,
+        .renaming_input_len = 0,
+        .renaming_input_buffer = undefined,
+        .renaming_instance_in_list = false,
     };
 
     // Color scheme
@@ -220,7 +246,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
         break :blk1 zgui.getWindowHeight();
     };
 
-    // define Entity List
+    // define Object List
     {
         const width = @intToFloat(f32, frame_size.width) / 8;
 
@@ -252,17 +278,40 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 const instance_handle: InstanceHandle = kv_instance_metadata.key_ptr.*;
                 const metadata: *ObjectMetadata = kv_instance_metadata.value_ptr;
 
-                if (zgui.selectable(metadata.name, .{
-                    .selected = instance_handle.instance_handle == selected_instance.instance_handle,
-                    .flags = .{ .allow_double_click = false },
-                })) {
-                    self.persistent_state.selected_instance = instance_handle;
+                // if user is renaming the selectable
+                if (self.persistent_state.renaming_instance_in_list and instance_handle.instance_handle == selected_instance.instance_handle) {
+                    if (zgui.inputText("##rename_instance_field", .{
+                        .buf = &self.persistent_state.renaming_input_buffer,
+                        .flags = .{ .enter_returns_true = true },
+                    })) {
+                        const new_len = std.mem.indexOf(u8, &self.persistent_state.renaming_input_buffer, &[_]u8{0}).?;
+
+                        // if enter is pressed
+                        if (new_len == self.persistent_state.renaming_input_len) {
+                            self.persistent_state.renaming_input_len = 0;
+                            self.persistent_state.renaming_instance_in_list = false;
+
+                            metadata.rename(self.allocator, self.persistent_state.renaming_input_buffer[0..new_len]) catch {
+                                std.debug.print("OOM: failed to rename instance", .{});
+                            };
+                        } else {
+                            self.persistent_state.renaming_input_len = new_len;
+                        }
+                    }
+                } else {
+                    if (zgui.selectable(metadata.name, .{
+                        .selected = instance_handle.instance_handle == selected_instance.instance_handle,
+                        .flags = .{ .allow_double_click = true },
+                    })) {
+                        self.persistent_state.renaming_instance_in_list = zgui.isItemHovered(.{}) and zgui.isMouseDoubleClicked(zgui.MouseButton.left);
+                        self.persistent_state.selected_instance = instance_handle;
+                    }
                 }
             }
         }
     }
 
-    // define Entity Inspector
+    // define Object Inspector
     {
         const width = @intToFloat(f32, frame_size.width) / 8;
 
