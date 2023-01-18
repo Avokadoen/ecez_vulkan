@@ -14,10 +14,24 @@ const MeshInstancehInitializeContex = RenderContext.MeshInstancehInitializeConte
 // TODO: try using ecez to make the Editor! :)
 // TODO: controllable scene camera
 // TODO: Object list and inspector should have a preferences option in the header to adjust width of the window
+// TODO: should be able to change mesh of selected object
+
+const CoolComponent = struct {};
+const AmazingComponent = struct {};
+const OhBabyComponent = struct {};
+
+const fake_components = [_]type{
+    CoolComponent,
+    AmazingComponent,
+    OhBabyComponent,
+};
 
 const ObjectMetadata = struct {
+    const ComponentsSet = std.AutoArrayHashMap(usize, void);
+
     name: [:0]const u8,
     index: u32,
+    components: ComponentsSet,
 
     pub fn init(allocator: Allocator, name: []const u8, index: u32) !ObjectMetadata {
         const hash_fluff = "##" ++ [_]u8{
@@ -36,6 +50,7 @@ const ObjectMetadata = struct {
         return ObjectMetadata{
             .name = name_clone[0 .. name_clone.len - 1 :0],
             .index = index,
+            .components = ComponentsSet.init(allocator),
         };
     }
 
@@ -58,13 +73,38 @@ const ObjectMetadata = struct {
         self.name = name_clone[0 .. name_clone.len - 1 :0];
     }
 
+    pub inline fn addComponent(self: *ObjectMetadata, comptime Component: type) !void {
+        const component_index = blk: {
+            inline for (fake_components) |FakeComponent, i| {
+                if (FakeComponent == Component) {
+                    break :blk i;
+                }
+            }
+            unreachable;
+        };
+        try self.components.put(component_index, {});
+    }
+
+    pub inline fn removeComponent(self: *ObjectMetadata, comptime Component: type) !void {
+        const component_index = blk: {
+            inline for (fake_components) |FakeComponent, i| {
+                if (FakeComponent == Component) {
+                    break :blk i;
+                }
+            }
+            unreachable;
+        };
+        _ = self.components.orderedRemove(component_index);
+    }
+
     pub inline fn getDisplayName(self: ObjectMetadata) []const u8 {
         // name - "##xyzw"
         return self.name[0 .. self.name.len - 6];
     }
 
-    pub fn deinit(self: ObjectMetadata, allocator: Allocator) void {
+    pub fn deinit(self: *ObjectMetadata, allocator: Allocator) void {
         allocator.free(self.name);
+        self.components.deinit();
     }
 };
 
@@ -77,6 +117,7 @@ const PersistentState = struct {
 
     const ObjectInspector = struct {
         name_buffer: [128]u8,
+        selected_component_index: usize,
     };
 
     // common state
@@ -116,7 +157,7 @@ render_context: RenderContext,
 pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers: []const MeshInstancehInitializeContex) !Editor {
     var instance_metadata_map = EditorObjectMap.init(allocator);
     errdefer {
-        for (instance_metadata_map.values()) |value| {
+        for (instance_metadata_map.values()) |*value| {
             value.deinit(allocator);
         }
         instance_metadata_map.deinit();
@@ -140,6 +181,7 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
         },
         .object_inspector = .{
             .name_buffer = undefined,
+            .selected_component_index = fake_components.len,
         },
     };
 
@@ -365,6 +407,9 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                             // set object name field to current selection
                             const display_name = metadata.getDisplayName();
                             std.mem.copy(u8, &self.persistent_state.object_inspector.name_buffer, display_name);
+
+                            // Set index to a non existing index. This makes no object selected
+                            self.persistent_state.object_inspector.selected_component_index = fake_components.len;
                             self.persistent_state.object_inspector.name_buffer[display_name.len] = 0;
 
                             self.persistent_state.object_list.first_rename_draw = true;
@@ -393,6 +438,8 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
             defer zgui.end();
 
             if (self.persistent_state.selected_instance) |selected_instance| {
+                var instance_metadata_entry = self.instance_metadata_map.getPtr(selected_instance).?;
+
                 zgui.text("Name: ", .{});
                 zgui.sameLine(.{});
                 if (zgui.inputText("##object_inspector_rename", .{
@@ -402,19 +449,100 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                     const new_len = std.mem.indexOf(u8, &self.persistent_state.object_inspector.name_buffer, &[_]u8{0}).?;
 
                     if (new_len > 0) {
-                        var instance_metadata_entry = self.instance_metadata_map.getPtr(selected_instance).?;
                         try instance_metadata_entry.rename(self.allocator, self.persistent_state.object_inspector.name_buffer[0..new_len]);
                     }
                 }
 
-                var selected_transform = self.render_context.getInstanceTransform(selected_instance);
-                var position: [4]f32 = selected_transform[3];
-                zgui.text("Position: ", .{});
-                zgui.sameLine(.{});
-                if (zgui.inputFloat3("##object_inspector_position", .{ .v = position[0..3] })) {
-                    selected_transform[3] = @as(zm.F32x4, position);
-                    self.render_context.setInstanceTransform(selected_instance, selected_transform);
-                    self.render_context.signalUpdate();
+                // zgui.separator();
+                // Transform editing UI
+                {
+                    zgui.text("Transform: ", .{});
+                    _ = zgui.beginChild("Transform", .{ .h = zgui.getFontSize() * 6.5, .border = true });
+                    defer zgui.endChild();
+
+                    var transform_changed = false;
+                    var selected_transform = self.render_context.getInstanceTransform(selected_instance);
+                    var position: [4]f32 = selected_transform[3];
+                    zgui.text("Position: ", .{});
+                    zgui.sameLine(.{});
+                    if (zgui.dragFloat3("##object_inspector_position", .{ .v = position[0..3] })) {
+                        transform_changed = true;
+                    }
+
+                    const original_rotation: zm.Quat = zm.matToQuat(selected_transform);
+                    // calculate rotation in each axis as radians and convert it to degrees
+                    var euler_angles = quaternionToEuler(original_rotation);
+
+                    zgui.text("Rotation: ", .{});
+                    zgui.sameLine(.{});
+                    var rotation = zm.vecToArr4(euler_angles);
+                    rotation[0] *= 180.0 / std.math.pi;
+                    rotation[1] *= 180.0 / std.math.pi;
+                    rotation[2] *= 180.0 / std.math.pi;
+                    if (zgui.dragFloat3("##object_inspector_rotation", .{
+                        .v = rotation[0..3],
+                        .flags = .{},
+                    })) {
+                        euler_angles[0] = rotation[0] * std.math.pi / 180.0;
+                        euler_angles[1] = rotation[1] * std.math.pi / 180.0;
+                        euler_angles[2] = rotation[2] * std.math.pi / 180.0;
+                        transform_changed = true;
+                    }
+
+                    zgui.text("Scale: ", .{});
+                    zgui.sameLine(.{});
+                    zgui.text("TODO :)", .{});
+
+                    if (transform_changed) {
+                        // convert degrees back to radians
+                        const new_rotation = zm.mul(zm.mul(zm.rotationZ(euler_angles[2]), zm.rotationY(euler_angles[1])), zm.rotationX(euler_angles[0]));
+                        const new_transform = zm.mul(new_rotation, zm.translationV(position));
+                        self.render_context.setInstanceTransform(selected_instance, new_transform);
+                        self.render_context.signalUpdate();
+                    }
+                }
+
+                zgui.separator();
+
+                zgui.text("Component list: ", .{});
+                if (zgui.beginListBox("##component list", .{ .w = -std.math.floatMin(f32), .h = 0 })) {
+                    defer zgui.endListBox();
+                    for (instance_metadata_entry.components.keys()) |component_index, i| {
+                        switch (component_index) {
+                            inline 0...fake_components.len - 1 => |comptime_index| {
+                                const Component = fake_components[comptime_index];
+                                if (zgui.selectable(
+                                    @typeName(Component),
+                                    .{ .selected = i == self.persistent_state.object_inspector.selected_component_index },
+                                )) {
+                                    self.persistent_state.object_inspector.selected_component_index = i;
+                                }
+                            },
+                            else => unreachable,
+                        }
+                        // TODO:
+                        // if (selected) {
+                        //     zgui.setItemDefaultFocus();
+                        // }
+                    }
+                }
+
+                if (zgui.button("Add component", .{})) {
+                    // TODO: actually show list of components
+                    try instance_metadata_entry.addComponent(CoolComponent);
+                }
+
+                if (self.persistent_state.object_inspector.selected_component_index < fake_components.len) {
+                    zgui.sameLine(.{});
+                    if (zgui.button("Remove component", .{})) {
+                        switch (self.persistent_state.object_inspector.selected_component_index) {
+                            inline 0...fake_components.len - 1 => |comptime_index| {
+                                const Component = fake_components[comptime_index];
+                                try instance_metadata_entry.removeComponent(Component);
+                            },
+                            else => unreachable,
+                        }
+                    }
                 }
             }
         }
@@ -428,7 +556,7 @@ pub fn deinit(self: *Editor) void {
         self.allocator.free(mesh_name);
     }
 
-    for (self.instance_metadata_map.values()) |value| {
+    for (self.instance_metadata_map.values()) |*value| {
         value.deinit(self.allocator);
     }
     self.instance_metadata_map.deinit();
@@ -674,4 +802,33 @@ inline fn mapGlfwKeyToImgui(key: glfw.Key) zgui.Key {
         .right_super => zgui.Key.right_super,
         .menu => zgui.Key.menu,
     };
+}
+
+// source: https://en.wikipedia.org/wiki/Conversion_between_quaternions_and_Euler_angles
+inline fn quaternionToEuler(q: zm.Quat) zm.F32x4 {
+    // double sinr_cosp = 2 * (q.w * q.x + q.y * q.z);
+    const sinr_cosp = 2 * (q[3] * q[0] + q[1] * q[2]);
+    // double cosr_cosp = 1 - 2 * (q.x * q.x + q.y * q.y);
+    const cosr_cosp = 1 - 2 * (q[0] * q[0] + q[1] * q[1]);
+
+    // double sinp = std::sqrt(1 + 2 * (q.w * q.y - q.x * q.z))
+    const sinp = @sqrt(1 + 2 * (q[3] * q[1] - q[0] * q[2]));
+    // double cosp = std::sqrt(1 - 2 * (q.w * q.y - q.x * q.z))
+    const cosp = @sqrt(1 - 2 * (q[3] * q[1] - q[0] * q[2]));
+
+    // double siny_cosp = 2 * (q.w * q.z + q.x * q.y);
+    const siny_cosp = 2 * (q[3] * q[2] + q[0] * q[1]);
+    // double cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z);
+    const cosy_cosp = 1 - 2 * (q[1] * q[1] + q[2] * q[2]);
+
+    // return angles;
+    return zm.f32x4(
+        // angles.roll = std::atan2(sinr_cosp, cosr_cosp);
+        std.math.atan2(f32, sinr_cosp, cosr_cosp), // x rotation
+        // angles.pitch = 2 * std::atan2(sinp, cosp) - M_PI / 2;
+        (-std.math.pi / 2.0) + 2 * std.math.atan2(f32, sinp, cosp), // y rotation
+        // angles.yaw = std::atan2(siny_cosp, cosy_cosp);
+        std.math.atan2(f32, siny_cosp, cosy_cosp), // z rotation
+        0,
+    );
 }

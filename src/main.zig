@@ -68,7 +68,7 @@ pub fn main() !void {
 
         const box_mesh_handle = editor.getNthMeshHandle(1);
         const box = editor.getNewInstance(box_mesh_handle) catch unreachable;
-        editor.setInstanceTransform(box, zm.translation(1, 0, 0));
+        editor.setInstanceTransform(box, zm.mul(zm.rotationY(std.math.pi * 0.5), zm.translation(1, 0, 0)));
         try editor.renameInstance(box, "box");
     }
 
