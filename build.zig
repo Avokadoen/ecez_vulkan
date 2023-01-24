@@ -6,7 +6,9 @@ const Builder = std.build.Builder;
 const Step = std.build.Step;
 const ArrayList = std.ArrayList;
 
-// const ecez = @import("deps/ecez/build.zig");
+// ecez is needed by the Editor
+const ecez = @import("deps/ecez/build.zig");
+
 const glfw = @import("deps/mach-glfw/build.zig");
 const zmath = @import("deps/zmath/build.zig");
 const zmesh = @import("deps/zmesh/build.zig");
@@ -23,9 +25,9 @@ pub fn build(b: *std.build.Builder) void {
     exe.setBuildMode(mode);
 
     // let user enable/disable tracy
-    // const ztracy_enable = b.option(bool, "enable-tracy", "Enable Tracy profiler") orelse false;
+    const ztracy_enable = b.option(bool, "enable-tracy", "Enable Tracy profiler") orelse false;
     // link ecez and ztracy
-    // // ecez.link(b, exe, ztracy_enable);
+    ecez.link(b, exe, ztracy_enable);
 
     // link glfw
     exe.addPackage(glfw.pkg);

@@ -28,9 +28,6 @@ pub fn main() !void {
     }
     const allocator = if (RenderContext.is_debug_build) alloc.allocator() else alloc;
 
-    // var world = try ecez.WorldBuilder().WithComponents(.{ PositionComp, VelocityComp }).init(allocator, .{});
-    // defer world.deinit();
-
     // init glfw
     try glfw.init(.{});
     defer glfw.terminate();
@@ -55,22 +52,33 @@ pub fn main() !void {
     defer editor.deinit();
 
     // handle if user resize window
-    editor.render_context.handleFramebufferResize(window);
+    editor.handleFramebufferResize(window);
 
     // TODO: make a test scene while file format facilities are not in place
+    // load some test stuff while we are missing a file format for scenes
     {
-        const helmet_rotation = zm.rotationZ(std.math.pi);
+        const helmet = try editor.newSceneEntity("helmet");
         const helmet_mesh_handle = editor.getNthMeshHandle(0);
+        try editor.assignEntityMeshInstance(helmet, helmet_mesh_handle);
 
-        const helmet = editor.getNewInstance(helmet_mesh_handle) catch unreachable;
-        editor.setInstanceTransform(helmet, zm.mul(helmet_rotation, zm.translation(-1, 0, 0)));
-        try editor.renameInstance(helmet, "helmet");
-
-        const box_mesh_handle = editor.getNthMeshHandle(1);
-        const box = editor.getNewInstance(box_mesh_handle) catch unreachable;
-        editor.setInstanceTransform(box, zm.mul(zm.rotationY(std.math.pi * 0.5), zm.translation(1, 0, 0)));
-        try editor.renameInstance(box, "box");
+        try editor.ecs.setComponent(helmet, Editor.Rotation{ .quat = zm.quatFromNormAxisAngle(zm.f32x4(0, 0, 1, 0), std.math.pi) });
+        try editor.ecs.setComponent(helmet, Editor.Position{ .vec = zm.f32x4(-1, 0, 0, 0) });
+        try editor.ecs.setComponent(helmet, Editor.Transform{ .mat = undefined });
     }
+    {
+        const box = try editor.newSceneEntity("box");
+        const box_mesh_handle = editor.getNthMeshHandle(1);
+        try editor.assignEntityMeshInstance(box, box_mesh_handle);
+
+        try editor.ecs.setComponent(box, Editor.Rotation{ .quat = zm.quatFromNormAxisAngle(zm.f32x4(0, 1, 0, 0), std.math.pi * 0.5) });
+        try editor.ecs.setComponent(box, Editor.Position{ .vec = zm.f32x4(1, 0, 0, 0) });
+        try editor.ecs.setComponent(box, Editor.Transform{ .mat = undefined });
+    }
+
+    // make sure editor updates renderer after we have set some render state programatically (helmet and box)
+    try editor.ecs.triggerEvent(.transform_update, .{});
+    editor.ecs.waitEvent(.transform_update);
+    editor.signalRenderUpdate();
 
     // register input callbacks for the editor
     editor.setEditorInput(window);

@@ -1,6 +1,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const ecez = @import("ecez");
+
 const zgui = @import("zgui");
 const glfw = @import("glfw");
 
@@ -8,120 +10,255 @@ const zm = @import("zmath");
 
 const RenderContext = @import("RenderContext.zig");
 const MeshHandle = RenderContext.MeshHandle;
-const InstanceHandle = RenderContext.InstanceHandle;
 const MeshInstancehInitializeContex = RenderContext.MeshInstancehInitializeContex;
 
 // TODO: try using ecez to make the Editor! :)
 // TODO: controllable scene camera
 // TODO: Object list and inspector should have a preferences option in the header to adjust width of the window
 // TODO: should be able to change mesh of selected object
+// TODO: move transform stuff out
 
-const CoolComponent = struct {};
-const AmazingComponent = struct {};
-const OhBabyComponent = struct {};
-
-const fake_components = [_]type{
-    CoolComponent,
-    AmazingComponent,
-    OhBabyComponent,
+pub const InstanceHandle = RenderContext.InstanceHandle;
+pub const Transform = struct {
+    mat: zm.Mat,
 };
+pub const Position = struct {
+    vec: zm.Vec,
+};
+pub const Rotation = struct {
+    quat: zm.Quat,
+};
+pub const Scale = struct {
+    vec: zm.Vec,
+};
+pub const ObjectMetadata = struct {
+    entity: ecez.Entity,
 
-const ObjectMetadata = struct {
-    const ComponentsSet = std.AutoArrayHashMap(usize, void);
+    id_len: u8,
+    buffer: [64]u8,
 
-    name: [:0]const u8,
-    index: u32,
-    components: ComponentsSet,
-
-    pub fn init(allocator: Allocator, name: []const u8, index: u32) !ObjectMetadata {
+    inline fn init(name: []const u8, entity: ecez.Entity) ObjectMetadata {
         const hash_fluff = "##" ++ [_]u8{
-            @intCast(u8, index & 0xFF),
-            @intCast(u8, (index >> 8) & 0xFF),
-            @intCast(u8, (index >> 16) & 0xFF),
-            @intCast(u8, (index >> 24) & 0xFF),
+            @intCast(u8, (entity.id) & 0xFF),
+            @intCast(u8, ((entity.id) >> 8) & 0xFF),
+            @intCast(u8, ((entity.id) >> 16) & 0xFF),
+            @intCast(u8, ((entity.id) >> 24) & 0xFF),
         };
-        const name_clone = try allocator.alloc(u8, name.len + hash_fluff.len + 1);
-        errdefer allocator.free(name_clone);
+        var buffer: [64]u8 = undefined;
+        const id_len = name.len + hash_fluff.len;
+        std.debug.assert(buffer.len > id_len);
 
-        std.mem.copy(u8, name_clone, name);
-        std.mem.copy(u8, name_clone[name.len..], hash_fluff);
-        name_clone[name_clone.len - 1] = 0;
+        std.mem.copy(u8, buffer[0..], name);
+        std.mem.copy(u8, buffer[name.len..], hash_fluff);
+        buffer[id_len] = 0;
 
         return ObjectMetadata{
-            .name = name_clone[0 .. name_clone.len - 1 :0],
-            .index = index,
-            .components = ComponentsSet.init(allocator),
+            .entity = entity,
+            .id_len = @intCast(u8, id_len),
+            .buffer = buffer,
         };
     }
 
-    pub fn rename(self: *ObjectMetadata, allocator: Allocator, name: []const u8) !void {
+    inline fn rename(self: *ObjectMetadata, name: []const u8) void {
         const hash_fluff = "##" ++ [_]u8{
-            @intCast(u8, self.index & 0xFF),
-            @intCast(u8, (self.index >> 8) & 0xFF),
-            @intCast(u8, (self.index >> 16) & 0xFF),
-            @intCast(u8, (self.index >> 24) & 0xFF),
+            @intCast(u8, (self.entity.id) & 0xFF),
+            @intCast(u8, ((self.entity.id) >> 8) & 0xFF),
+            @intCast(u8, ((self.entity.id) >> 16) & 0xFF),
+            @intCast(u8, ((self.entity.id) >> 24) & 0xFF),
         };
+        const id_len = name.len + hash_fluff.len;
+        std.debug.assert(self.buffer.len > id_len);
 
-        const name_clone = try allocator.alloc(u8, name.len + hash_fluff.len + 1);
-        errdefer allocator.free(name_clone);
-
-        std.mem.copy(u8, name_clone, name);
-        std.mem.copy(u8, name_clone[name.len..], hash_fluff);
-        name_clone[name_clone.len - 1] = 0;
-
-        allocator.free(self.name);
-        self.name = name_clone[0 .. name_clone.len - 1 :0];
+        std.mem.copy(u8, self.buffer[0..], name);
+        std.mem.copy(u8, self.buffer[name.len..], hash_fluff);
+        self.buffer[id_len] = 0;
+        self.id_len = @intCast(u8, id_len);
     }
 
-    pub inline fn addComponent(self: *ObjectMetadata, comptime Component: type) !void {
-        const component_index = blk: {
-            inline for (fake_components) |FakeComponent, i| {
-                if (FakeComponent == Component) {
-                    break :blk i;
-                }
-            }
-            unreachable;
-        };
-        try self.components.put(component_index, {});
-    }
-
-    pub inline fn removeComponent(self: *ObjectMetadata, comptime Component: type) !void {
-        const component_index = blk: {
-            inline for (fake_components) |FakeComponent, i| {
-                if (FakeComponent == Component) {
-                    break :blk i;
-                }
-            }
-            unreachable;
-        };
-        _ = self.components.orderedRemove(component_index);
+    pub inline fn getId(self: ObjectMetadata) [:0]const u8 {
+        return self.buffer[0..self.id_len :0];
     }
 
     pub inline fn getDisplayName(self: ObjectMetadata) []const u8 {
         // name - "##xyzw"
-        return self.name[0 .. self.name.len - 6];
-    }
-
-    pub fn deinit(self: *ObjectMetadata, allocator: Allocator) void {
-        allocator.free(self.name);
-        self.components.deinit();
+        return self.buffer[0 .. self.id_len - 6];
     }
 };
 
+const fake_components = [_]type{
+    ObjectMetadata,
+    Transform,
+    Position,
+    Rotation,
+    Scale,
+    InstanceHandle,
+};
+
+// TODO: it would be nicer here to use PeristentState as event data because it is easier to see when it is changed by systems
+/// Generate the entries of the object list depending on objects in the scene
+pub fn objectListSystem(metadata: *ObjectMetadata, persistent_state: *ecez.SharedState(PersistentState)) void {
+    const selected_entity_id = blk: {
+        // selected entity is either our persistent user selction, or an invalid/unlikely InstanceHandle.
+        if (persistent_state.selected_entity) |entity| {
+            break :blk entity.id;
+        } else {
+            const invalid_entity_id: ecez.EntityId = std.math.maxInt(ecez.EntityId);
+            break :blk @bitCast(ecez.EntityId, invalid_entity_id);
+        }
+    };
+    // if user is renaming the selectable
+    if (persistent_state.object_list.renaming_entity and metadata.entity.id == selected_entity_id) {
+
+        // make sure the user can start typing as soon as they initiate renaming
+        if (persistent_state.object_list.first_rename_draw) {
+            zgui.setKeyboardFocusHere(0);
+            persistent_state.object_list.first_rename_draw = false;
+        }
+
+        if (zgui.inputText("##object_list_rename", .{
+            .buf = &persistent_state.object_list.renaming_buffer,
+            .flags = .{ .enter_returns_true = true },
+        })) {
+            const new_len = std.mem.indexOf(u8, &persistent_state.object_list.renaming_buffer, &[_]u8{0}).?;
+
+            if (new_len > 0) {
+                metadata.rename(persistent_state.object_list.renaming_buffer[0..new_len]);
+
+                // set object name field to current selection
+                const display_name = metadata.getDisplayName();
+                std.mem.copy(u8, &persistent_state.object_inspector.name_buffer, display_name);
+                persistent_state.object_inspector.name_buffer[display_name.len] = 0;
+
+                persistent_state.object_list.renaming_entity = false;
+                std.mem.set(u8, &persistent_state.object_list.renaming_buffer, 0);
+            }
+        }
+    } else {
+        if (zgui.selectable(metadata.getId(), .{
+            .selected = metadata.entity.id == selected_entity_id,
+            .flags = .{ .allow_double_click = true },
+        })) {
+            // set object name field to current selection
+            const display_name = metadata.getDisplayName();
+            std.mem.copy(u8, &persistent_state.object_inspector.name_buffer, display_name);
+
+            // Set index to a non existing index. This makes no object selected
+            persistent_state.object_inspector.selected_component_index = fake_components.len;
+            persistent_state.object_inspector.name_buffer[display_name.len] = 0;
+
+            persistent_state.object_list.first_rename_draw = true;
+            persistent_state.object_list.renaming_entity = zgui.isItemHovered(.{}) and zgui.isMouseDoubleClicked(zgui.MouseButton.left);
+            persistent_state.selected_entity = metadata.entity;
+        }
+    }
+}
+
+// TODO: Doing these things for all enitites in the scene is extremely inneficient
+//       since the scene editor is "static". This should only be done for the object
+const TransformSystems = struct {
+    /// Reset the transform
+    pub fn reset(transform: *Transform) void {
+        transform.mat = zm.identity();
+    }
+
+    /// Apply scale to the transform/
+    pub fn applyScale(transform: *Transform, scale: Scale) void {
+        transform.mat[0][0] *= scale.vec[0];
+        transform.mat[1][1] *= scale.vec[1];
+        transform.mat[2][3] *= scale.vec[2];
+    }
+
+    /// Apply rotation to the transform/
+    pub fn applyRotation(transform: *Transform, rotation: Rotation) void {
+        transform.mat = zm.mul(transform.mat, zm.quatToMat(rotation.quat));
+    }
+
+    /// Apply position to the transform
+    pub fn applyPosition(transform: *Transform, position: Position) void {
+        transform.mat = zm.mul(transform.mat, zm.translationV(position.vec));
+    }
+
+    /// This system takes each instance handle and transform pair and send the transform to the renderer storage to be rendered
+    pub fn propagateToRenderer(instance_handle: InstanceHandle, transform: Transform, render_context: *ecez.SharedState(RenderContext)) void {
+        var _render_context = @ptrCast(*RenderContext, render_context);
+        _render_context.setInstanceTransform(instance_handle, transform.mat);
+    }
+};
+
+fn componentWidget(comptime T: type, component: *T) void {
+    const component_info = switch (@typeInfo(T)) {
+        .Struct => |info| info,
+        else => @compileError("invalid component type"),
+    };
+
+    for (component_info.fields) |field, i| {
+        zgui.text("{s}", .{field.name});
+        zgui.sameLine(.{});
+
+        switch (@typeInfo(field.type)) {
+            .Int => {
+                var value = @intCast(i32, component[i]);
+                if (zgui.inputInt(field.name, .{ .value = &value })) {
+                    component[i] = @intCast(field.type, value);
+                }
+            },
+            .Float => {
+                var value = @intCast(f32, component[i]);
+                if (zgui.inputFloat(field.name, .{ .value = &value })) {
+                    component[i] = @intCast(field.type, value);
+                }
+            },
+            .Array => |array_info| {
+                _ = array_info;
+                // switch
+                // len: comptime_int,
+                // child: type,
+            },
+        }
+    }
+}
+
+// fn componentMemberWidget(comptime T: type, comptime is_root_type: bool) void {
+//          switch (@typeInfo(field.type)) {
+//             .Int => {
+//                 var value = @intCast(i32, component[i]);
+//                 if (zgui.inputInt(field.name, .{ .value = &value })) {
+//                     component[i] = @intCast(field.type, value);
+//                 }
+//             },
+//             .Float => {
+//                 var value = @intCast(f32, component[i]);
+//                 if (zgui.inputFloat(field.name, .{ .value = &value })) {
+//                     component[i] = @intCast(field.type, value);
+//                 }
+//             },
+//             .Array => |array_info| {
+//                 if (is_root_type) {
+//                     @compileError("unimplemented");
+//                     // switch(array_info.len) {
+//                     //     1 => {
+//                     //     }
+//                     // }
+//                 } else {
+//                     @compileError("unimplemented: nested arrays");
+//                 }
+//         }
+// }
+
 const PersistentState = struct {
     const ObjectList = struct {
-        renaming_buffer: [128]u8,
+        renaming_buffer: [64]u8,
         first_rename_draw: bool,
-        renaming_instance: bool,
+        renaming_entity: bool,
     };
 
     const ObjectInspector = struct {
-        name_buffer: [128]u8,
+        name_buffer: [64]u8,
         selected_component_index: usize,
     };
 
     // common state
-    selected_instance: ?InstanceHandle,
+    selected_entity: ?ecez.Entity,
     mesh_names_len: usize,
     mesh_names: [128][:0]const u8,
     selected_mesh_index: usize,
@@ -130,8 +267,29 @@ const PersistentState = struct {
     object_inspector: ObjectInspector,
 };
 
-/// This type maps an instance handle with a name and other metadata in the editor
-const EditorObjectMap = std.AutoArrayHashMap(InstanceHandle, ObjectMetadata);
+const World = ecez.WorldBuilder().WithComponents(.{
+    // TODO: generate this!
+    fake_components[0],
+    fake_components[1],
+    fake_components[2],
+    fake_components[3],
+    fake_components[4],
+    fake_components[5],
+}).WithSharedState(.{
+    PersistentState,
+    RenderContext,
+}).WithEvents(.{
+    // event to draw all objects in the scene as an item in a list
+    ecez.Event("draw_object_list", .{objectListSystem}, .{}),
+    // event to apply all transformation and update render buffers as needed
+    ecez.Event("transform_update", .{
+        TransformSystems.reset,
+        ecez.DependOn(TransformSystems.applyScale, .{TransformSystems.reset}),
+        ecez.DependOn(TransformSystems.applyRotation, .{TransformSystems.applyScale}),
+        ecez.DependOn(TransformSystems.applyPosition, .{TransformSystems.applyRotation}),
+        ecez.DependOn(TransformSystems.propagateToRenderer, .{TransformSystems.applyPosition}),
+    }, .{}),
+}).Build();
 
 // TODO: editor should not be part of renderer
 
@@ -139,8 +297,6 @@ const EditorObjectMap = std.AutoArrayHashMap(InstanceHandle, ObjectMetadata);
 const Editor = @This();
 
 allocator: Allocator,
-instance_metadata_map: EditorObjectMap,
-persistent_state: PersistentState,
 
 pointing_hand: glfw.Cursor,
 arrow: glfw.Cursor,
@@ -152,32 +308,23 @@ resize_nesw: glfw.Cursor,
 resize_nwse: glfw.Cursor,
 not_allowed: glfw.Cursor,
 
-render_context: RenderContext,
+ecs: World,
 
 pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers: []const MeshInstancehInitializeContex) !Editor {
-    var instance_metadata_map = EditorObjectMap.init(allocator);
-    errdefer {
-        for (instance_metadata_map.values()) |*value| {
-            value.deinit(allocator);
-        }
-        instance_metadata_map.deinit();
-    }
-
-    // TODO: load random stuff while we dont have a scene format to load from ...
     var render_context = try RenderContext.init(allocator, window, mesh_instance_initalizers, .{
         .update_rate = .manually,
     });
     errdefer render_context.deinit(allocator);
 
     var persistent_state = PersistentState{
-        .selected_instance = null,
+        .selected_entity = null,
         .mesh_names_len = 0,
         .mesh_names = undefined,
         .selected_mesh_index = 0,
         .object_list = .{
             .renaming_buffer = undefined,
             .first_rename_draw = false,
-            .renaming_instance = false,
+            .renaming_entity = false,
         },
         .object_inspector = .{
             .name_buffer = undefined,
@@ -205,6 +352,8 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
 
         mesh_name.* = mesh_name_mem[0..only_file_name.len :0];
     }
+
+    const ecs = try World.init(allocator, .{ persistent_state, render_context });
 
     // Color scheme
     const StyleCol = zgui.StyleCol;
@@ -236,8 +385,6 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
 
     return Editor{
         .allocator = allocator,
-        .instance_metadata_map = instance_metadata_map,
-        .persistent_state = persistent_state,
         .pointing_hand = pointing_hand,
         .arrow = arrow,
         .ibeam = ibeam,
@@ -247,7 +394,7 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
         .resize_nesw = resize_nesw,
         .resize_nwse = resize_nwse,
         .not_allowed = not_allowed,
-        .render_context = render_context,
+        .ecs = ecs,
     };
 }
 
@@ -323,11 +470,12 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 if (zgui.beginMenu("Create new", true)) {
                     defer zgui.endMenu();
 
-                    for (self.persistent_state.mesh_names[0..self.persistent_state.mesh_names_len]) |mesh_name, nth_mesh| {
-                        if (zgui.menuItem(mesh_name, .{})) {
-                            try self.createNewObjectCommand(nth_mesh);
-                        }
-                    }
+                    // const mesh_names = self.getMeshNames();
+                    // for (mesh_names) |mesh_name, nth_mesh| {
+                    //     if (zgui.menuItem(mesh_name, .{})) {
+                    //         try self.createNewObjectCommand(nth_mesh);
+                    //     }
+                    // }
                 }
             }
 
@@ -356,68 +504,17 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 if (zgui.beginPopupContextWindow()) {
                     defer zgui.endPopup();
 
-                    for (self.persistent_state.mesh_names[0..self.persistent_state.mesh_names_len]) |mesh_name, nth_mesh| {
+                    const mesh_names = self.getMeshNames();
+                    for (mesh_names) |mesh_name, nth_mesh| {
                         if (zgui.button(mesh_name, .{})) {
-                            try self.createNewObjectCommand(nth_mesh);
+                            _ = nth_mesh;
+                            // try self.createNewObjectCommand(nth_mesh);
                         }
                     }
                 }
 
-                // selected instance is either our persistent user selction, or an invalid/unlikely InstanceHandle.
-                var invalid_instance: u64 = std.math.maxInt(u64);
-                var selected_instance = self.persistent_state.selected_instance orelse @bitCast(InstanceHandle, invalid_instance);
-
-                var instance_metadata_iterator = self.instance_metadata_map.iterator();
-                while (instance_metadata_iterator.next()) |kv_instance_metadata| {
-                    const instance_handle: InstanceHandle = kv_instance_metadata.key_ptr.*;
-                    const metadata: *ObjectMetadata = kv_instance_metadata.value_ptr;
-
-                    // if user is renaming the selectable
-                    if (self.persistent_state.object_list.renaming_instance and instance_handle.instance_handle == selected_instance.instance_handle) {
-
-                        // make sure the user can start typing as soon as they initiate renaming
-                        if (self.persistent_state.object_list.first_rename_draw) {
-                            zgui.setKeyboardFocusHere(0);
-                            self.persistent_state.object_list.first_rename_draw = false;
-                        }
-
-                        if (zgui.inputText("##object_list_rename", .{
-                            .buf = &self.persistent_state.object_list.renaming_buffer,
-                            .flags = .{ .enter_returns_true = true },
-                        })) {
-                            const new_len = std.mem.indexOf(u8, &self.persistent_state.object_list.renaming_buffer, &[_]u8{0}).?;
-
-                            if (new_len > 0) {
-                                try metadata.rename(self.allocator, self.persistent_state.object_list.renaming_buffer[0..new_len]);
-
-                                // set object name field to current selection
-                                const display_name = metadata.getDisplayName();
-                                std.mem.copy(u8, &self.persistent_state.object_inspector.name_buffer, display_name);
-                                self.persistent_state.object_inspector.name_buffer[display_name.len] = 0;
-
-                                self.persistent_state.object_list.renaming_instance = false;
-                                std.mem.set(u8, &self.persistent_state.object_list.renaming_buffer, 0);
-                            }
-                        }
-                    } else {
-                        if (zgui.selectable(metadata.name, .{
-                            .selected = instance_handle.instance_handle == selected_instance.instance_handle,
-                            .flags = .{ .allow_double_click = true },
-                        })) {
-                            // set object name field to current selection
-                            const display_name = metadata.getDisplayName();
-                            std.mem.copy(u8, &self.persistent_state.object_inspector.name_buffer, display_name);
-
-                            // Set index to a non existing index. This makes no object selected
-                            self.persistent_state.object_inspector.selected_component_index = fake_components.len;
-                            self.persistent_state.object_inspector.name_buffer[display_name.len] = 0;
-
-                            self.persistent_state.object_list.first_rename_draw = true;
-                            self.persistent_state.object_list.renaming_instance = zgui.isItemHovered(.{}) and zgui.isMouseDoubleClicked(zgui.MouseButton.left);
-                            self.persistent_state.selected_instance = instance_handle;
-                        }
-                    }
-                }
+                try self.ecs.triggerEvent(.draw_object_list, .{});
+                self.ecs.waitEvent(.draw_object_list);
             }
         }
 
@@ -437,129 +534,140 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
             } });
             defer zgui.end();
 
-            if (self.persistent_state.selected_instance) |selected_instance| {
-                var instance_metadata_entry = self.instance_metadata_map.getPtr(selected_instance).?;
-
+            var persistent_state = self.getPersitentState();
+            if (persistent_state.selected_entity) |selected_entity| {
                 zgui.text("Name: ", .{});
                 zgui.sameLine(.{});
                 if (zgui.inputText("##object_inspector_rename", .{
-                    .buf = &self.persistent_state.object_inspector.name_buffer,
+                    .buf = &persistent_state.object_inspector.name_buffer,
                     .flags = .{ .enter_returns_true = true },
                 })) {
-                    const new_len = std.mem.indexOf(u8, &self.persistent_state.object_inspector.name_buffer, &[_]u8{0}).?;
+                    const new_len = std.mem.indexOf(u8, &persistent_state.object_inspector.name_buffer, &[_]u8{0}).?;
 
                     if (new_len > 0) {
-                        try instance_metadata_entry.rename(self.allocator, self.persistent_state.object_inspector.name_buffer[0..new_len]);
+                        var metadata = try self.ecs.getComponent(selected_entity, ObjectMetadata);
+                        metadata.rename(persistent_state.object_inspector.name_buffer[0..new_len]);
+                        try self.ecs.setComponent(selected_entity, metadata);
                     }
                 }
+
+                // // zgui.separator();
+                // // Transform editing UI
+                // {
+                //     zgui.text("Transform: ", .{});
+                //     _ = zgui.beginChild("Transform", .{ .h = zgui.getFontSize() * 6.5, .border = true });
+                //     defer zgui.endChild();
+
+                //     var transform_changed = false;
+                //     var selected_transform = self.render_context.getInstanceTransform(selected_instance);
+                //     var position: [4]f32 = selected_transform[3];
+                //     zgui.text("Position: ", .{});
+                //     zgui.sameLine(.{});
+                //     if (zgui.dragFloat3("##object_inspector_position", .{ .v = position[0..3] })) {
+                //         transform_changed = true;
+                //     }
+
+                //     const original_rotation: zm.Quat = zm.matToQuat(selected_transform);
+                //     // calculate rotation in each axis as radians and convert it to degrees
+                //     var euler_angles = quaternionToEuler(original_rotation);
+
+                //     zgui.text("Rotation: ", .{});
+                //     zgui.sameLine(.{});
+                //     var rotation = zm.vecToArr4(euler_angles);
+                //     rotation[0] *= 180.0 / std.math.pi;
+                //     rotation[1] *= 180.0 / std.math.pi;
+                //     rotation[2] *= 180.0 / std.math.pi;
+                //     if (zgui.dragFloat3("##object_inspector_rotation", .{
+                //         .v = rotation[0..3],
+                //         .flags = .{},
+                //     })) {
+                //         euler_angles[0] = rotation[0] * std.math.pi / 180.0;
+                //         euler_angles[1] = rotation[1] * std.math.pi / 180.0;
+                //         euler_angles[2] = rotation[2] * std.math.pi / 180.0;
+                //         transform_changed = true;
+                //     }
+
+                //     zgui.text("Scale: ", .{});
+                //     zgui.sameLine(.{});
+                //     zgui.text("TODO :)", .{});
+
+                //     if (transform_changed) {
+                //         // convert degrees back to radians
+                //         const new_rotation = zm.mul(zm.mul(zm.rotationZ(euler_angles[2]), zm.rotationY(euler_angles[1])), zm.rotationX(euler_angles[0]));
+                //         const new_transform = zm.mul(new_rotation, zm.translationV(position));
+                //         self.render_context.setInstanceTransform(selected_instance, new_transform);
+                //         self.render_context.signalUpdate();
+                //     }
+                // }
 
                 // zgui.separator();
-                // Transform editing UI
-                {
-                    zgui.text("Transform: ", .{});
-                    _ = zgui.beginChild("Transform", .{ .h = zgui.getFontSize() * 6.5, .border = true });
-                    defer zgui.endChild();
 
-                    var transform_changed = false;
-                    var selected_transform = self.render_context.getInstanceTransform(selected_instance);
-                    var position: [4]f32 = selected_transform[3];
-                    zgui.text("Position: ", .{});
-                    zgui.sameLine(.{});
-                    if (zgui.dragFloat3("##object_inspector_position", .{ .v = position[0..3] })) {
-                        transform_changed = true;
-                    }
+                // zgui.text("Component list: ", .{});
+                // if (zgui.beginListBox("##component list", .{ .w = -std.math.floatMin(f32), .h = 0 })) {
+                //     defer zgui.endListBox();
+                //     for (instance_metadata_entry.components.keys()) |component_index, i| {
+                //         switch (component_index) {
+                //             inline 0...fake_components.len - 1 => |comptime_index| {
+                //                 const Component = fake_components[comptime_index];
+                //                 if (zgui.selectable(
+                //                     @typeName(Component),
+                //                     .{ .selected = i == self.persistent_state.object_inspector.selected_component_index },
+                //                 )) {
+                //                     self.persistent_state.object_inspector.selected_component_index = i;
+                //                 }
+                //             },
+                //             else => unreachable,
+                //         }
+                //         // TODO:
+                //         // if (selected) {
+                //         //     zgui.setItemDefaultFocus();
+                //         // }
+                //     }
+                // }
 
-                    const original_rotation: zm.Quat = zm.matToQuat(selected_transform);
-                    // calculate rotation in each axis as radians and convert it to degrees
-                    var euler_angles = quaternionToEuler(original_rotation);
+                // for (instance_metadata_entry.components.keys()) |component_index| {
+                //     switch (component_index) {
+                //         inline 0...fake_components.len - 1 => |comptime_index| {
+                //             const Component = fake_components[comptime_index];
+                //             componentWidget(
+                //                 Component,
+                //                 // TODO: we need to store components x(
+                //             );
+                //         },
+                //         else => unreachable,
+                //     }
+                // }
 
-                    zgui.text("Rotation: ", .{});
-                    zgui.sameLine(.{});
-                    var rotation = zm.vecToArr4(euler_angles);
-                    rotation[0] *= 180.0 / std.math.pi;
-                    rotation[1] *= 180.0 / std.math.pi;
-                    rotation[2] *= 180.0 / std.math.pi;
-                    if (zgui.dragFloat3("##object_inspector_rotation", .{
-                        .v = rotation[0..3],
-                        .flags = .{},
-                    })) {
-                        euler_angles[0] = rotation[0] * std.math.pi / 180.0;
-                        euler_angles[1] = rotation[1] * std.math.pi / 180.0;
-                        euler_angles[2] = rotation[2] * std.math.pi / 180.0;
-                        transform_changed = true;
-                    }
+                // if (zgui.button("Add component", .{})) {
+                //     // TODO: actually show list of components
+                //     try instance_metadata_entry.addComponent(CoolComponent);
+                // }
 
-                    zgui.text("Scale: ", .{});
-                    zgui.sameLine(.{});
-                    zgui.text("TODO :)", .{});
-
-                    if (transform_changed) {
-                        // convert degrees back to radians
-                        const new_rotation = zm.mul(zm.mul(zm.rotationZ(euler_angles[2]), zm.rotationY(euler_angles[1])), zm.rotationX(euler_angles[0]));
-                        const new_transform = zm.mul(new_rotation, zm.translationV(position));
-                        self.render_context.setInstanceTransform(selected_instance, new_transform);
-                        self.render_context.signalUpdate();
-                    }
-                }
-
-                zgui.separator();
-
-                zgui.text("Component list: ", .{});
-                if (zgui.beginListBox("##component list", .{ .w = -std.math.floatMin(f32), .h = 0 })) {
-                    defer zgui.endListBox();
-                    for (instance_metadata_entry.components.keys()) |component_index, i| {
-                        switch (component_index) {
-                            inline 0...fake_components.len - 1 => |comptime_index| {
-                                const Component = fake_components[comptime_index];
-                                if (zgui.selectable(
-                                    @typeName(Component),
-                                    .{ .selected = i == self.persistent_state.object_inspector.selected_component_index },
-                                )) {
-                                    self.persistent_state.object_inspector.selected_component_index = i;
-                                }
-                            },
-                            else => unreachable,
-                        }
-                        // TODO:
-                        // if (selected) {
-                        //     zgui.setItemDefaultFocus();
-                        // }
-                    }
-                }
-
-                if (zgui.button("Add component", .{})) {
-                    // TODO: actually show list of components
-                    try instance_metadata_entry.addComponent(CoolComponent);
-                }
-
-                if (self.persistent_state.object_inspector.selected_component_index < fake_components.len) {
-                    zgui.sameLine(.{});
-                    if (zgui.button("Remove component", .{})) {
-                        switch (self.persistent_state.object_inspector.selected_component_index) {
-                            inline 0...fake_components.len - 1 => |comptime_index| {
-                                const Component = fake_components[comptime_index];
-                                try instance_metadata_entry.removeComponent(Component);
-                            },
-                            else => unreachable,
-                        }
-                    }
-                }
+                // if (self.persistent_state.object_inspector.selected_component_index < fake_components.len) {
+                //     zgui.sameLine(.{});
+                //     if (zgui.button("Remove component", .{})) {
+                //         switch (self.persistent_state.object_inspector.selected_component_index) {
+                //             inline 0...fake_components.len - 1 => |comptime_index| {
+                //                 const Component = fake_components[comptime_index];
+                //                 try instance_metadata_entry.removeComponent(Component);
+                //             },
+                //             else => unreachable,
+                //         }
+                //     }
+                // }
             }
         }
     }
 
-    try self.render_context.drawFrame(window, delta_time);
+    var render_context = self.getRenderContext();
+    try render_context.drawFrame(window, delta_time);
 }
 
 pub fn deinit(self: *Editor) void {
-    for (self.persistent_state.mesh_names[0..self.persistent_state.mesh_names_len]) |mesh_name| {
+    const persistent_state = self.getPersitentState();
+    for (persistent_state.mesh_names[0..persistent_state.mesh_names_len]) |mesh_name| {
         self.allocator.free(mesh_name);
     }
-
-    for (self.instance_metadata_map.values()) |*value| {
-        value.deinit(self.allocator);
-    }
-    self.instance_metadata_map.deinit();
 
     self.pointing_hand.destroy();
     self.arrow.destroy();
@@ -571,7 +679,13 @@ pub fn deinit(self: *Editor) void {
     self.resize_nwse.destroy();
     self.not_allowed.destroy();
 
-    self.render_context.deinit(self.allocator);
+    self.getRenderContext().deinit(self.allocator);
+    self.ecs.deinit();
+}
+
+pub fn handleFramebufferResize(self: *Editor, window: glfw.Window) void {
+    var render_context = self.getRenderContext();
+    render_context.handleFramebufferResize(window);
 }
 
 /// register input so only editor handles glfw input
@@ -641,40 +755,54 @@ pub fn scrollCallback(window: glfw.Window, xoffset: f64, yoffset: f64) void {
 }
 
 pub fn getNthMeshHandle(self: *Editor, nth: usize) MeshHandle {
-    return self.render_context.getNthMeshHandle(nth);
+    return self.getRenderContext().getNthMeshHandle(nth);
 }
 
-// TODO: new instance should take a name argument!
-/// This function mirrors RenderContext getNewInstance and should be used instead of the render context function.
-/// This enables the editor to records changes in the scene so that it can display new objects for the editor user
-pub fn getNewInstance(self: *Editor, mesh_handle: MeshHandle) !InstanceHandle {
-    const new_instance = self.render_context.getNewInstance(mesh_handle) catch |err| {
+pub fn newSceneEntity(self: *Editor, name: []const u8) !ecez.Entity {
+    const entity = try self.ecs.createEntity(.{});
+    var metadata = ObjectMetadata.init(name, entity);
+    try self.ecs.setComponent(entity, metadata);
+
+    return entity;
+}
+
+/// This function retrieves a instance handle from the renderer and assigns it to the argument entity
+pub fn assignEntityMeshInstance(self: *Editor, entity: ecez.Entity, mesh_handle: MeshHandle) !void {
+    if (self.ecs.hasComponent(entity, InstanceHandle)) {
+        return error.EntityAlreadyHasInstance;
+    }
+
+    var render_context = self.getRenderContext();
+    const new_instance = render_context.getNewInstance(mesh_handle) catch |err| {
         // if this fails we will end in an inconsistent state!
         std.debug.panic("attemped to get new instance {d} failed with error {any}", .{ mesh_handle, err });
     };
 
-    const metadata = try ObjectMetadata.init(self.allocator, "new object", @intCast(u32, self.instance_metadata_map.count()));
-    try self.instance_metadata_map.put(new_instance, metadata);
-
-    return new_instance;
+    try self.ecs.setComponent(entity, new_instance);
 }
 
-pub fn setInstanceTransform(self: *Editor, instance_handle: InstanceHandle, transform: zm.Mat) void {
-    self.render_context.setInstanceTransform(instance_handle, transform);
+pub fn renameEntity(self: *Editor, entity: ecez.Entity, name: []const u8) !void {
+    var metadata = try self.ecs.getComponent(entity, ObjectMetadata);
+    metadata.rename(name);
+    try self.ecs.setComponent(entity, metadata);
 }
 
-pub fn renameInstance(self: *Editor, instance_handle: InstanceHandle, name: []const u8) !void {
-    var instance = self.instance_metadata_map.getPtr(instance_handle).?;
-    try instance.rename(self.allocator, name);
+pub fn getMeshNames(self: Editor) []const [:0]const u8 {
+    const persistent_state = self.ecs.getSharedState(PersistentState);
+    return persistent_state.mesh_names[0..persistent_state.mesh_names_len];
 }
 
-inline fn createNewObjectCommand(self: *Editor, nth_mesh: usize) !void {
-    const mesh_handle = self.getNthMeshHandle(nth_mesh);
-    const new_instance = try self.getNewInstance(mesh_handle);
-    self.setInstanceTransform(new_instance, zm.translation(0, 0, 0));
+pub fn signalRenderUpdate(self: *Editor) void {
+    var render_context = self.getRenderContext();
+    render_context.signalUpdate();
+}
 
-    // manually tell renderer to send new transforms to GPU
-    self.render_context.signalUpdate();
+inline fn getRenderContext(self: *Editor) *RenderContext {
+    return @ptrCast(*RenderContext, self.ecs.getSharedStatePtrWithSharedStateType(*ecez.SharedState(RenderContext)));
+}
+
+inline fn getPersitentState(self: *Editor) *PersistentState {
+    return @ptrCast(*PersistentState, self.ecs.getSharedStatePtrWithSharedStateType(*ecez.SharedState(PersistentState)));
 }
 
 inline fn mapGlfwKeyToImgui(key: glfw.Key) zgui.Key {
