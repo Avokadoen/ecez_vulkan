@@ -466,17 +466,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
             if (zgui.beginMenu("Objects", true)) {
                 defer zgui.endMenu();
 
-                // TODO: shortcut
-                if (zgui.beginMenu("Create new", true)) {
-                    defer zgui.endMenu();
-
-                    // const mesh_names = self.getMeshNames();
-                    // for (mesh_names) |mesh_name, nth_mesh| {
-                    //     if (zgui.menuItem(mesh_name, .{})) {
-                    //         try self.createNewObjectCommand(nth_mesh);
-                    //     }
-                    // }
-                }
+                try self.createNewEntityMenu();
             }
 
             break :blk1 zgui.getWindowHeight();
@@ -499,18 +489,12 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
             defer zgui.end();
 
             {
-                // TODO: only have this is none of the selectables are hovered
+                // TODO: only have this if none of the selectables are hovered
                 //       also have object related popup with actions: delete, copy, more? ... ?
                 if (zgui.beginPopupContextWindow()) {
                     defer zgui.endPopup();
 
-                    const mesh_names = self.getMeshNames();
-                    for (mesh_names) |mesh_name, nth_mesh| {
-                        if (zgui.button(mesh_name, .{})) {
-                            _ = nth_mesh;
-                            // try self.createNewObjectCommand(nth_mesh);
-                        }
-                    }
+                    try self.createNewEntityMenu();
                 }
 
                 try self.ecs.triggerEvent(.draw_object_list, .{});
@@ -787,14 +771,79 @@ pub fn renameEntity(self: *Editor, entity: ecez.Entity, name: []const u8) !void 
     try self.ecs.setComponent(entity, metadata);
 }
 
-pub fn getMeshNames(self: Editor) []const [:0]const u8 {
-    const persistent_state = self.ecs.getSharedState(PersistentState);
+pub fn getMeshNames(self: *Editor) []const [:0]const u8 {
+    const persistent_state = self.getPersitentState();
     return persistent_state.mesh_names[0..persistent_state.mesh_names_len];
 }
 
 pub fn signalRenderUpdate(self: *Editor) void {
     var render_context = self.getRenderContext();
     render_context.signalUpdate();
+}
+
+/// Wether createNewVisbleObject should update all transforms and submit all scene object
+/// state to the GPU
+pub const FlushAllObjects = enum(u1) {
+    yes,
+    no,
+};
+pub const VisibleObjectConfig = struct {
+    position: ?Editor.Position = null,
+    rotation: ?Editor.Rotation = null,
+    scale: ?Editor.Scale = null,
+};
+/// Create a new entity that should also have a renderable mesh instance tied to the entity.
+/// The function will also send this to the GPU in the event of flush_all_objects = .yes
+pub fn createNewVisbleObject(
+    self: *Editor,
+    object_name: []const u8,
+    nth_mesh: usize,
+    comptime flush_all_objects: FlushAllObjects,
+    config: VisibleObjectConfig,
+) !void {
+    const new_entity = try self.newSceneEntity(object_name);
+    const mesh_handle = self.getNthMeshHandle(nth_mesh);
+    try self.assignEntityMeshInstance(new_entity, mesh_handle);
+
+    if (config.position) |position| {
+        try self.ecs.setComponent(new_entity, position);
+    }
+    if (config.rotation) |rotation| {
+        try self.ecs.setComponent(new_entity, rotation);
+    }
+    if (config.scale) |scale| {
+        try self.ecs.setComponent(new_entity, scale);
+    }
+    // new visible object must have a transform component to be visible in the scene
+    try self.ecs.setComponent(new_entity, Editor.Transform{ .mat = undefined });
+
+    // Make sure editor updates renderer after we have set some render state programatically.
+    // This is highly sub-optimal and should not be done in any hot loop
+    if (flush_all_objects == .yes) {
+        try self.ecs.triggerEvent(.transform_update, .{});
+        self.ecs.waitEvent(.transform_update);
+        self.signalRenderUpdate();
+    }
+}
+
+/// Display imgui menu with a list of options for a new entity
+/// The new entity can either be a empty entity (only contain editor metadata)
+/// or be a visible object in the scene by selecting the desired mesh for the new entity
+inline fn createNewEntityMenu(self: *Editor) !void {
+    if (zgui.beginMenu("Create new", true)) {
+        defer zgui.endMenu();
+
+        if (zgui.menuItem("empty entity", .{})) {
+            _ = try self.newSceneEntity("empty entity");
+        }
+
+        const mesh_names = self.getMeshNames();
+        for (mesh_names) |mesh_name, nth_mesh| {
+            if (zgui.menuItem(mesh_name, .{})) {
+                try self.createNewVisbleObject(mesh_name, nth_mesh, .yes, .{});
+            }
+        }
+    }
 }
 
 inline fn getRenderContext(self: *Editor) *RenderContext {
