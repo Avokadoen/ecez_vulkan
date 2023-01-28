@@ -194,44 +194,91 @@ fn componentWidget(comptime T: type, component: *T) bool {
     };
 
     inline for (component_info.fields) |field, i| {
-        zgui.text("{s}", .{field.name});
+        zgui.text(" {s}:", .{field.name});
 
-        zgui.sameLine(.{});
+        component_changed = fieldWidget(T, field.type, i, &@field(component, field.name)) or component_changed;
+    }
 
-        var input_id_buf: [2 + @typeName(T).len + 2 + 1]u8 = undefined;
-        const id = std.fmt.bufPrint(&input_id_buf, "##{s}{d}", .{ @typeName(T), i }) catch unreachable;
-        input_id_buf[id.len] = 0;
+    return component_changed;
+}
 
-        const c_id = input_id_buf[0..id.len :0];
+fn fieldWidget(comptime Component: type, comptime T: type, comptime id_mod: usize, field: *T) bool {
+    var input_id_buf: [2 + @typeName(Component).len + @typeName(T).len + 16]u8 = undefined;
+    const id = std.fmt.bufPrint(&input_id_buf, "##{s}{s}{d}", .{ @typeName(Component), @typeName(T), id_mod }) catch unreachable;
+    input_id_buf[id.len] = 0;
 
-        switch (@typeInfo(field.type)) {
-            .Int => {
-                var value = @intCast(i32, @field(component, field.name));
-                if (zgui.inputInt(c_id, .{ .v = &value })) {
-                    @field(component, field.name) = @intCast(field.type, value);
-                    component_changed = true;
-                }
-            },
-            .Float => {
-                var value = @intCast(f32, @field(component, field.name));
-                if (zgui.inputFloat(c_id, .{ .v = &value })) {
-                    @field(component, field.name) = @intCast(field.type, value);
-                    component_changed = true;
-                }
-            },
-            .Array => |array_info| {
-                switch (@typeInfo(array_info.child)) {
-                    .Float => {
-                        var arr_field = &@field(component, field.name);
-                        var values: [array_info.len]f32 = undefined;
+    var field_changed = false;
+    const c_id = input_id_buf[0..id.len :0];
+    switch (@typeInfo(T)) {
+        .Int => {
+            var value = @intCast(i32, field.*);
+            if (zgui.inputInt(c_id, .{ .v = &value })) {
+                field.* = @intCast(T, value);
+                field_changed = true;
+            }
+        },
+        .Float => {
+            var value = @intCast(f32, field.*);
+            if (zgui.inputFloat(c_id, .{ .v = &value })) {
+                field.* = @intCast(T, value);
+                field_changed = true;
+            }
+        },
+        .Array => |array_info| {
+            switch (@typeInfo(array_info.child)) {
+                .Float => {
+                    var values: [array_info.len]f32 = undefined;
+                    for (values) |*value, j| {
+                        value.* = @floatCast(f32, field.*[j]);
+                    }
+
+                    var array_input = false;
+                    switch (array_info.len) {
+                        1 => {
+                            var value = @intCast(f32, field.*);
+                            if (zgui.inputFloat(c_id, .{ .v = &value })) {
+                                array_input = true;
+                            }
+                        },
+                        2 => {
+                            if (zgui.inputFloat2(c_id, .{ .v = &values })) {
+                                array_input = true;
+                            }
+                        },
+                        3 => {
+                            if (zgui.inputFloat3(c_id, .{ .v = &values })) {
+                                array_input = true;
+                            }
+                        },
+                        4 => {
+                            if (zgui.inputFloat4(c_id, .{ .v = &values })) {
+                                array_input = true;
+                            }
+                        },
+                        else => std.debug.panic("unimplemented array length of {d}", .{array_info.len}),
+                    }
+                    if (array_input) {
+                        field_changed = true;
+                        for (values) |value, j| {
+                            field.*[j] = @floatCast(array_info.child, value);
+                        }
+                    }
+                },
+                .Int => {
+                    if (array_info.child == u8) {
+                        if (zgui.inputText(c_id, .{ .buf = field })) {
+                            field_changed = true;
+                        }
+                    } else {
+                        var values: [array_info.len]i32 = undefined;
                         for (values) |*value, j| {
-                            value.* = @floatCast(f32, arr_field.*[j]);
+                            value.* = @floatCast(i32, field.*[j]);
                         }
 
                         var array_input = false;
                         switch (array_info.len) {
                             1 => {
-                                var value = @intCast(f32, @field(component, field.name));
+                                var value = @intCast(i32, field.*);
                                 if (zgui.inputFloat(c_id, .{ .v = &value })) {
                                     array_input = true;
                                 }
@@ -247,41 +294,70 @@ fn componentWidget(comptime T: type, component: *T) bool {
                                 }
                             },
                             4 => {
-                                if (zgui.inputFloat3(c_id, .{ .v = &values })) {
+                                if (zgui.inputFloat4(c_id, .{ .v = &values })) {
                                     array_input = true;
                                 }
                             },
                             else => std.debug.panic("unimplemented array length of {d}", .{array_info.len}),
                         }
-
                         if (array_input) {
-                            component_changed = true;
+                            field_changed = true;
                             for (values) |value, j| {
-                                arr_field[j] = @floatCast(array_info.child, value);
+                                field.*[j] = @floatCast(array_info.child, value);
                             }
                         }
-                    },
-                    .Int => {
-                        var arr_field = &@field(component, field.name);
-                        if (array_info.child == u8) {
-                            if (zgui.inputText(c_id, .{ .buf = arr_field })) {
-                                component_changed = true;
-                            }
-                        } else {
-                            std.debug.panic("unimplemented int array type of " ++ @typeName(array_info.child), .{});
+                    }
+                },
+                .Vector => |vec_info| {
+                    comptime var index: usize = 0;
+                    inline while (index < vec_info.len) : (index += 1) {
+                        field_changed = field_changed or fieldWidget(Component, @TypeOf(field[index]), (id_mod + index) << 1, &field[index]);
+                    }
+                },
+                else => std.debug.panic("unimplemented array type of {s}", .{@typeName(array_info.child)}),
+            }
+        },
+        .Vector => |vec_info| {
+            switch (@typeInfo(vec_info.child)) {
+                .Float => {
+                    var values: [vec_info.len]f32 = undefined;
+                    for (values) |*value, j| {
+                        value.* = @floatCast(f32, field.*[j]);
+                    }
+
+                    if (fieldWidget(Component, @TypeOf(values), id_mod << 1, &values)) {
+                        for (values) |value, j| {
+                            field.*[j] = value;
                         }
-                    },
-                    .Vector => {
-                        // TODO:
-                    },
-                    else => std.debug.panic("unimplemented array type of " ++ @typeName(array_info.child), .{}),
-                }
-            },
-            else => {},
-        }
+
+                        field_changed = true;
+                    }
+                },
+                .Int => {
+                    var values: [vec_info.len]i32 = undefined;
+                    for (values) |*value, j| {
+                        value.* = @floatCast(i32, field.*[j]);
+                    }
+
+                    if (fieldWidget(Component, @TypeOf(values), id_mod << 1, &values)) {
+                        for (values) |value, j| {
+                            field.*[j] = value;
+                        }
+
+                        field_changed = true;
+                    }
+                },
+                else => std.debug.panic("unimplemented vector type of {s}", .{@typeName(vec_info.child)}),
+            }
+        },
+        .Pointer => |ptr_info| {
+            _ = ptr_info;
+            std.debug.panic("todo", .{});
+        },
+        else => std.debug.panic("unimplemented type of {s}", .{@typeName(field.type)}),
     }
 
-    return component_changed;
+    return field_changed;
 }
 
 const PersistentState = struct {
@@ -591,87 +667,23 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
                 zgui.separator();
                 zgui.text("Component widgets:", .{});
-                inline for (fake_components) |Component| {
+                comp_iter: inline for (fake_components) |Component| {
+                    if (Component == ObjectMetadata) {
+                        continue :comp_iter;
+                    }
+
                     if (self.ecs.hasComponent(selected_entity, Component)) {
                         zgui.separator();
                         zgui.text("{s}:", .{@typeName(Component)});
                         var component = self.ecs.getComponent(selected_entity, Component) catch unreachable;
                         if (componentWidget(Component, &component)) {
                             try self.ecs.setComponent(selected_entity, component);
+
+                            try self.forceFLush();
                         }
                         zgui.separator();
                     }
                 }
-
-                // const component = self.ecs.getComponent(selected_entity, Component) catch |err| switch (err) {
-                //     error.ComponentMissing => {
-                //         continue :comp_iter;
-                //     },
-                //     else => unreachable, // Serious bug if we ever get another error
-                // };
-
-                // // Transform editing UI
-                // {
-                //     zgui.text("Transform: ", .{});
-                //     _ = zgui.beginChild("Transform", .{ .h = zgui.getFontSize() * 6.5, .border = true });
-                //     defer zgui.endChild();
-
-                //     var transform_changed = false;
-                //     var selected_transform = self.render_context.getInstanceTransform(selected_instance);
-                //     var position: [4]f32 = selected_transform[3];
-                //     zgui.text("Position: ", .{});
-                //     zgui.sameLine(.{});
-                //     if (zgui.dragFloat3("##object_inspector_position", .{ .v = position[0..3] })) {
-                //         transform_changed = true;
-                //     }
-
-                //     const original_rotation: zm.Quat = zm.matToQuat(selected_transform);
-                //     // calculate rotation in each axis as radians and convert it to degrees
-                //     var euler_angles = quaternionToEuler(original_rotation);
-
-                //     zgui.text("Rotation: ", .{});
-                //     zgui.sameLine(.{});
-                //     var rotation = zm.vecToArr4(euler_angles);
-                //     rotation[0] *= 180.0 / std.math.pi;
-                //     rotation[1] *= 180.0 / std.math.pi;
-                //     rotation[2] *= 180.0 / std.math.pi;
-                //     if (zgui.dragFloat3("##object_inspector_rotation", .{
-                //         .v = rotation[0..3],
-                //         .flags = .{},
-                //     })) {
-                //         euler_angles[0] = rotation[0] * std.math.pi / 180.0;
-                //         euler_angles[1] = rotation[1] * std.math.pi / 180.0;
-                //         euler_angles[2] = rotation[2] * std.math.pi / 180.0;
-                //         transform_changed = true;
-                //     }
-
-                //     zgui.text("Scale: ", .{});
-                //     zgui.sameLine(.{});
-                //     zgui.text("TODO :)", .{});
-
-                //     if (transform_changed) {
-                //         // convert degrees back to radians
-                //         const new_rotation = zm.mul(zm.mul(zm.rotationZ(euler_angles[2]), zm.rotationY(euler_angles[1])), zm.rotationX(euler_angles[0]));
-                //         const new_transform = zm.mul(new_rotation, zm.translationV(position));
-                //         self.render_context.setInstanceTransform(selected_instance, new_transform);
-                //         self.render_context.signalUpdate();
-                //     }
-                // }
-
-                // zgui.separator();
-
-                // for (instance_metadata_entry.components.keys()) |component_index| {
-                //     switch (component_index) {
-                //         inline 0...fake_components.len - 1 => |comptime_index| {
-                //             const Component = fake_components[comptime_index];
-                //             componentWidget(
-                //                 Component,
-                //                 // TODO: we need to store components x(
-                //             );
-                //         },
-                //         else => unreachable,
-                //     }
-                // }
 
                 // if (zgui.button("Add component", .{})) {
                 //     // TODO: actually show list of components
@@ -871,10 +883,14 @@ pub fn createNewVisbleObject(
     // Make sure editor updates renderer after we have set some render state programatically.
     // This is highly sub-optimal and should not be done in any hot loop
     if (flush_all_objects == .yes) {
-        try self.ecs.triggerEvent(.transform_update, .{});
-        self.ecs.waitEvent(.transform_update);
-        self.signalRenderUpdate();
+        try self.forceFLush();
     }
+}
+
+inline fn forceFLush(self: *Editor) !void {
+    try self.ecs.triggerEvent(.transform_update, .{});
+    self.ecs.waitEvent(.transform_update);
+    self.signalRenderUpdate();
 }
 
 /// Display imgui menu with a list of options for a new entity

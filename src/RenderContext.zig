@@ -57,8 +57,8 @@ pub const Config = struct {
 // TODO: evaluate if we want
 pub const InstanceHandle = packed struct {
     mesh_handle: MeshHandle,
-    instance_handle: u32,
     padding: u16 = 0,
+    instance_handle: u32,
 };
 
 pub const MeshInstancehInitializeContex = struct {
