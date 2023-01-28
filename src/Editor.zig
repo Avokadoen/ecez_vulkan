@@ -185,65 +185,104 @@ const TransformSystems = struct {
     }
 };
 
-fn componentWidget(comptime T: type, component: *T) void {
+fn componentWidget(comptime T: type, component: *T) bool {
+    var component_changed = false;
+
     const component_info = switch (@typeInfo(T)) {
         .Struct => |info| info,
         else => @compileError("invalid component type"),
     };
 
-    for (component_info.fields) |field, i| {
+    inline for (component_info.fields) |field, i| {
         zgui.text("{s}", .{field.name});
+
         zgui.sameLine(.{});
+
+        var input_id_buf: [2 + @typeName(T).len + 2 + 1]u8 = undefined;
+        const id = std.fmt.bufPrint(&input_id_buf, "##{s}{d}", .{ @typeName(T), i }) catch unreachable;
+        input_id_buf[id.len] = 0;
+
+        const c_id = input_id_buf[0..id.len :0];
 
         switch (@typeInfo(field.type)) {
             .Int => {
-                var value = @intCast(i32, component[i]);
-                if (zgui.inputInt(field.name, .{ .value = &value })) {
-                    component[i] = @intCast(field.type, value);
+                var value = @intCast(i32, @field(component, field.name));
+                if (zgui.inputInt(c_id, .{ .v = &value })) {
+                    @field(component, field.name) = @intCast(field.type, value);
+                    component_changed = true;
                 }
             },
             .Float => {
-                var value = @intCast(f32, component[i]);
-                if (zgui.inputFloat(field.name, .{ .value = &value })) {
-                    component[i] = @intCast(field.type, value);
+                var value = @intCast(f32, @field(component, field.name));
+                if (zgui.inputFloat(c_id, .{ .v = &value })) {
+                    @field(component, field.name) = @intCast(field.type, value);
+                    component_changed = true;
                 }
             },
             .Array => |array_info| {
-                _ = array_info;
-                // switch
-                // len: comptime_int,
-                // child: type,
+                switch (@typeInfo(array_info.child)) {
+                    .Float => {
+                        var arr_field = &@field(component, field.name);
+                        var values: [array_info.len]f32 = undefined;
+                        for (values) |*value, j| {
+                            value.* = @floatCast(f32, arr_field.*[j]);
+                        }
+
+                        var array_input = false;
+                        switch (array_info.len) {
+                            1 => {
+                                var value = @intCast(f32, @field(component, field.name));
+                                if (zgui.inputFloat(c_id, .{ .v = &value })) {
+                                    array_input = true;
+                                }
+                            },
+                            2 => {
+                                if (zgui.inputFloat2(c_id, .{ .v = &values })) {
+                                    array_input = true;
+                                }
+                            },
+                            3 => {
+                                if (zgui.inputFloat3(c_id, .{ .v = &values })) {
+                                    array_input = true;
+                                }
+                            },
+                            4 => {
+                                if (zgui.inputFloat3(c_id, .{ .v = &values })) {
+                                    array_input = true;
+                                }
+                            },
+                            else => std.debug.panic("unimplemented array length of {d}", .{array_info.len}),
+                        }
+
+                        if (array_input) {
+                            component_changed = true;
+                            for (values) |value, j| {
+                                arr_field[j] = @floatCast(array_info.child, value);
+                            }
+                        }
+                    },
+                    .Int => {
+                        var arr_field = &@field(component, field.name);
+                        if (array_info.child == u8) {
+                            if (zgui.inputText(c_id, .{ .buf = arr_field })) {
+                                component_changed = true;
+                            }
+                        } else {
+                            std.debug.panic("unimplemented int array type of " ++ @typeName(array_info.child), .{});
+                        }
+                    },
+                    .Vector => {
+                        // TODO:
+                    },
+                    else => std.debug.panic("unimplemented array type of " ++ @typeName(array_info.child), .{}),
+                }
             },
+            else => {},
         }
     }
-}
 
-// fn componentMemberWidget(comptime T: type, comptime is_root_type: bool) void {
-//          switch (@typeInfo(field.type)) {
-//             .Int => {
-//                 var value = @intCast(i32, component[i]);
-//                 if (zgui.inputInt(field.name, .{ .value = &value })) {
-//                     component[i] = @intCast(field.type, value);
-//                 }
-//             },
-//             .Float => {
-//                 var value = @intCast(f32, component[i]);
-//                 if (zgui.inputFloat(field.name, .{ .value = &value })) {
-//                     component[i] = @intCast(field.type, value);
-//                 }
-//             },
-//             .Array => |array_info| {
-//                 if (is_root_type) {
-//                     @compileError("unimplemented");
-//                     // switch(array_info.len) {
-//                     //     1 => {
-//                     //     }
-//                     // }
-//                 } else {
-//                     @compileError("unimplemented: nested arrays");
-//                 }
-//         }
-// }
+    return component_changed;
+}
 
 const PersistentState = struct {
     const ObjectList = struct {
@@ -535,7 +574,42 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                     }
                 }
 
-                // // zgui.separator();
+                zgui.separator();
+                zgui.text("Component list: ", .{});
+                if (zgui.beginListBox("##component list", .{ .w = -std.math.floatMin(f32), .h = 0 })) {
+                    defer zgui.endListBox();
+
+                    // TODO: able to add and remove components here!
+                    inline for (fake_components) |Component, comp_index| {
+                        if (self.ecs.hasComponent(selected_entity, Component)) {
+                            if (zgui.selectable(@typeName(Component), .{ .selected = comp_index == persistent_state.object_inspector.selected_component_index })) {
+                                persistent_state.object_inspector.selected_component_index = comp_index;
+                            }
+                        }
+                    }
+                }
+
+                zgui.separator();
+                zgui.text("Component widgets:", .{});
+                inline for (fake_components) |Component| {
+                    if (self.ecs.hasComponent(selected_entity, Component)) {
+                        zgui.separator();
+                        zgui.text("{s}:", .{@typeName(Component)});
+                        var component = self.ecs.getComponent(selected_entity, Component) catch unreachable;
+                        if (componentWidget(Component, &component)) {
+                            try self.ecs.setComponent(selected_entity, component);
+                        }
+                        zgui.separator();
+                    }
+                }
+
+                // const component = self.ecs.getComponent(selected_entity, Component) catch |err| switch (err) {
+                //     error.ComponentMissing => {
+                //         continue :comp_iter;
+                //     },
+                //     else => unreachable, // Serious bug if we ever get another error
+                // };
+
                 // // Transform editing UI
                 // {
                 //     zgui.text("Transform: ", .{});
@@ -585,29 +659,6 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 // }
 
                 // zgui.separator();
-
-                // zgui.text("Component list: ", .{});
-                // if (zgui.beginListBox("##component list", .{ .w = -std.math.floatMin(f32), .h = 0 })) {
-                //     defer zgui.endListBox();
-                //     for (instance_metadata_entry.components.keys()) |component_index, i| {
-                //         switch (component_index) {
-                //             inline 0...fake_components.len - 1 => |comptime_index| {
-                //                 const Component = fake_components[comptime_index];
-                //                 if (zgui.selectable(
-                //                     @typeName(Component),
-                //                     .{ .selected = i == self.persistent_state.object_inspector.selected_component_index },
-                //                 )) {
-                //                     self.persistent_state.object_inspector.selected_component_index = i;
-                //                 }
-                //             },
-                //             else => unreachable,
-                //         }
-                //         // TODO:
-                //         // if (selected) {
-                //         //     zgui.setItemDefaultFocus();
-                //         // }
-                //     }
-                // }
 
                 // for (instance_metadata_entry.components.keys()) |component_index| {
                 //     switch (component_index) {
