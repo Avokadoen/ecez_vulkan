@@ -12,11 +12,14 @@ const RenderContext = @import("RenderContext.zig");
 const MeshHandle = RenderContext.MeshHandle;
 const MeshInstancehInitializeContex = RenderContext.MeshInstancehInitializeContex;
 
-// TODO: try using ecez to make the Editor! :)
-// TODO: controllable scene camera
+// TODO: controllable scene camera (Icon to toggle camera control)
 // TODO: Object list and inspector should have a preferences option in the header to adjust width of the window
 // TODO: should be able to change mesh of selected object
 // TODO: move transform stuff out
+// TODO: configure hiding components fropm component list + widgets
+// TODO: ability to override generated component widgets
+//       TODO: instance component needs overriding
+//       TODO: ObjectMetadata has to be hidden
 
 pub const InstanceHandle = RenderContext.InstanceHandle;
 pub const Transform = struct {
@@ -31,6 +34,7 @@ pub const Rotation = struct {
 pub const Scale = struct {
     vec: zm.Vec,
 };
+// TODO: rename "EntityMetadata"
 pub const ObjectMetadata = struct {
     entity: ecez.Entity,
 
@@ -94,9 +98,22 @@ const fake_components = [_]type{
     InstanceHandle,
 };
 
+const object_metadata_index = blk: {
+    inline for (fake_components) |Component, component_index| {
+        if (Component == ObjectMetadata) {
+            break :blk component_index;
+        }
+    }
+};
+
 // TODO: it would be nicer here to use PeristentState as event data because it is easier to see when it is changed by systems
 /// Generate the entries of the object list depending on objects in the scene
 pub fn objectListSystem(metadata: *ObjectMetadata, persistent_state: *ecez.SharedState(PersistentState)) void {
+    // if (metadata.id_len == 0) {
+    //     std.debug.print("bug!!!", .{});
+    //     return;
+    // }
+
     const selected_entity_id = blk: {
         // selected entity is either our persistent user selction, or an invalid/unlikely InstanceHandle.
         if (persistent_state.selected_entity) |entity| {
@@ -651,15 +668,48 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 }
 
                 zgui.separator();
+
                 zgui.text("Component list: ", .{});
                 if (zgui.beginListBox("##component list", .{ .w = -std.math.floatMin(f32), .h = 0 })) {
                     defer zgui.endListBox();
 
-                    // TODO: able to add and remove components here!
                     inline for (fake_components) |Component, comp_index| {
                         if (self.ecs.hasComponent(selected_entity, Component)) {
                             if (zgui.selectable(@typeName(Component), .{ .selected = comp_index == persistent_state.object_inspector.selected_component_index })) {
                                 persistent_state.object_inspector.selected_component_index = comp_index;
+                            }
+                        }
+                    }
+                }
+
+                if (zgui.button("Add", .{})) {
+                    std.debug.panic("TODO", .{});
+                }
+                zgui.sameLine(.{});
+
+                {
+                    const object_metadata_selected = object_metadata_index == persistent_state.object_inspector.selected_component_index;
+                    const nothing_selected = persistent_state.object_inspector.selected_component_index == fake_components.len;
+                    zgui.beginDisabled(.{
+                        .disabled = object_metadata_selected or nothing_selected,
+                    });
+                    defer zgui.endDisabled();
+
+                    if (zgui.button("Remove", .{})) {
+                        inline for (fake_components) |Component, comp_index| {
+                            // deleting the metadata of an entity is illegal
+                            if (Component != ObjectMetadata and comp_index == persistent_state.object_inspector.selected_component_index) {
+                                // In the event a remove failed, then the select index is in a inconsistent state
+                                // and we do not really have to do anything
+                                self.ecs.removeComponent(selected_entity, Component) catch {
+                                    // TODO: log here in debug builds
+                                };
+
+                                try self.forceFLush();
+
+                                // assign selection an invalid index
+                                // TODO: Selection should be persistent when removing current component
+                                persistent_state.object_inspector.selected_component_index = fake_components.len;
                             }
                         }
                     }
@@ -684,24 +734,6 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                         zgui.separator();
                     }
                 }
-
-                // if (zgui.button("Add component", .{})) {
-                //     // TODO: actually show list of components
-                //     try instance_metadata_entry.addComponent(CoolComponent);
-                // }
-
-                // if (self.persistent_state.object_inspector.selected_component_index < fake_components.len) {
-                //     zgui.sameLine(.{});
-                //     if (zgui.button("Remove component", .{})) {
-                //         switch (self.persistent_state.object_inspector.selected_component_index) {
-                //             inline 0...fake_components.len - 1 => |comptime_index| {
-                //                 const Component = fake_components[comptime_index];
-                //                 try instance_metadata_entry.removeComponent(Component);
-                //             },
-                //             else => unreachable,
-                //         }
-                //     }
-                // }
             }
         }
     }
