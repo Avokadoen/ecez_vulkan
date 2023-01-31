@@ -7,14 +7,6 @@ const Editor = @import("Editor.zig");
 
 const RenderContext = @import("RenderContext.zig");
 
-const PositionComp = struct {
-    xyz: [3]f32,
-};
-
-const VelocityComp = struct {
-    xyz: [3]f32,
-};
-
 pub fn main() !void {
     // create a gpa with default configuration
     var alloc = if (RenderContext.is_debug_build) std.heap.GeneralPurposeAllocator(.{}){} else std.heap.c_allocator;
@@ -59,6 +51,7 @@ pub fn main() !void {
     try editor.createNewVisbleObject("helmet", 0, Editor.FlushAllObjects.no, .{
         .rotation = Editor.Rotation{ .quat = zm.quatFromNormAxisAngle(zm.f32x4(0, 0, 1, 0), std.math.pi) },
         .position = Editor.Position{ .vec = zm.f32x4(-1, 0, 0, 0) },
+        .scale = Editor.Scale{ .vec = zm.f32x4(1, 1, 1, 1) },
     });
     try editor.createNewVisbleObject("box", 1, Editor.FlushAllObjects.yes, .{
         .rotation = Editor.Rotation{ .quat = zm.quatFromNormAxisAngle(zm.f32x4(0, 1, 0, 0), std.math.pi * 0.5) },

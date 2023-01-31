@@ -20,6 +20,7 @@ const MeshInstancehInitializeContex = RenderContext.MeshInstancehInitializeConte
 // TODO: ability to override generated component widgets
 //       TODO: instance component needs overriding
 //       TODO: ObjectMetadata has to be hidden
+//       TODO: custom widget for adding a new component
 
 pub const InstanceHandle = RenderContext.InstanceHandle;
 pub const Transform = struct {
@@ -104,6 +105,16 @@ const object_metadata_index = blk: {
             break :blk component_index;
         }
     }
+};
+
+const biggest_component_size = blk: {
+    comptime var size = 0;
+    inline for (fake_components) |Component| {
+        if (@sizeOf(Component) > size) {
+            size = @sizeOf(Component);
+        }
+    }
+    break :blk size;
 };
 
 // TODO: it would be nicer here to use PeristentState as event data because it is easier to see when it is changed by systems
@@ -389,6 +400,11 @@ const PersistentState = struct {
         selected_component_index: usize,
     };
 
+    const AddComponentModal = struct {
+        selected_component_index: usize = fake_components.len,
+        component_bytes: [biggest_component_size]u8 = undefined,
+    };
+
     // common state
     selected_entity: ?ecez.Entity,
     mesh_names_len: usize,
@@ -397,6 +413,7 @@ const PersistentState = struct {
 
     object_list: ObjectList,
     object_inspector: ObjectInspector,
+    add_component_modal: AddComponentModal,
 };
 
 const World = ecez.WorldBuilder().WithComponents(.{
@@ -462,6 +479,7 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
             .name_buffer = undefined,
             .selected_component_index = fake_components.len,
         },
+        .add_component_modal = .{},
     };
 
     var initialized_mesh_names: usize = 0;
@@ -682,8 +700,94 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                     }
                 }
 
-                if (zgui.button("Add", .{})) {
-                    std.debug.panic("TODO", .{});
+                // add component UI
+                {
+                    if (zgui.button("Add", .{})) {
+                        zgui.openPopup("Add component", .{});
+                    }
+
+                    // Place add modal at the center of the screen
+                    const center = zgui.getMainViewport().getCenter();
+                    zgui.setNextWindowPos(.{
+                        .x = center[0],
+                        .y = center[1],
+                        .cond = .appearing,
+                        .pivot_x = 0.5,
+                        .pivot_y = 0.5,
+                    });
+
+                    if (zgui.beginPopupModal("Add component", .{ .flags = .{ .always_auto_resize = true } })) {
+                        defer zgui.endPopup();
+
+                        // List of components that you can add
+                        inline for (fake_components) |Component, comp_index| {
+                            // you can never add a ObjectMetadata
+                            if (Component == ObjectMetadata) continue;
+
+                            if (self.ecs.hasComponent(selected_entity, Component) == false) {
+                                // if the component index is not set, then we set it to current component index
+                                if (persistent_state.add_component_modal.selected_component_index == fake_components.len) {
+                                    persistent_state.add_component_modal.selected_component_index = comp_index;
+                                }
+
+                                if (zgui.selectable(@typeName(Component), .{
+                                    .selected = comp_index == persistent_state.add_component_modal.selected_component_index,
+                                    .flags = .{ .dont_close_popups = true },
+                                })) {
+                                    persistent_state.add_component_modal.selected_component_index = comp_index;
+                                    std.mem.set(u8, &persistent_state.add_component_modal.component_bytes, 0);
+                                }
+                            }
+                        }
+
+                        // Menu to set the initial value of selected component
+                        {
+                            zgui.separator();
+                            // List of components that you can add
+                            inline for (fake_components) |Component, comp_index| {
+                                if (Component == ObjectMetadata) continue;
+
+                                if (comp_index == persistent_state.add_component_modal.selected_component_index) {
+                                    zgui.text("{s}:", .{@typeName(Component)});
+
+                                    var component = @ptrCast(
+                                        *Component,
+                                        @alignCast(@alignOf(Component), &persistent_state.add_component_modal.component_bytes),
+                                    );
+                                    _ = componentWidget(Component, component);
+                                }
+                            }
+                            zgui.separator();
+                        }
+
+                        if (zgui.button("Add component", .{ .w = 120, .h = 0 })) {
+                            // Add component to entity
+                            inline for (fake_components) |Component, comp_index| {
+                                if (Component == ObjectMetadata) continue;
+
+                                if (comp_index == persistent_state.add_component_modal.selected_component_index) {
+                                    const component = @ptrCast(
+                                        *Component,
+                                        @alignCast(@alignOf(Component), &persistent_state.add_component_modal.component_bytes),
+                                    );
+                                    try self.ecs.setComponent(selected_entity, component.*);
+                                    try self.forceFLush();
+                                }
+                            }
+
+                            persistent_state.add_component_modal.selected_component_index = fake_components.len;
+                            zgui.closeCurrentPopup();
+                        }
+                        zgui.sameLine(.{});
+                        warningMarker("Remember to set ALL values to something valid");
+
+                        zgui.setItemDefaultFocus();
+                        zgui.sameLine(.{});
+                        if (zgui.button("Cancel", .{ .w = 120, .h = 0 })) {
+                            persistent_state.add_component_modal.selected_component_index = fake_components.len;
+                            zgui.closeCurrentPopup();
+                        }
+                    }
                 }
                 zgui.sameLine(.{});
 
@@ -951,6 +1055,18 @@ inline fn getRenderContext(self: *Editor) *RenderContext {
 
 inline fn getPersitentState(self: *Editor) *PersistentState {
     return @ptrCast(*PersistentState, self.ecs.getSharedStatePtrWithSharedStateType(*ecez.SharedState(PersistentState)));
+}
+
+inline fn warningMarker(warning: []const u8) void {
+    zgui.textDisabled("(!)", .{});
+    if (zgui.isItemHovered(.{})) {
+        zgui.beginTooltip();
+        defer zgui.endTooltip();
+
+        zgui.pushTextWrapPos(zgui.getFontSize() * 35);
+        zgui.textUnformatted(warning);
+        zgui.popTextWrapPos();
+    }
 }
 
 inline fn mapGlfwKeyToImgui(key: glfw.Key) zgui.Key {
