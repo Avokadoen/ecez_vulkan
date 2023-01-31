@@ -182,7 +182,7 @@ const TransformSystems = struct {
     pub fn applyScale(transform: *Transform, scale: Scale) void {
         transform.mat[0][0] *= scale.vec[0];
         transform.mat[1][1] *= scale.vec[1];
-        transform.mat[2][3] *= scale.vec[2];
+        transform.mat[2][2] *= scale.vec[2];
     }
 
     /// Apply rotation to the transform/
