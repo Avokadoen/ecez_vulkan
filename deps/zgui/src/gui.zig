@@ -252,6 +252,16 @@ pub const io = struct {
     pub const addCharacterEvent = zguiIoAddCharacterEvent;
     extern fn zguiIoAddCharacterEvent(char: i32) void;
 };
+
+pub fn setClipboardText(value: [:0]const u8) void {
+    zguiSetClipboardText(value.ptr);
+}
+pub fn getClipboardText() [:0]const u8 {
+    const value = zguiGetClipboardText();
+    return std.mem.span(value);
+}
+extern fn zguiSetClipboardText(text: [*:0]const u8) void;
+extern fn zguiGetClipboardText() [*:0]const u8;
 //--------------------------------------------------------------------------------------------------
 const Context = *opaque {};
 pub const DrawData = *extern struct {
@@ -882,9 +892,16 @@ const PopStyleColor = struct {
 pub fn popStyleColor(args: PopStyleColor) void {
     zguiPopStyleColor(args.count);
 }
+/// `fn pushTextWrapPos(wrap_pos_x: f32) void`
+pub const pushTextWrapPos = zguiPushTextWrapPos;
+/// `fn popTextWrapPos() void`
+pub const popTextWrapPos = zguiPopTextWrapPos;
 extern fn zguiPushStyleColor4f(idx: StyleCol, col: *const [4]f32) void;
 extern fn zguiPushStyleColor1u(idx: StyleCol, col: u32) void;
 extern fn zguiPopStyleColor(count: i32) void;
+extern fn zguiPushTextWrapPos(wrap_pos_x: f32) void;
+extern fn zguiPopTextWrapPos() void;
+//--------------------------------------------------------------------------------------------------
 //--------------------------------------------------------------------------------------------------
 pub const StyleVar = enum(u32) {
     alpha, // 1f
@@ -943,9 +960,12 @@ pub const pushItemWidth = zguiPushItemWidth;
 pub const popItemWidth = zguiPopItemWidth;
 /// `void setNextItemWidth(item_width: f32) void`
 pub const setNextItemWidth = zguiSetNextItemWidth;
+/// `void setItemDefaultFocus() void`
+pub const setItemDefaultFocus = zguiSetItemDefaultFocus;
 extern fn zguiPushItemWidth(item_width: f32) void;
 extern fn zguiPopItemWidth() void;
 extern fn zguiSetNextItemWidth(item_width: f32) void;
+extern fn zguiSetItemDefaultFocus() void;
 //--------------------------------------------------------------------------------------------------
 /// `pub fn getFont() Font`
 pub const getFont = zguiGetFont;

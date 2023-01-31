@@ -1040,6 +1040,10 @@ ZGUI_API void zguiSetNextItemWidth(float item_width) {
     ImGui::SetNextItemWidth(item_width);
 }
 
+ZGUI_API void zguiSetItemDefaultFocus() {
+    ImGui::SetItemDefaultFocus();
+}
+
 ZGUI_API ImFont* zguiGetFont(void) {
     return ImGui::GetFont();
 }
@@ -1146,6 +1150,14 @@ ZGUI_API ImGuiID zguiGetStrIdZ(const char* str_id) {
 
 ZGUI_API ImGuiID zguiGetPtrId(const void* ptr_id) {
     return ImGui::GetID(ptr_id);
+}
+
+ZGUI_API void zguiSetClipboardText(const char* text) {
+    ImGui::SetClipboardText(text);
+}
+
+ZGUI_API const char* zguiGetClipboardText() {
+    return ImGui::GetClipboardText();
 }
 
 ZGUI_API ImFont* zguiIoAddFontFromFileWithConfig(
@@ -1355,6 +1367,10 @@ ZGUI_API void zguiGetWindowContentRegionMax(float pos[2]) {
 
 ZGUI_API void zguiPushTextWrapPos(float wrap_pos_x) {
     ImGui::PushTextWrapPos(wrap_pos_x);
+}
+
+ZGUI_API void zguiPopTextWrapPos() {
+    ImGui::PopTextWrapPos();
 }
 
 ZGUI_API bool zguiBeginTabBar(const char* string, ImGuiTabBarFlags flags) {
