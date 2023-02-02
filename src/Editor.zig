@@ -110,6 +110,8 @@ const object_metadata_index = blk: {
 const biggest_component_size = blk: {
     comptime var size = 0;
     inline for (fake_components) |Component| {
+        if (Component == ObjectMetadata) continue;
+
         if (@sizeOf(Component) > size) {
             size = @sizeOf(Component);
         }
@@ -117,14 +119,48 @@ const biggest_component_size = blk: {
     break :blk size;
 };
 
+fn overrideWidgetGenerator(comptime Component: type) ?type {
+    return switch (Component) {
+        InstanceHandle => struct {
+            pub fn widget(editor: *Editor, instance_handle: *InstanceHandle) bool {
+                const persistent_state = editor.getPersitentState();
+
+                if (zgui.beginCombo("Mesh", .{ .preview_value = persistent_state.mesh_names[persistent_state.instance_handle_widget.selected_mesh_index] })) {
+                    defer zgui.endCombo();
+
+                    for (persistent_state.mesh_names[0..persistent_state.mesh_names_len]) |mesh_name, mesh_index| {
+                        if (zgui.selectable(mesh_name, .{
+                            .selected = persistent_state.instance_handle_widget.selected_mesh_index == mesh_index,
+                        })) {
+                            persistent_state.instance_handle_widget.selected_mesh_index = mesh_index;
+                            instance_handle.mesh_handle = editor.getNthMeshHandle(mesh_index);
+                        }
+                    }
+                }
+
+                return false;
+            }
+        },
+        else => null,
+    };
+}
+
+fn specializedAddHandle(comptime Component: type) ?type {
+    return switch (Component) {
+        InstanceHandle => struct {
+            pub fn add(editor: *Editor, instance_handle: *InstanceHandle) !void {
+                const persistent_state = editor.getPersitentState();
+
+                try editor.assignEntityMeshInstance(persistent_state.selected_entity.?, instance_handle.mesh_handle);
+            }
+        },
+        else => null,
+    };
+}
+
 // TODO: it would be nicer here to use PeristentState as event data because it is easier to see when it is changed by systems
 /// Generate the entries of the object list depending on objects in the scene
 pub fn objectListSystem(metadata: *ObjectMetadata, persistent_state: *ecez.SharedState(PersistentState)) void {
-    // if (metadata.id_len == 0) {
-    //     std.debug.print("bug!!!", .{});
-    //     return;
-    // }
-
     const selected_entity_id = blk: {
         // selected entity is either our persistent user selction, or an invalid/unlikely InstanceHandle.
         if (persistent_state.selected_entity) |entity| {
@@ -405,6 +441,11 @@ const PersistentState = struct {
         component_bytes: [biggest_component_size]u8 = undefined,
     };
 
+    const InstanceHandleWidget = struct {
+        // add component: InstanceHandle state
+        selected_mesh_index: usize,
+    };
+
     // common state
     selected_entity: ?ecez.Entity,
     mesh_names_len: usize,
@@ -414,6 +455,7 @@ const PersistentState = struct {
     object_list: ObjectList,
     object_inspector: ObjectInspector,
     add_component_modal: AddComponentModal,
+    instance_handle_widget: InstanceHandleWidget,
 };
 
 const World = ecez.WorldBuilder().WithComponents(.{
@@ -480,6 +522,7 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
             .selected_component_index = fake_components.len,
         },
         .add_component_modal = .{},
+        .instance_handle_widget = .{ .selected_mesh_index = 0 },
     };
 
     var initialized_mesh_names: usize = 0;
@@ -743,6 +786,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                         // Menu to set the initial value of selected component
                         {
                             zgui.separator();
+
                             // List of components that you can add
                             inline for (fake_components) |Component, comp_index| {
                                 if (Component == ObjectMetadata) continue;
@@ -750,11 +794,20 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                                 if (comp_index == persistent_state.add_component_modal.selected_component_index) {
                                     zgui.text("{s}:", .{@typeName(Component)});
 
-                                    var component = @ptrCast(
-                                        *Component,
-                                        @alignCast(@alignOf(Component), &persistent_state.add_component_modal.component_bytes),
-                                    );
-                                    _ = componentWidget(Component, component);
+                                    const component_ptr = blk: {
+                                        // @setRuntimeSafety(false);
+                                        const ptr = std.mem.bytesAsValue(Component, persistent_state.add_component_modal.component_bytes[0..@sizeOf(Component)]);
+                                        break :blk @alignCast(@alignOf(Component), ptr);
+                                    };
+
+                                    // if component has specialized widget
+                                    if (overrideWidgetGenerator(Component)) |Override| {
+                                        // call manually implemented widget
+                                        _ = Override.widget(self, component_ptr);
+                                    } else {
+                                        // .. or generated widget
+                                        _ = componentWidget(Component, component_ptr);
+                                    }
                                 }
                             }
                             zgui.separator();
@@ -770,7 +823,13 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                                         *Component,
                                         @alignCast(@alignOf(Component), &persistent_state.add_component_modal.component_bytes),
                                     );
-                                    try self.ecs.setComponent(selected_entity, component.*);
+
+                                    if (specializedAddHandle(Component)) |add_handle| {
+                                        try add_handle.add(self, component);
+                                    } else {
+                                        try self.ecs.setComponent(selected_entity, component.*);
+                                    }
+
                                     try self.forceFLush();
                                 }
                             }
