@@ -137,6 +137,46 @@ fn overrideWidgetGenerator(comptime Component: type) ?type {
                         }
                     }
                 }
+                zgui.sameLine(.{});
+                marker("You also need a transform for object to be visible", .hint);
+
+                return false;
+            }
+        },
+        Rotation => struct {
+            pub fn widget(editor: *Editor, rotation: *Rotation) bool {
+                _ = editor;
+
+                var euler_angles = blk: {
+                    const angles = quaternionToEuler(rotation.quat);
+                    break :blk [_]f32{
+                        std.math.radiansToDegrees(f32, angles[0]),
+                        std.math.radiansToDegrees(f32, angles[1]),
+                        std.math.radiansToDegrees(f32, angles[2]),
+                    };
+                };
+
+                zgui.text("Angles: ", .{});
+                zgui.sameLine(.{});
+                if (zgui.dragFloat3("##euler_angles", .{ .v = &euler_angles })) {
+                    const x_axis = zm.f32x4(1, 0, 0, 0);
+                    const x_rad = std.math.degreesToRadians(f32, euler_angles[0]);
+                    const x_rot = zm.quatFromAxisAngle(x_axis, x_rad);
+
+                    const y_axis = zm.f32x4(0, 1, 0, 0);
+                    const y_rad = std.math.degreesToRadians(f32, euler_angles[1]);
+                    const y_rot = zm.quatFromAxisAngle(y_axis, y_rad);
+
+                    const z_axis = zm.f32x4(0, 0, 1, 0);
+                    const z_rad = std.math.degreesToRadians(f32, euler_angles[2]);
+                    const z_rot = zm.quatFromAxisAngle(z_axis, z_rad);
+
+                    rotation.quat = zm.qmul(zm.qmul(x_rot, y_rot), z_rot);
+                    return true;
+                }
+                zgui.sameLine(.{});
+                // TODO: fix rotation in y axis: http://www.euclideanspace.com/maths/geometry/rotations/conversions/quaternionToEuler/
+                zgui.hint("The rotation in Y axis is currently bugged ... ", .warning);
 
                 return false;
             }
@@ -838,7 +878,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                             zgui.closeCurrentPopup();
                         }
                         zgui.sameLine(.{});
-                        warningMarker("Remember to set ALL values to something valid");
+                        marker("Remember to set ALL values to something valid", .warning);
 
                         zgui.setItemDefaultFocus();
                         zgui.sameLine(.{});
@@ -888,12 +928,23 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                     if (self.ecs.hasComponent(selected_entity, Component)) {
                         zgui.separator();
                         zgui.text("{s}:", .{@typeName(Component)});
-                        var component = self.ecs.getComponent(selected_entity, Component) catch unreachable;
-                        if (componentWidget(Component, &component)) {
-                            try self.ecs.setComponent(selected_entity, component);
 
+                        var component = self.ecs.getComponent(selected_entity, Component) catch unreachable;
+                        var changed = false;
+                        // if component has specialized widget
+                        if (overrideWidgetGenerator(Component)) |Override| {
+                            // call manually implemented widget
+                            changed = Override.widget(self, &component);
+                        } else {
+                            // .. or generated widget
+                            changed = componentWidget(Component, &component);
+                        }
+
+                        if (changed) {
+                            try self.ecs.setComponent(selected_entity, component);
                             try self.forceFLush();
                         }
+
                         zgui.separator();
                     }
                 }
@@ -1116,14 +1167,22 @@ inline fn getPersitentState(self: *Editor) *PersistentState {
     return @ptrCast(*PersistentState, self.ecs.getSharedStatePtrWithSharedStateType(*ecez.SharedState(PersistentState)));
 }
 
-inline fn warningMarker(warning: []const u8) void {
-    zgui.textDisabled("(!)", .{});
+const MarkerType = enum {
+    warning,
+    hint,
+};
+inline fn marker(message: []const u8, marker_type: MarkerType) void {
+    const marker_txt = switch (marker_type) {
+        .warning => "(!)",
+        .hint => "(?)",
+    };
+    zgui.textDisabled(marker_txt, .{});
     if (zgui.isItemHovered(.{})) {
         zgui.beginTooltip();
         defer zgui.endTooltip();
 
         zgui.pushTextWrapPos(zgui.getFontSize() * 35);
-        zgui.textUnformatted(warning);
+        zgui.textUnformatted(message);
         zgui.popTextWrapPos();
     }
 }
