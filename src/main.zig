@@ -1,5 +1,5 @@
 const std = @import("std");
-// const ecez = @import("ecez");
+
 const glfw = @import("glfw");
 const zm = @import("zmath");
 
@@ -21,14 +21,22 @@ pub fn main() !void {
     const allocator = if (RenderContext.is_debug_build) alloc.allocator() else alloc;
 
     // init glfw
-    try glfw.init(.{});
+    if (glfw.init(.{}) == false) {
+        return error.GlfwFailedToInitialize;
+    }
     defer glfw.terminate();
 
+    if (glfw.vulkanSupported() == false) {
+        @panic("device does not seem to support vulkan");
+    }
+
     // Create our window
-    const window = try glfw.Window.create(640, 480, "ecez-vulkan", null, null, .{
+    const window = glfw.Window.create(640, 480, "ecez-vulkan", null, null, .{
         .client_api = .no_api,
         .resizable = true,
-    });
+    }) orelse {
+        return error.GlfwCreateWindowFailed;
+    };
     defer window.destroy();
 
     var editor = try Editor.init(allocator, window, &[_]RenderContext.MeshInstancehInitializeContex{
@@ -64,7 +72,7 @@ pub fn main() !void {
     var then = std.time.microTimestamp();
     // Wait for the user to close the window.
     while (!window.shouldClose()) {
-        try glfw.pollEvents();
+        glfw.pollEvents();
 
         const now = std.time.microTimestamp();
         const delta_time = @max(@intToFloat(f32, now - then) / std.time.us_per_s, 0.000001);

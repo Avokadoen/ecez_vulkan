@@ -176,7 +176,7 @@ fn overrideWidgetGenerator(comptime Component: type) ?type {
                 }
                 zgui.sameLine(.{});
                 // TODO: fix rotation in y axis: http://www.euclideanspace.com/maths/geometry/rotations/conversions/quaternionToEuler/
-                zgui.hint("The rotation in Y axis is currently bugged ... ", .warning);
+                marker("The rotation in Y axis is currently bugged ... ", .warning);
 
                 return false;
             }
@@ -597,23 +597,23 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
     style.setColor(StyleCol.header, [4]f32{ 0.1, 0.1, 0.1, 0.8 });
     style.setColor(StyleCol.check_mark, [4]f32{ 0, 1, 0, 1 });
 
-    const pointing_hand = try glfw.Cursor.createStandard(.pointing_hand);
+    const pointing_hand = glfw.Cursor.createStandard(.pointing_hand) orelse return error.CreateCursorFailed;
     errdefer pointing_hand.destroy();
-    const arrow = try glfw.Cursor.createStandard(.arrow);
+    const arrow = glfw.Cursor.createStandard(.arrow) orelse return error.CreateCursorFailed;
     errdefer arrow.destroy();
-    const ibeam = try glfw.Cursor.createStandard(.ibeam);
+    const ibeam = glfw.Cursor.createStandard(.ibeam) orelse return error.CreateCursorFailed;
     errdefer ibeam.destroy();
-    const crosshair = try glfw.Cursor.createStandard(.crosshair);
+    const crosshair = glfw.Cursor.createStandard(.crosshair) orelse return error.CreateCursorFailed;
     errdefer crosshair.destroy();
-    const resize_ns = try glfw.Cursor.createStandard(.resize_ns);
+    const resize_ns = glfw.Cursor.createStandard(.resize_ns) orelse return error.CreateCursorFailed;
     errdefer resize_ns.destroy();
-    const resize_ew = try glfw.Cursor.createStandard(.resize_ew);
+    const resize_ew = glfw.Cursor.createStandard(.resize_ew) orelse return error.CreateCursorFailed;
     errdefer resize_ew.destroy();
-    const resize_nesw = try glfw.Cursor.createStandard(.resize_nesw);
+    const resize_nesw = glfw.Cursor.createStandard(.resize_nesw) orelse return error.CreateCursorFailed;
     errdefer resize_nesw.destroy();
-    const resize_nwse = try glfw.Cursor.createStandard(.resize_nwse);
+    const resize_nwse = glfw.Cursor.createStandard(.resize_nwse) orelse return error.CreateCursorFailed;
     errdefer resize_nwse.destroy();
-    const not_allowed = try glfw.Cursor.createStandard(.not_allowed);
+    const not_allowed = glfw.Cursor.createStandard(.not_allowed) orelse return error.CreateCursorFailed;
     errdefer not_allowed.destroy();
 
     return Editor{
@@ -632,23 +632,23 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
 }
 
 pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
-    const frame_size = try window.getFramebufferSize();
+    const frame_size = window.getFramebufferSize();
     zgui.io.setDisplaySize(@intToFloat(f32, frame_size.width), @intToFloat(f32, frame_size.height));
     zgui.io.setDisplayFramebufferScale(1.0, 1.0);
 
     // NOTE: getting cursor must be done before calling zgui.newFrame
     switch (zgui.getMouseCursor()) {
-        .none => window.setCursor(self.pointing_hand) catch {},
-        .arrow => window.setCursor(self.arrow) catch {},
-        .text_input => window.setCursor(self.ibeam) catch {},
-        .resize_all => window.setCursor(self.crosshair) catch {},
-        .resize_ns => window.setCursor(self.resize_ns) catch {},
-        .resize_ew => window.setCursor(self.resize_ew) catch {},
-        .resize_nesw => window.setCursor(self.resize_nesw) catch {},
-        .resize_nwse => window.setCursor(self.resize_nwse) catch {},
-        .hand => window.setCursor(self.pointing_hand) catch {},
-        .not_allowed => window.setCursor(self.not_allowed) catch {},
-        .count => window.setCursor(self.ibeam) catch {},
+        .none => window.setCursor(self.pointing_hand),
+        .arrow => window.setCursor(self.arrow),
+        .text_input => window.setCursor(self.ibeam),
+        .resize_all => window.setCursor(self.crosshair),
+        .resize_ns => window.setCursor(self.resize_ns),
+        .resize_ew => window.setCursor(self.resize_ew),
+        .resize_nesw => window.setCursor(self.resize_nesw),
+        .resize_nwse => window.setCursor(self.resize_nwse),
+        .hand => window.setCursor(self.pointing_hand),
+        .not_allowed => window.setCursor(self.not_allowed),
+        .count => window.setCursor(self.ibeam),
     }
 
     zgui.newFrame();

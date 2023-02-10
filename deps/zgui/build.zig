@@ -6,43 +6,44 @@ pub const Backend = enum {
     win32_dx12,
 };
 
-pub const BuildOptions = struct {
+pub const Options = struct {
     backend: Backend,
 };
 
-pub const BuildOptionsStep = struct {
-    options: BuildOptions,
-    step: *std.build.OptionsStep,
-
-    pub fn init(b: *std.build.Builder, options: BuildOptions) BuildOptionsStep {
-        const bos = .{
-            .options = options,
-            .step = b.addOptions(),
-        };
-        bos.step.addOption(Backend, "backend", bos.options.backend);
-        return bos;
-    }
-
-    pub fn getPkg(bos: BuildOptionsStep) std.build.Pkg {
-        return bos.step.getPackage("zgui_options");
-    }
-
-    fn addTo(bos: BuildOptionsStep, target_step: *std.build.LibExeObjStep) void {
-        target_step.addOptions("zgui_options", bos.step);
-    }
+pub const Package = struct {
+    module: *std.Build.Module,
+    options: Options,
+    options_module: *std.Build.Module,
 };
 
-pub fn getPkg(dependencies: []const std.build.Pkg) std.build.Pkg {
+pub fn package(
+    b: *std.Build,
+    args: struct {
+        options: Options,
+    },
+) Package {
+    const step = b.addOptions();
+    step.addOption(Backend, "backend", args.options.backend);
+
+    const options_module = step.createModule();
+
+    const module = b.createModule(.{
+        .source_file = .{ .path = thisDir() ++ "/src/main.zig" },
+        .dependencies = &.{
+            .{ .name = "zgui_options", .module = options_module },
+        },
+    });
+
     return .{
-        .name = "zgui",
-        .source = .{ .path = thisDir() ++ "/src/main.zig" },
-        .dependencies = dependencies,
+        .module = module,
+        .options = args.options,
+        .options_module = options_module,
     };
 }
 
-pub fn link(exe: *std.build.LibExeObjStep, bos: BuildOptionsStep) void {
-    bos.addTo(exe);
+pub fn build(_: *std.Build) void {}
 
+pub fn link(exe: *std.Build.CompileStep, options: Options) void {
     exe.addIncludePath(thisDir() ++ "/libs");
     exe.addIncludePath(thisDir() ++ "/libs/imgui");
 
@@ -63,7 +64,7 @@ pub fn link(exe: *std.build.LibExeObjStep, bos: BuildOptionsStep) void {
     exe.addCSourceFile(thisDir() ++ "/libs/imgui/implot.cpp", cflags);
     exe.addCSourceFile(thisDir() ++ "/libs/imgui/implot_items.cpp", cflags);
 
-    switch (bos.options.backend) {
+    switch (options.backend) {
         .glfw_wgpu => {
             exe.addCSourceFile(thisDir() ++ "/libs/imgui/backends/imgui_impl_glfw.cpp", cflags);
             exe.addCSourceFile(thisDir() ++ "/libs/imgui/backends/imgui_impl_wgpu.cpp", cflags);

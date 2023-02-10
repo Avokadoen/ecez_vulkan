@@ -9,52 +9,61 @@ const ArrayList = std.ArrayList;
 // ecez is needed by the Editor
 const ecez = @import("deps/ecez/build.zig");
 
-const glfw = @import("deps/mach-glfw/build.zig");
 const zmath = @import("deps/zmath/build.zig");
 const zmesh = @import("deps/zmesh/build.zig");
 const zgui = @import("deps/zgui/build.zig");
+const glfw = @import("deps/mach-glfw/build.zig");
 
 const vkgen = @import("deps/vulkan-zig/generator/index.zig");
 
 pub fn build(b: *std.build.Builder) void {
     const target = b.standardTargetOptions(.{});
-    const mode = b.standardReleaseOptions();
+    const mode = b.standardOptimizeOption(.{});
 
-    const exe = b.addExecutable("ecez-vulkan", "src/main.zig");
-    exe.setTarget(target);
-    exe.setBuildMode(mode);
+    const exe = b.addExecutable(.{
+        .name = "ecez-vulkan",
+        .root_source_file = .{ .path = "src/main.zig" },
+        .target = target,
+        .optimize = mode,
+    });
 
     // let user enable/disable tracy
     const ztracy_enable = b.option(bool, "enable-tracy", "Enable Tracy profiler") orelse false;
     // link ecez and ztracy
-    ecez.link(b, exe, ztracy_enable);
+    ecez.link(b, exe, true, ztracy_enable);
 
     // link glfw
-    exe.addPackage(glfw.pkg);
-    glfw.link(b, exe, .{}) catch unreachable;
+    const glfw_module = glfw.getModule(b);
+    exe.addModule("glfw", glfw_module);
+    glfw.link(b, exe, .{}) catch @panic("failed to link glfw");
 
     // link zmath
-    exe.addPackage(zmath.pkg);
+    const zmath_pkg = zmath.package(b, .{});
+    exe.addModule("zmath", zmath_pkg.module);
 
     // link zigimg
-    exe.addPackagePath("zigimg", "deps/zigimg/zigimg.zig");
+    exe.addModule("zigimg", b.createModule(.{
+        .source_file = .{ .path = "deps/zigimg/zigimg.zig" },
+    }));
 
     // link zmesh
-    const zmesh_options = zmesh.BuildOptionsStep.init(b, .{});
-    const zmesh_pkg = zmesh.getPkg(&.{zmesh_options.getPkg()});
-    exe.addPackage(zmesh_pkg);
-    zmesh.link(exe, zmesh_options);
+    const zmesh_pkg = zmesh.package(b, .{
+        .options = .{ .shape_use_32bit_indices = true },
+    });
+    exe.addModule("zmesh", zmesh_pkg.module);
+    zmesh.link(exe, zmesh_pkg.options);
 
     // link zgui
-    const zgui_options = zgui.BuildOptionsStep.init(b, .{ .backend = .no_backend });
-    const zgui_pkg = zgui.getPkg(&.{zgui_options.getPkg()});
-    exe.addPackage(zgui_pkg);
-    zgui.link(exe, zgui_options);
+    const zgui_pkg = zgui.package(b, .{
+        .options = .{ .backend = .no_backend },
+    });
+    exe.addModule("zgui", zgui_pkg.module);
+    zgui.link(exe, zgui_pkg.options);
 
     // Create a step that generates vk.zig (stored in zig-cache) from the provided vulkan registry.
-    const gen = vkgen.VkGenerateStep.init(b, thisDir() ++ "/deps/vk.xml", "vk.zig");
+    const gen = vkgen.VkGenerateStep.create(b, "deps/vk.xml", "vk.zig");
     // Add the generated file as package to the final executable
-    exe.addPackage(gen.package);
+    exe.addModule("vulkan", gen.getModule());
 
     var asset_move_step = AssetMoveStep.init(b) catch unreachable;
 
@@ -63,35 +72,19 @@ pub fn build(b: *std.build.Builder) void {
     const include_shader_debug = b.option(bool, "shader-debug-info", "include shader debug info, default is false") orelse false;
     const glslc_flags = [_][]const u8{ "glslc", "--target-env=vulkan1.2", "-g" };
     const glslc_len = if (include_shader_debug) glslc_flags.len else glslc_flags.len - 1;
-    const shader_comp = vkgen.ShaderCompileStep.init(
+    const shader_comp = vkgen.ShaderCompileStep.create(
         b,
         glslc_flags[0..glslc_len],
-        "assets/shaders",
+        "-o",
     );
 
     // compile the mesh shaders
-    _ = shader_comp.add("assets/shaders/mesh.vert", .{
-        .entry_point = null,
-        .stage = .vertex,
-        .output_filename = null,
-    });
-    _ = shader_comp.add("assets/shaders/mesh.frag", .{
-        .entry_point = null,
-        .stage = .fragment,
-        .output_filename = null,
-    });
+    shader_comp.add("mesh.vert.spv", "assets/shaders/mesh.vert", .{});
+    shader_comp.add("mesh.frag.spv", "assets/shaders/mesh.frag", .{});
 
     // compile the ui shaders
-    _ = shader_comp.add("assets/shaders/ui.vert", .{
-        .entry_point = null,
-        .stage = .vertex,
-        .output_filename = null,
-    });
-    _ = shader_comp.add("assets/shaders/ui.frag", .{
-        .entry_point = null,
-        .stage = .fragment,
-        .output_filename = null,
-    });
+    shader_comp.add("ui.vert.spv", "assets/shaders/ui.vert", .{});
+    shader_comp.add("ui.frag.spv", "assets/shaders/ui.frag", .{});
 
     exe.step.dependOn(&asset_move_step.step);
     asset_move_step.step.dependOn(&shader_comp.step);
@@ -108,9 +101,11 @@ pub fn build(b: *std.build.Builder) void {
     run_step.dependOn(&run_cmd.step);
     run_step.dependOn(&asset_move_step.step);
 
-    const exe_tests = b.addTest("src/main.zig");
-    exe_tests.setTarget(target);
-    exe_tests.setBuildMode(mode);
+    const exe_tests = b.addTest(.{
+        .root_source_file = .{ .path = "src/main.zig" },
+        .target = target,
+        .optimize = mode,
+    });
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&exe_tests.step);

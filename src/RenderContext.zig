@@ -304,8 +304,8 @@ pub fn init(
         var extensions = std.ArrayList([*:0]const u8).init(allocator);
         defer extensions.deinit();
 
-        // append glfw extensions
-        const glfw_extensions = try glfw.getRequiredInstanceExtensions();
+        // append glfw extensions, function can not fail since glfw.vulkanSupported should already have been called
+        const glfw_extensions = glfw.getRequiredInstanceExtensions() orelse unreachable;
         try extensions.appendSlice(glfw_extensions);
 
         // required extension for VK_EXT_DESCRIPTOR_INDEXING_EXTENSION
@@ -333,11 +333,11 @@ pub fn init(
 
     const surface = blk: {
         var s: vk.SurfaceKHR = undefined;
-        const result = try glfw.createWindowSurface(instance, window, null, &s);
-        if (@intToEnum(vk.Result, result) != vk.Result.success) {
-            return error.FailedToCreateSurface;
+        if (glfw.createWindowSurface(instance, window, null, &s)) {
+            break :blk s;
         }
-        break :blk s;
+
+        return error.FailedToCreateSurface;
     };
     errdefer vki.destroySurfaceKHR(instance, surface, null);
 
@@ -1809,7 +1809,7 @@ pub const SwapchainSupportDetails = struct {
             return self.capabilities.current_extent;
         }
 
-        const frame_buffer_size = try window.getFramebufferSize();
+        const frame_buffer_size = window.getFramebufferSize();
 
         var actual_extent = vk.Extent2D{
             .width = frame_buffer_size.width,
