@@ -221,7 +221,7 @@ pub const Buffer = struct {
 
         // TODO: reduce buffers, only have one of each dst buffer
         var copy_regions: [max_transfers_scheduled]vk.BufferCopy = undefined;
-        for (self.buffer_destinations[0..self.ctx.memory_in_flight]) |dest, i| {
+        for (self.buffer_destinations[0..self.ctx.memory_in_flight], 0..) |dest, i| {
             const source_range = self.ctx.mapped_ranges[i];
             copy_regions[i] = vk.BufferCopy{
                 .src_offset = source_range.offset,
@@ -244,6 +244,7 @@ pub const Buffer = struct {
         };
         try vkd.queueSubmit(self.ctx.transfer_queue, 1, @ptrCast([*]const vk.SubmitInfo, &submit_into), self.ctx.transfer_fence);
 
+        // TODO: do not force wait if there is a semaphore
         _ = vkd.waitForFences(device, 1, @ptrCast([*]const vk.Fence, &self.ctx.transfer_fence), vk.TRUE, std.time.ns_per_s) catch {};
         try vkd.resetFences(device, 1, @ptrCast([*]const vk.Fence, &self.ctx.transfer_fence));
 
@@ -429,7 +430,7 @@ pub const Image = struct {
                 .depth = 1,
             },
         };
-        for (self.image_destinations[0..self.ctx.memory_in_flight]) |dest, i| {
+        for (self.image_destinations[0..self.ctx.memory_in_flight], 0..) |dest, i| {
             region.buffer_offset = self.ctx.mapped_ranges[i].offset;
             region.image_extent.width = dest.width;
             region.image_extent.height = dest.height;

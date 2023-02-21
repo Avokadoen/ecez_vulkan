@@ -57,7 +57,7 @@ pub fn init(vki: InstanceDispatch, physical_device: vk.PhysicalDevice, surface: 
     };
 
     // TODO: account for timestamp_valid_bits
-    for (queue_families_properties) |property, i| {
+    for (queue_families_properties, 0..) |property, i| {
         const flags = property.queue_flags;
 
         // graphics queue is usually the first and only one with this bit

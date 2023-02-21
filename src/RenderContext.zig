@@ -271,7 +271,7 @@ pub fn init(
 
     const instance_contexts = try allocator.alloc(MeshInstanceContext, mesh_instance_initalizers.len);
     errdefer allocator.free(instance_contexts);
-    for (mesh_instance_initalizers) |instancing_init, i| {
+    for (mesh_instance_initalizers, 0..) |instancing_init, i| {
         instance_contexts[i] = MeshInstanceContext{
             .total_instance_count = instancing_init.instance_count,
         };
@@ -328,16 +328,16 @@ pub fn init(
         break :blk (try vkb.createInstance(&instance_info, null));
     };
     const vki = try InstanceDispatch.load(instance, vk_proc);
-
     errdefer vki.destroyInstance(instance, null);
 
     const surface = blk: {
         var s: vk.SurfaceKHR = undefined;
-        if (glfw.createWindowSurface(instance, window, null, &s)) {
-            break :blk s;
+        const result = @intToEnum(vk.Result, glfw.createWindowSurface(instance, window, null, &s));
+        if (result != .success) {
+            return error.FailedToCreateSurface;
         }
 
-        return error.FailedToCreateSurface;
+        break :blk s;
     };
     errdefer vki.destroySurfaceKHR(instance, surface, null);
 
@@ -576,7 +576,7 @@ pub fn init(
         var buffers = try allocator.alloc(vk.CommandBuffer, max_frames_in_flight);
         errdefer allocator.free(buffers);
 
-        for (buffers) |*cmd_buffer, i| {
+        for (buffers, 0..) |*cmd_buffer, i| {
             const cmd_buffer_info = vk.CommandBufferAllocateInfo{
                 .command_pool = command_pools[i],
                 .level = .primary,
@@ -734,7 +734,7 @@ pub fn init(
         var index_buffer_position: vk.DeviceSize = index_buffer_offset;
         defer index_buffer_size = index_buffer_position - index_buffer_offset;
 
-        for (mesh_instance_initalizers) |model_init, i| {
+        for (mesh_instance_initalizers, 0..) |model_init, i| {
             // Do not reuse data from previous iterations (but reuse the memory)
             defer {
                 // cant OOM when requesting 0
@@ -765,7 +765,7 @@ pub fn init(
             );
 
             try vertices.ensureUnusedCapacity(mesh_positions.items.len);
-            for (mesh_positions.items) |pos, j| {
+            for (mesh_positions.items, 0..) |pos, j| {
                 vertices.appendAssumeCapacity(MeshVertex{
                     .pos = pos,
                     .text_coord = mesh_text_coords.items[j],
@@ -921,7 +921,7 @@ pub fn init(
     std.mem.rotate(vk.DeviceSize, image_memory_offsets, image_memory_offsets.len - 1);
     image_memory_offsets[0] = 0;
 
-    for (instance_images) |vk_image, i| {
+    for (instance_images, 0..) |vk_image, i| {
         try vkd.bindImageMemory(device, vk_image, texture_image_memory, image_memory_offsets[i]);
 
         instance_image_views[i] = try createDefaultImageView(vkd, device, vk_image, .r8g8b8a8_srgb, .{ .color_bit = true });
@@ -936,7 +936,7 @@ pub fn init(
         var instances_desc_image_info = try allocator.alloc(vk.DescriptorImageInfo, texture_count);
         defer allocator.free(instances_desc_image_info);
         // for each loaded model texture
-        for (instance_image_views) |image_view, i| {
+        for (instance_image_views, 0..) |image_view, i| {
             instances_desc_image_info[i] = vk.DescriptorImageInfo{
                 .sampler = instances_image_sampler,
                 .image_view = image_view,
@@ -960,7 +960,7 @@ pub fn init(
 
     var instance_data = try std.ArrayList(DrawInstance).initCapacity(allocator, instance_count);
     errdefer instance_data.deinit();
-    for (mesh_instance_initalizers) |instancing_init, i| {
+    for (mesh_instance_initalizers, 0..) |instancing_init, i| {
         var j: usize = 0;
         while (j < instancing_init.instance_count) : (j += 1) {
             instance_data.appendAssumeCapacity(.{
@@ -1646,6 +1646,7 @@ pub inline fn getNewInstance(self: *RenderContext, mesh_handle: MeshHandle) !Ins
         return error.OutOfInstances; // no more unique instances to use
     }
 
+    // add the inital offset for this mesh handle
     var instance_handle: u64 = active_instance_count;
     for (self.instance_contexts[0..mesh_handle]) |other_instance_context| {
         instance_handle += @intCast(u64, other_instance_context.total_instance_count);
@@ -1734,7 +1735,7 @@ pub const SwapchainSupportDetails = struct {
         _ = try vki.getPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &format_len, formats.ptr);
 
         const preferred_format_index = blk: {
-            for (formats) |format, i| {
+            for (formats, 0..) |format, i| {
                 if (format.format == .r8g8b8a8_srgb and format.color_space == .srgb_nonlinear_khr) {
                     break :blk i;
                 }
@@ -1777,7 +1778,7 @@ pub const SwapchainSupportDetails = struct {
         self.capabilities = try vki.getPhysicalDeviceSurfaceCapabilitiesKHR(physical_device, surface);
 
         self.preferred_format_index = blk: {
-            for (self.formats) |format, i| {
+            for (self.formats, 0..) |format, i| {
                 if (format.format == .r8g8b8a8_srgb and format.color_space == .srgb_nonlinear_khr) {
                     break :blk i;
                 }
@@ -2296,7 +2297,7 @@ inline fn instantiateImageViews(
         }
     }
 
-    for (swapchain_images) |swapchain_image, i| {
+    for (swapchain_images, 0..) |swapchain_image, i| {
         image_views[i] = try createDefaultImageView(vkd, device, swapchain_image, swapchain_image_format, .{ .color_bit = true });
         views_created = i;
     }
@@ -2319,7 +2320,7 @@ inline fn instantiateFramebuffer(
         }
     }
 
-    for (framebuffers) |*framebuffer, i| {
+    for (framebuffers, 0..) |*framebuffer, i| {
         const attachments = [_]vk.ImageView{ swapchain_image_views[i], depth_image_view, swapchain_image_views[i] };
         const attachments_len = if (enable_imgui) attachments.len else attachments.len - 1;
         const framebuffer_info = vk.FramebufferCreateInfo{

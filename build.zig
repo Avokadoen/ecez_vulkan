@@ -33,7 +33,7 @@ pub fn build(b: *std.build.Builder) void {
     ecez.link(b, exe, true, ztracy_enable);
 
     // link glfw
-    const glfw_module = glfw.getModule(b);
+    const glfw_module = glfw.module(b);
     exe.addModule("glfw", glfw_module);
     glfw.link(b, exe, .{}) catch @panic("failed to link glfw");
 
@@ -61,7 +61,7 @@ pub fn build(b: *std.build.Builder) void {
     zgui.link(exe, zgui_pkg.options);
 
     // Create a step that generates vk.zig (stored in zig-cache) from the provided vulkan registry.
-    const gen = vkgen.VkGenerateStep.create(b, "deps/vk.xml", "vk.zig");
+    const gen = vkgen.VkGenerateStep.create(b, "deps/vk.xml");
     // Add the generated file as package to the final executable
     exe.addModule("vulkan", gen.getModule());
 

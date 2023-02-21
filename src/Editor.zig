@@ -100,7 +100,7 @@ const fake_components = [_]type{
 };
 
 const object_metadata_index = blk: {
-    inline for (fake_components) |Component, component_index| {
+    inline for (fake_components, 0..) |Component, component_index| {
         if (Component == ObjectMetadata) {
             break :blk component_index;
         }
@@ -128,7 +128,7 @@ fn overrideWidgetGenerator(comptime Component: type) ?type {
                 if (zgui.beginCombo("Mesh", .{ .preview_value = persistent_state.mesh_names[persistent_state.instance_handle_widget.selected_mesh_index] })) {
                     defer zgui.endCombo();
 
-                    for (persistent_state.mesh_names[0..persistent_state.mesh_names_len]) |mesh_name, mesh_index| {
+                    for (persistent_state.mesh_names[0..persistent_state.mesh_names_len], 0..) |mesh_name, mesh_index| {
                         if (zgui.selectable(mesh_name, .{
                             .selected = persistent_state.instance_handle_widget.selected_mesh_index == mesh_index,
                         })) {
@@ -297,7 +297,7 @@ fn componentWidget(comptime T: type, component: *T) bool {
         else => @compileError("invalid component type"),
     };
 
-    inline for (component_info.fields) |field, i| {
+    inline for (component_info.fields, 0..) |field, i| {
         zgui.text(" {s}:", .{field.name});
 
         component_changed = fieldWidget(T, field.type, i, &@field(component, field.name)) or component_changed;
@@ -332,7 +332,7 @@ fn fieldWidget(comptime Component: type, comptime T: type, comptime id_mod: usiz
             switch (@typeInfo(array_info.child)) {
                 .Float => {
                     var values: [array_info.len]f32 = undefined;
-                    for (values) |*value, j| {
+                    for (&values, 0..) |*value, j| {
                         value.* = @floatCast(f32, field.*[j]);
                     }
 
@@ -363,7 +363,7 @@ fn fieldWidget(comptime Component: type, comptime T: type, comptime id_mod: usiz
                     }
                     if (array_input) {
                         field_changed = true;
-                        for (values) |value, j| {
+                        for (values, 0..) |value, j| {
                             field.*[j] = @floatCast(array_info.child, value);
                         }
                     }
@@ -375,7 +375,7 @@ fn fieldWidget(comptime Component: type, comptime T: type, comptime id_mod: usiz
                         }
                     } else {
                         var values: [array_info.len]i32 = undefined;
-                        for (values) |*value, j| {
+                        for (values, 0..) |*value, j| {
                             value.* = @floatCast(i32, field.*[j]);
                         }
 
@@ -406,7 +406,7 @@ fn fieldWidget(comptime Component: type, comptime T: type, comptime id_mod: usiz
                         }
                         if (array_input) {
                             field_changed = true;
-                            for (values) |value, j| {
+                            for (values, 0..) |value, j| {
                                 field.*[j] = @floatCast(array_info.child, value);
                             }
                         }
@@ -425,12 +425,12 @@ fn fieldWidget(comptime Component: type, comptime T: type, comptime id_mod: usiz
             switch (@typeInfo(vec_info.child)) {
                 .Float => {
                     var values: [vec_info.len]f32 = undefined;
-                    for (values) |*value, j| {
+                    for (&values, 0..) |*value, j| {
                         value.* = @floatCast(f32, field.*[j]);
                     }
 
                     if (fieldWidget(Component, @TypeOf(values), id_mod << 1, &values)) {
-                        for (values) |value, j| {
+                        for (values, 0..) |value, j| {
                             field.*[j] = value;
                         }
 
@@ -439,12 +439,12 @@ fn fieldWidget(comptime Component: type, comptime T: type, comptime id_mod: usiz
                 },
                 .Int => {
                     var values: [vec_info.len]i32 = undefined;
-                    for (values) |*value, j| {
+                    for (&values, 0..) |*value, j| {
                         value.* = @floatCast(i32, field.*[j]);
                     }
 
                     if (fieldWidget(Component, @TypeOf(values), id_mod << 1, &values)) {
-                        for (values) |value, j| {
+                        for (values, 0..) |value, j| {
                             field.*[j] = value;
                         }
 
@@ -573,7 +573,7 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
         }
     }
     persistent_state.mesh_names_len = mesh_instance_initalizers.len;
-    for (persistent_state.mesh_names[0..persistent_state.mesh_names_len]) |*mesh_name, i| {
+    for (persistent_state.mesh_names[0..persistent_state.mesh_names_len], 0..) |*mesh_name, i| {
         var path_iter = std.mem.splitBackwards(u8, mesh_instance_initalizers[i].cgltf_path, "/");
         const file_name = path_iter.first();
         var mesh_name_iter = std.mem.split(u8, file_name, ".");
@@ -774,7 +774,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 if (zgui.beginListBox("##component list", .{ .w = -std.math.floatMin(f32), .h = 0 })) {
                     defer zgui.endListBox();
 
-                    inline for (fake_components) |Component, comp_index| {
+                    inline for (fake_components, 0..) |Component, comp_index| {
                         if (self.ecs.hasComponent(selected_entity, Component)) {
                             if (zgui.selectable(@typeName(Component), .{ .selected = comp_index == persistent_state.object_inspector.selected_component_index })) {
                                 persistent_state.object_inspector.selected_component_index = comp_index;
@@ -803,7 +803,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                         defer zgui.endPopup();
 
                         // List of components that you can add
-                        inline for (fake_components) |Component, comp_index| {
+                        inline for (fake_components, 0..) |Component, comp_index| {
                             // you can never add a ObjectMetadata
                             if (Component == ObjectMetadata) continue;
 
@@ -828,7 +828,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                             zgui.separator();
 
                             // List of components that you can add
-                            inline for (fake_components) |Component, comp_index| {
+                            inline for (fake_components, 0..) |Component, comp_index| {
                                 if (Component == ObjectMetadata) continue;
 
                                 if (comp_index == persistent_state.add_component_modal.selected_component_index) {
@@ -855,7 +855,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
                         if (zgui.button("Add component", .{ .w = 120, .h = 0 })) {
                             // Add component to entity
-                            inline for (fake_components) |Component, comp_index| {
+                            inline for (fake_components, 0..) |Component, comp_index| {
                                 if (Component == ObjectMetadata) continue;
 
                                 if (comp_index == persistent_state.add_component_modal.selected_component_index) {
@@ -899,7 +899,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                     defer zgui.endDisabled();
 
                     if (zgui.button("Remove", .{})) {
-                        inline for (fake_components) |Component, comp_index| {
+                        inline for (fake_components, 0..) |Component, comp_index| {
                             // deleting the metadata of an entity is illegal
                             if (Component != ObjectMetadata and comp_index == persistent_state.object_inspector.selected_component_index) {
                                 // In the event a remove failed, then the select index is in a inconsistent state
@@ -1151,7 +1151,7 @@ inline fn createNewEntityMenu(self: *Editor) !void {
         }
 
         const mesh_names = self.getMeshNames();
-        for (mesh_names) |mesh_name, nth_mesh| {
+        for (mesh_names, 0..) |mesh_name, nth_mesh| {
             if (zgui.menuItem(mesh_name, .{})) {
                 try self.createNewVisbleObject(mesh_name, nth_mesh, .yes, .{});
             }
