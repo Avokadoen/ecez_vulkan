@@ -39,7 +39,7 @@ pub const Scale = struct {
 pub const ObjectMetadata = struct {
     entity: ecez.Entity,
 
-    id_len: u8,
+    id_len: u32,
     buffer: [64]u8,
 
     inline fn init(name: []const u8, entity: ecez.Entity) ObjectMetadata {
@@ -59,7 +59,7 @@ pub const ObjectMetadata = struct {
 
         return ObjectMetadata{
             .entity = entity,
-            .id_len = @intCast(u8, id_len),
+            .id_len = @intCast(u32, id_len),
             .buffer = buffer,
         };
     }
@@ -77,7 +77,7 @@ pub const ObjectMetadata = struct {
         std.mem.copy(u8, self.buffer[0..], name);
         std.mem.copy(u8, self.buffer[name.len..], hash_fluff);
         self.buffer[id_len] = 0;
-        self.id_len = @intCast(u8, id_len);
+        self.id_len = @intCast(u32, id_len);
     }
 
     pub inline fn getId(self: ObjectMetadata) [:0]const u8 {
@@ -345,17 +345,17 @@ fn fieldWidget(comptime Component: type, comptime T: type, comptime id_mod: usiz
                             }
                         },
                         2 => {
-                            if (zgui.inputFloat2(c_id, .{ .v = &values })) {
+                            if (zgui.dragFloat2(c_id, .{ .v = &values })) {
                                 array_input = true;
                             }
                         },
                         3 => {
-                            if (zgui.inputFloat3(c_id, .{ .v = &values })) {
+                            if (zgui.dragFloat3(c_id, .{ .v = &values })) {
                                 array_input = true;
                             }
                         },
                         4 => {
-                            if (zgui.inputFloat4(c_id, .{ .v = &values })) {
+                            if (zgui.dragFloat4(c_id, .{ .v = &values })) {
                                 array_input = true;
                             }
                         },
@@ -492,6 +492,10 @@ const PersistentState = struct {
     mesh_names: [128][:0]const u8,
     selected_mesh_index: usize,
 
+    export_file_modal_popen: bool,
+    import_file_modal_popen: bool,
+    export_import_file_name: [128]u8,
+
     object_list: ObjectList,
     object_inspector: ObjectInspector,
     add_component_modal: AddComponentModal,
@@ -539,6 +543,8 @@ resize_nesw: glfw.Cursor,
 resize_nwse: glfw.Cursor,
 not_allowed: glfw.Cursor,
 
+// we store the mesh_instance_intializers for when/if re
+
 ecs: World,
 
 pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers: []const MeshInstancehInitializeContex) !Editor {
@@ -561,9 +567,13 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
             .name_buffer = undefined,
             .selected_component_index = fake_components.len,
         },
+        .export_file_modal_popen = false,
+        .import_file_modal_popen = false,
+        .export_import_file_name = undefined,
         .add_component_modal = .{},
         .instance_handle_widget = .{ .selected_mesh_index = 0 },
     };
+    std.mem.copy(u8, &persistent_state.export_import_file_name, "test.ezby");
 
     var initialized_mesh_names: usize = 0;
     errdefer {
@@ -631,6 +641,39 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
     };
 }
 
+pub fn export_to_file(self: *Editor, file_name: []const u8) !void {
+    const ecs_bytes = try self.ecs.serialize(self.allocator);
+    defer self.allocator.free(ecs_bytes);
+
+    // TODO: this is an horrible idea since we don't know if the write will be sucessfull
+    // delete file if it exist to make sure we don't
+    std.fs.cwd().deleteFile(file_name) catch |err| switch (err) {
+        error.FileNotFound => {}, // ok
+        else => return err,
+    };
+
+    try std.fs.cwd().writeFile(file_name, ecs_bytes);
+}
+
+pub fn import_from_file(self: *Editor, file_name: []const u8) !void {
+    var scene_file = try std.fs.cwd().openFile(file_name, .{});
+    defer scene_file.close();
+
+    const file_metadata = try scene_file.metadata();
+    const file_bytes = try self.allocator.alloc(u8, file_metadata.size());
+    defer self.allocator.free(file_bytes);
+
+    const read_bytes = try scene_file.read(file_bytes);
+    std.debug.assert(read_bytes == file_bytes.len);
+    try self.ecs.deserialize(file_bytes);
+
+    // // restart the render context to make sure all required instances has and appropriate handle
+    // var old_render_context = self.getRenderContext();
+    // old_render_context.deinit(self.allocator);
+
+    try self.forceFlush();
+}
+
 pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
     const frame_size = window.getFramebufferSize();
     zgui.io.setDisplaySize(@intToFloat(f32, frame_size.width), @intToFloat(f32, frame_size.height));
@@ -671,11 +714,13 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 defer zgui.endMenu();
 
                 if (zgui.menuItem("Export", .{})) {
-                    std.debug.print("export", .{}); // TODO: export scene
+                    var persistent_state = self.getPersitentState();
+                    persistent_state.export_file_modal_popen = true;
                 }
 
                 if (zgui.menuItem("Import", .{})) {
-                    std.debug.print("import", .{}); // TODO: import scene
+                    var persistent_state = self.getPersitentState();
+                    persistent_state.import_file_modal_popen = true;
                 }
 
                 if (zgui.menuItem("Load new model", .{})) {
@@ -704,6 +749,72 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
             break :blk1 zgui.getWindowHeight();
         };
+
+        // export scene to file modal
+        {
+            var persistent_state = self.getPersitentState();
+            if (persistent_state.export_file_modal_popen) {
+                zgui.openPopup("Export Modal", .{});
+            }
+
+            if (zgui.beginPopupModal("Export Modal", .{ .flags = .{ .always_auto_resize = true } })) {
+                defer zgui.endPopup();
+
+                zgui.text("File name: ", .{});
+                if (zgui.inputText("##export_file_name", .{
+                    .buf = &persistent_state.export_import_file_name,
+                    .flags = .{},
+                })) {}
+                zgui.sameLine(.{});
+                marker("File name should have the extension '.ezby',\nbut it is not required", .hint);
+
+                zgui.setItemDefaultFocus();
+                if (zgui.button("Export scene", .{})) {
+                    const file_name_len = std.mem.indexOf(u8, &persistent_state.export_import_file_name, &[_]u8{0}).?;
+                    // TODO: show error as a modal
+                    try self.export_to_file(persistent_state.export_import_file_name[0..file_name_len]);
+                    persistent_state.export_file_modal_popen = false;
+                    zgui.closeCurrentPopup();
+                }
+                zgui.sameLine(.{});
+                if (zgui.button("Cancel##export_modal", .{ .w = 120, .h = 0 })) {
+                    persistent_state.export_file_modal_popen = false;
+                    zgui.closeCurrentPopup();
+                }
+            }
+        }
+
+        // import scene to file modal
+        {
+            var persistent_state = self.getPersitentState();
+            if (persistent_state.import_file_modal_popen) {
+                zgui.openPopup("Import Modal", .{});
+            }
+
+            if (zgui.beginPopupModal("Import Modal", .{ .flags = .{ .always_auto_resize = true } })) {
+                defer zgui.endPopup();
+
+                zgui.text("File name: ", .{});
+                if (zgui.inputText("##import_file_name", .{
+                    .buf = &persistent_state.export_import_file_name,
+                    .flags = .{},
+                })) {}
+
+                zgui.setItemDefaultFocus();
+                if (zgui.button("Import scene", .{})) {
+                    const file_name_len = std.mem.indexOf(u8, &persistent_state.export_import_file_name, &[_]u8{0}).?;
+                    // TODO: show error as a modal
+                    try self.import_from_file(persistent_state.export_import_file_name[0..file_name_len]);
+                    persistent_state.import_file_modal_popen = false;
+                    zgui.closeCurrentPopup();
+                }
+                zgui.sameLine(.{});
+                if (zgui.button("Cancel##import_modal", .{ .w = 120, .h = 0 })) {
+                    persistent_state.import_file_modal_popen = false;
+                    zgui.closeCurrentPopup();
+                }
+            }
+        }
 
         // define Object List
         {
@@ -870,7 +981,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                                         try self.ecs.setComponent(selected_entity, component.*);
                                     }
 
-                                    try self.forceFLush();
+                                    try self.forceFlush();
                                 }
                             }
 
@@ -908,7 +1019,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                                     // TODO: log here in debug builds
                                 };
 
-                                try self.forceFLush();
+                                try self.forceFlush();
 
                                 // assign selection an invalid index
                                 // TODO: Selection should be persistent when removing current component
@@ -942,7 +1053,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
                         if (changed) {
                             try self.ecs.setComponent(selected_entity, component);
-                            try self.forceFLush();
+                            try self.forceFlush();
                         }
 
                         zgui.separator();
@@ -1129,11 +1240,11 @@ pub fn createNewVisbleObject(
     // Make sure editor updates renderer after we have set some render state programatically.
     // This is highly sub-optimal and should not be done in any hot loop
     if (flush_all_objects == .yes) {
-        try self.forceFLush();
+        try self.forceFlush();
     }
 }
 
-inline fn forceFLush(self: *Editor) !void {
+inline fn forceFlush(self: *Editor) !void {
     try self.ecs.triggerEvent(.transform_update, .{});
     self.ecs.waitEvent(.transform_update);
     self.signalRenderUpdate();

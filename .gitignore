@@ -4,3 +4,6 @@ zig-out
 vk.zig
 
 imgui.ini
+
+# ignore scene files for now
+*.ezby

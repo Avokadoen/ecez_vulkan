@@ -11,7 +11,7 @@
             "program": "${workspaceFolder}/zig-out/bin/ecez-vulkan",
             "args": [],
             "stopAtEntry": false,
-            "cwd": "${fileDirname}",
+            "cwd": "${workspaceFolder}",
             "environment": [],
             "console": "integratedTerminal",
             "preLaunchTask": "build"
@@ -23,7 +23,7 @@
             "program": "${workspaceFolder}/zig-out/bin/ecez-vulkan",
             "args": [],
             "stopAtEntry": false,
-            "cwd": "${fileDirname}",
+            "cwd": "${workspaceFolder}",
             "environment": [],
             "console": "integratedTerminal",
             "preLaunchTask": "build release"
@@ -34,7 +34,7 @@
             "request": "launch",
             "program": "${workspaceFolder}/zig-out/bin/ecez-vulkan",
             "args": [],
-            "cwd": "${fileDirname}",
+            "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
             "preLaunchTask": "build"
         },
@@ -44,7 +44,7 @@
             "request": "launch",
             "program": "${workspaceFolder}/zig-out/bin/ecez-vulkan",
             "args": [],
-            "cwd": "${fileDirname}",
+            "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
             "preLaunchTask": "build release"
         },
