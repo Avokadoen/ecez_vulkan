@@ -124,16 +124,19 @@ fn overrideWidgetGenerator(comptime Component: type) ?type {
         InstanceHandle => struct {
             pub fn widget(editor: *Editor, instance_handle: *InstanceHandle) bool {
                 const persistent_state = editor.getPersitentState();
+                const preview_value = persistent_state.mesh_names.get(instance_handle.mesh_handle).?;
 
-                if (zgui.beginCombo("Mesh", .{ .preview_value = persistent_state.mesh_names[persistent_state.instance_handle_widget.selected_mesh_index] })) {
+                if (zgui.beginCombo("Mesh", .{ .preview_value = preview_value })) {
                     defer zgui.endCombo();
 
-                    for (persistent_state.mesh_names[0..persistent_state.mesh_names_len], 0..) |mesh_name, mesh_index| {
-                        if (zgui.selectable(mesh_name, .{
-                            .selected = persistent_state.instance_handle_widget.selected_mesh_index == mesh_index,
+                    var mesh_name_iter = persistent_state.mesh_names.iterator();
+                    while (mesh_name_iter.next()) |mesh_entry| {
+                        if (zgui.selectable(mesh_entry.value_ptr.*, .{
+                            .selected = instance_handle.mesh_handle == mesh_entry.key_ptr.*,
                         })) {
-                            persistent_state.instance_handle_widget.selected_mesh_index = mesh_index;
-                            instance_handle.mesh_handle = editor.getNthMeshHandle(mesh_index);
+                            instance_handle.mesh_handle = mesh_entry.key_ptr.*;
+
+                            // std.debug.panic("unimplemented", .{});
                         }
                     }
                 }
@@ -481,16 +484,9 @@ const PersistentState = struct {
         component_bytes: [biggest_component_size]u8 = undefined,
     };
 
-    const InstanceHandleWidget = struct {
-        // add component: InstanceHandle state
-        selected_mesh_index: usize,
-    };
-
     // common state
     selected_entity: ?ecez.Entity,
-    mesh_names_len: usize,
-    mesh_names: [128][:0]const u8,
-    selected_mesh_index: usize,
+    mesh_names: std.AutoArrayHashMap(MeshHandle, [:0]const u8),
 
     export_file_modal_popen: bool,
     import_file_modal_popen: bool,
@@ -499,7 +495,6 @@ const PersistentState = struct {
     object_list: ObjectList,
     object_inspector: ObjectInspector,
     add_component_modal: AddComponentModal,
-    instance_handle_widget: InstanceHandleWidget,
 };
 
 const World = ecez.WorldBuilder().WithComponents(.{
@@ -543,8 +538,6 @@ resize_nesw: glfw.Cursor,
 resize_nwse: glfw.Cursor,
 not_allowed: glfw.Cursor,
 
-// we store the mesh_instance_intializers for when/if re
-
 ecs: World,
 
 pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers: []const MeshInstancehInitializeContex) !Editor {
@@ -555,9 +548,7 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
 
     var persistent_state = PersistentState{
         .selected_entity = null,
-        .mesh_names_len = 0,
-        .mesh_names = undefined,
-        .selected_mesh_index = 0,
+        .mesh_names = std.AutoArrayHashMap(MeshHandle, [:0]const u8).init(allocator),
         .object_list = .{
             .renaming_buffer = undefined,
             .first_rename_draw = false,
@@ -571,20 +562,21 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
         .import_file_modal_popen = false,
         .export_import_file_name = undefined,
         .add_component_modal = .{},
-        .instance_handle_widget = .{ .selected_mesh_index = 0 },
     };
     std.mem.copy(u8, &persistent_state.export_import_file_name, "test.ezby");
 
-    var initialized_mesh_names: usize = 0;
+    try persistent_state.mesh_names.ensureTotalCapacity(mesh_instance_initalizers.len);
+
     errdefer {
-        var i: usize = 0;
-        while (i < initialized_mesh_names) : (i += 1) {
-            allocator.free(persistent_state.mesh_names[i]);
+        const mesh_name_value = persistent_state.mesh_names.values();
+        for (mesh_name_value) |name_str| {
+            allocator.free(name_str);
         }
+        persistent_state.mesh_names.deinit();
     }
-    persistent_state.mesh_names_len = mesh_instance_initalizers.len;
-    for (persistent_state.mesh_names[0..persistent_state.mesh_names_len], 0..) |*mesh_name, i| {
-        var path_iter = std.mem.splitBackwards(u8, mesh_instance_initalizers[i].cgltf_path, "/");
+
+    for (0..mesh_instance_initalizers.len) |mesh_name_n| {
+        var path_iter = std.mem.splitBackwards(u8, mesh_instance_initalizers[mesh_name_n].cgltf_path, "/");
         const file_name = path_iter.first();
         var mesh_name_iter = std.mem.split(u8, file_name, ".");
         const only_file_name = mesh_name_iter.first();
@@ -593,7 +585,8 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
         std.mem.copy(u8, mesh_name_mem, only_file_name);
         mesh_name_mem[only_file_name.len] = 0;
 
-        mesh_name.* = mesh_name_mem[0..only_file_name.len :0];
+        const mesh_handle = render_context.getNthMeshHandle(mesh_name_n);
+        persistent_state.mesh_names.putAssumeCapacity(mesh_handle, mesh_name_mem[0..only_file_name.len :0]);
     }
 
     const ecs = try World.init(allocator, .{ persistent_state, render_context });
@@ -1069,9 +1062,10 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
 pub fn deinit(self: *Editor) void {
     const persistent_state = self.getPersitentState();
-    for (persistent_state.mesh_names[0..persistent_state.mesh_names_len]) |mesh_name| {
+    for (persistent_state.mesh_names.values()) |mesh_name| {
         self.allocator.free(mesh_name);
     }
+    persistent_state.mesh_names.deinit();
 
     self.pointing_hand.destroy();
     self.arrow.destroy();
@@ -1193,7 +1187,7 @@ pub fn renameEntity(self: *Editor, entity: ecez.Entity, name: []const u8) !void 
 
 pub fn getMeshNames(self: *Editor) []const [:0]const u8 {
     const persistent_state = self.getPersitentState();
-    return persistent_state.mesh_names[0..persistent_state.mesh_names_len];
+    return persistent_state.mesh_names.values();
 }
 
 pub fn signalRenderUpdate(self: *Editor) void {
