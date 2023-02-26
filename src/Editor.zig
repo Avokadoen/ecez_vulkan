@@ -564,6 +564,7 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
         .add_component_modal = .{},
     };
     std.mem.copy(u8, &persistent_state.export_import_file_name, "test.ezby");
+    persistent_state.export_import_file_name["test.ezby".len] = 0;
 
     try persistent_state.mesh_names.ensureTotalCapacity(mesh_instance_initalizers.len);
 
