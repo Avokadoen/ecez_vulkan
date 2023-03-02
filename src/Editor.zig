@@ -274,6 +274,13 @@ pub fn objectListSystem(metadata: *ObjectMetadata, persistent_state: *ecez.Share
     }
 }
 
+/// Synchronize the state of instance handles so that they have a valid handle according to the running render context
+pub fn importInstanceHandlesSystem(instance_handle: *InstanceHandle, shared_render_context: *ecez.SharedState(RenderContext)) void {
+    var render_context = @ptrCast(*RenderContext, shared_render_context);
+    // TODO: handle error
+    instance_handle.* = render_context.getNewInstance(instance_handle.mesh_handle) catch unreachable;
+}
+
 // TODO: Doing these things for all enitites in the scene is extremely inneficient
 //       since the scene editor is "static". This should only be done for the object
 const TransformSystems = struct {
@@ -533,6 +540,9 @@ const World = ecez.WorldBuilder().WithComponents(.{
         ecez.DependOn(TransformSystems.applyPosition, .{TransformSystems.applyRotation}),
         ecez.DependOn(TransformSystems.propagateToRenderer, .{TransformSystems.applyPosition}),
     }, .{}),
+    ecez.Event("on_import", .{
+        importInstanceHandlesSystem,
+    }, .{}),
 }).Build();
 
 // TODO: editor should not be part of renderer
@@ -675,9 +685,12 @@ pub fn import_from_file(self: *Editor, file_name: []const u8) !void {
     std.debug.assert(read_bytes == file_bytes.len);
     try self.ecs.deserialize(file_bytes);
 
-    // // restart the render context to make sure all required instances has and appropriate handle
-    // var old_render_context = self.getRenderContext();
-    // old_render_context.deinit(self.allocator);
+    // restart the render context to make sure all required instances has and appropriate handle
+    var render_context = self.getRenderContext();
+    render_context.clearInstancesRetainingCapacity();
+
+    try self.ecs.triggerEvent(.on_import, .{});
+    self.ecs.waitEvent(.on_import);
 
     try self.forceFlush();
 }

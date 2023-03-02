@@ -1747,6 +1747,20 @@ pub inline fn getInstanceTransform(self: RenderContext, instance_handle: Instanc
     return draw_instance.transform;
 }
 
+/// Free all instances so that the render can be reused for new scenes
+/// This will invalidate all current InstanceHandles
+pub fn clearInstancesRetainingCapacity(self: *RenderContext) void {
+    // remove all current lookups
+    for (self.instance_handle_map.values()) |*lookup_list| {
+        lookup_list.clearRetainingCapacity();
+    }
+
+    // set each indirect command to draw 0
+    for (self.indirect_commands.items) |*indirect_command| {
+        indirect_command.instance_count = 0;
+    }
+}
+
 pub fn handleFramebufferResize(self: *RenderContext, window: glfw.Window) void {
     const callback = struct {
         pub fn func(_window: glfw.Window, width: u32, height: u32) void {
