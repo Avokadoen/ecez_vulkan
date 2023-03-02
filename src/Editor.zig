@@ -124,7 +124,10 @@ fn overrideWidgetGenerator(comptime Component: type) ?type {
         InstanceHandle => struct {
             pub fn widget(editor: *Editor, instance_handle: *InstanceHandle) bool {
                 const persistent_state = editor.getPersitentState();
-                const preview_value = persistent_state.mesh_names.get(instance_handle.mesh_handle).?;
+                var render_context = editor.getRenderContext();
+
+                const mesh_handle = instance_handle.*.mesh_handle;
+                const preview_value = persistent_state.mesh_names.get(mesh_handle).?;
 
                 if (zgui.beginCombo("Mesh", .{ .preview_value = preview_value })) {
                     defer zgui.endCombo();
@@ -132,11 +135,18 @@ fn overrideWidgetGenerator(comptime Component: type) ?type {
                     var mesh_name_iter = persistent_state.mesh_names.iterator();
                     while (mesh_name_iter.next()) |mesh_entry| {
                         if (zgui.selectable(mesh_entry.value_ptr.*, .{
-                            .selected = instance_handle.mesh_handle == mesh_entry.key_ptr.*,
+                            .selected = mesh_handle == mesh_entry.key_ptr.*,
                         })) {
-                            instance_handle.mesh_handle = mesh_entry.key_ptr.*;
+                            if (mesh_handle != mesh_entry.key_ptr.*) {
+                                // TODO: handle errors here and report to user
+                                const new_instance_handle = render_context.getNewInstance(mesh_entry.key_ptr.*) catch unreachable;
+                                editor.ecs.setComponent(persistent_state.selected_entity.?, new_instance_handle) catch unreachable;
 
-                            // std.debug.panic("unimplemented", .{});
+                                // destroy old instance handle
+                                render_context.destroyInstanceHandle(instance_handle.*);
+
+                                editor.forceFlush() catch unreachable;
+                            }
                         }
                     }
                 }
@@ -194,7 +204,11 @@ fn specializedAddHandle(comptime Component: type) ?type {
             pub fn add(editor: *Editor, instance_handle: *InstanceHandle) !void {
                 const persistent_state = editor.getPersitentState();
 
-                try editor.assignEntityMeshInstance(persistent_state.selected_entity.?, instance_handle.mesh_handle);
+                // TODO: less hacky way of sending this data to add (we use the instance handle as a mesh handle :( )
+                try editor.assignEntityMeshInstance(
+                    persistent_state.selected_entity.?,
+                    @intCast(MeshHandle, instance_handle.lookup_index),
+                );
             }
         },
         else => null,
@@ -576,8 +590,8 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
         persistent_state.mesh_names.deinit();
     }
 
-    for (0..mesh_instance_initalizers.len) |mesh_name_n| {
-        var path_iter = std.mem.splitBackwards(u8, mesh_instance_initalizers[mesh_name_n].cgltf_path, "/");
+    for (mesh_instance_initalizers, 0..) |mesh_instance_initalizer, nth| {
+        var path_iter = std.mem.splitBackwards(u8, mesh_instance_initalizer.cgltf_path, "/");
         const file_name = path_iter.first();
         var mesh_name_iter = std.mem.split(u8, file_name, ".");
         const only_file_name = mesh_name_iter.first();
@@ -586,7 +600,7 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
         std.mem.copy(u8, mesh_name_mem, only_file_name);
         mesh_name_mem[only_file_name.len] = 0;
 
-        const mesh_handle = render_context.getNthMeshHandle(mesh_name_n);
+        const mesh_handle = render_context.getNthMeshHandle(nth);
         persistent_state.mesh_names.putAssumeCapacity(mesh_handle, mesh_name_mem[0..only_file_name.len :0]);
     }
 

@@ -57,8 +57,12 @@ pub const Config = struct {
 // TODO: evaluate if we want
 pub const InstanceHandle = packed struct {
     mesh_handle: MeshHandle,
-    padding: u16 = 0,
-    instance_handle: u32,
+    lookup_index: u48,
+};
+
+pub const OpaqueInstance = u32;
+pub const InstanceLookup = struct {
+    opaque_instance: OpaqueInstance,
 };
 
 pub const MeshInstancehInitializeContex = struct {
@@ -168,6 +172,8 @@ pub const MeshVertex = struct {
     }
 };
 
+const InstanceLookupList = std.ArrayList(InstanceLookup);
+
 asset_handler: AssetHandler,
 
 vkb: BaseDispatch,
@@ -223,6 +229,9 @@ camera: Camera,
 /// they request a new object to render
 instance_contexts: []MeshInstanceContext,
 
+// TODO: code smell: map to array lists :')
+instance_handle_map: std.AutoArrayHashMap(MeshHandle, InstanceLookupList),
+
 instances_desc_set_layout: vk.DescriptorSetLayout,
 instances_desc_set_pool: vk.DescriptorPool,
 instances_desc_set: vk.DescriptorSet,
@@ -268,14 +277,6 @@ pub fn init(
 ) !RenderContext {
     zmesh.init(allocator);
     errdefer zmesh.deinit();
-
-    const instance_contexts = try allocator.alloc(MeshInstanceContext, mesh_instance_initalizers.len);
-    errdefer allocator.free(instance_contexts);
-    for (mesh_instance_initalizers, 0..) |instancing_init, i| {
-        instance_contexts[i] = MeshInstanceContext{
-            .total_instance_count = instancing_init.instance_count,
-        };
-    }
 
     const asset_handler = try AssetHandler.init(allocator);
     errdefer asset_handler.deinit(allocator);
@@ -549,18 +550,16 @@ pub fn init(
 
         var pools_initiated: usize = 0;
         errdefer {
-            var i: usize = 0;
-            while (i < pools_initiated) : (i += 1) {
-                vkd.destroyCommandPool(device, pools[i], null);
+            for (0..pools_initiated) |pool_index| {
+                vkd.destroyCommandPool(device, pools[pool_index], null);
             }
         }
 
+        const pool_info = vk.CommandPoolCreateInfo{
+            .flags = .{},
+            .queue_family_index = queue_family_indices.graphicsIndex(),
+        };
         for (pools) |*pool| {
-            const pool_info = vk.CommandPoolCreateInfo{
-                .flags = .{},
-                .queue_family_index = queue_family_indices.graphicsIndex(),
-            };
-
             pool.* = try vkd.createCommandPool(device, &pool_info, null);
         }
         break :blk pools;
@@ -594,9 +593,8 @@ pub fn init(
 
         var initialized_semaphores: usize = 0;
         errdefer {
-            var i: usize = 0;
-            while (i < initialized_semaphores) : (i += 1) {
-                vkd.destroySemaphore(device, semaphores[i], null);
+            for (0..initialized_semaphores) |semaphore_index| {
+                vkd.destroySemaphore(device, semaphores[semaphore_index], null);
             }
             allocator.free(semaphores);
         }
@@ -622,9 +620,8 @@ pub fn init(
 
         var initialized_fences: usize = 0;
         errdefer {
-            var i: usize = 0;
-            while (i < initialized_fences) : (i += 1) {
-                vkd.destroyFence(device, fences[i], null);
+            for (0..initialized_fences) |fence_index| {
+                vkd.destroyFence(device, fences[fence_index], null);
             }
             allocator.free(fences);
         }
@@ -1042,6 +1039,28 @@ pub fn init(
     try image_staging_buffer.flushAndCopyToDestination(vkd, device, null);
     try buffer_staging_buffer.flushAndCopyToDestination(vkd, device, null);
 
+    var instance_handle_map = std.AutoArrayHashMap(MeshHandle, InstanceLookupList).init(allocator);
+    errdefer {
+        for (instance_handle_map.values()) |lookup_list| {
+            lookup_list.deinit();
+        }
+        instance_handle_map.deinit();
+    }
+    try instance_handle_map.ensureTotalCapacity(mesh_instance_initalizers.len);
+
+    const instance_contexts = try allocator.alloc(MeshInstanceContext, mesh_instance_initalizers.len);
+    errdefer allocator.free(instance_contexts);
+    for (mesh_instance_initalizers, 0..) |instancing_init, i| {
+        instance_contexts[i] = MeshInstanceContext{
+            .total_instance_count = instancing_init.instance_count,
+        };
+
+        instance_handle_map.putAssumeCapacity(
+            @intCast(MeshHandle, i),
+            InstanceLookupList.init(allocator),
+        );
+    }
+
     return RenderContext{
         .asset_handler = asset_handler,
         .vkb = vkb,
@@ -1090,6 +1109,7 @@ pub fn init(
         .instances_image_sampler = instances_image_sampler,
         .texture_image_memory = texture_image_memory,
         .instance_contexts = instance_contexts,
+        .instance_handle_map = instance_handle_map,
         .instance_data = instance_data,
         .instance_data_buffer = instance_data_buffer,
         .indirect_commands = indirect_commands,
@@ -1196,7 +1216,7 @@ pub fn recreatePresentResources(self: *RenderContext, window: glfw.Window) !void
     self.camera = calculateCamera(45, self.swapchain_extent);
 }
 
-inline fn calculateCamera(degree_fovy: f32, swapchain_extent: vk.Extent2D) Camera {
+fn calculateCamera(degree_fovy: f32, swapchain_extent: vk.Extent2D) Camera {
     const fovy = std.math.degreesToRadians(f32, degree_fovy);
     const aspect = @intToFloat(f32, swapchain_extent.width) / @intToFloat(f32, swapchain_extent.height);
     return Camera{
@@ -1209,7 +1229,12 @@ inline fn calculateCamera(degree_fovy: f32, swapchain_extent: vk.Extent2D) Camer
     };
 }
 
-pub fn deinit(self: RenderContext, allocator: Allocator) void {
+pub fn deinit(self: *RenderContext, allocator: Allocator) void {
+    for (self.instance_handle_map.values()) |lookup_list| {
+        lookup_list.deinit();
+    }
+    self.instance_handle_map.deinit();
+
     self.vkd.deviceWaitIdle(self.device) catch {};
 
     if (enable_imgui) {
@@ -1523,7 +1548,7 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window, delta_time: f32) !vo
 }
 
 // TODO: verify that it's sane to panic instead of error return
-inline fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki: InstanceDispatch, surface: vk.SurfaceKHR) !vk.PhysicalDevice {
+fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki: InstanceDispatch, surface: vk.SurfaceKHR) !vk.PhysicalDevice {
     var device_count: u32 = undefined;
     _ = try vki.enumeratePhysicalDevices(instance, &device_count, null);
 
@@ -1639,7 +1664,7 @@ pub inline fn getNthMeshHandle(self: RenderContext, nth: usize) MeshHandle {
     return @intCast(MeshHandle, nth);
 }
 
-pub inline fn getNewInstance(self: *RenderContext, mesh_handle: MeshHandle) !InstanceHandle {
+pub fn getNewInstance(self: *RenderContext, mesh_handle: MeshHandle) !InstanceHandle {
     const instance_context = self.instance_contexts[mesh_handle];
     const active_instance_count = self.indirect_commands.items[mesh_handle].instance_count;
     if (active_instance_count >= instance_context.total_instance_count) {
@@ -1647,9 +1672,9 @@ pub inline fn getNewInstance(self: *RenderContext, mesh_handle: MeshHandle) !Ins
     }
 
     // add the inital offset for this mesh handle
-    var instance_handle: u64 = active_instance_count;
+    var instance_offset: u64 = active_instance_count;
     for (self.instance_contexts[0..mesh_handle]) |other_instance_context| {
-        instance_handle += @intCast(u64, other_instance_context.total_instance_count);
+        instance_offset += @intCast(u64, other_instance_context.total_instance_count);
     }
 
     self.indirect_commands.items[mesh_handle].instance_count += 1;
@@ -1674,20 +1699,52 @@ pub inline fn getNewInstance(self: *RenderContext, mesh_handle: MeshHandle) !Ins
     //       or when staging buffer is full (check returned error)
     try self.buffer_staging_buffer.flushAndCopyToDestination(self.vkd, self.device, null);
 
-    return InstanceHandle{
+    var mesh_instance_lookups = self.instance_handle_map.getPtr(mesh_handle).?;
+    const instance_handle = InstanceHandle{
         .mesh_handle = mesh_handle,
-        .instance_handle = @intCast(u32, instance_handle),
+        .lookup_index = @intCast(u48, mesh_instance_lookups.items.len),
     };
+
+    try mesh_instance_lookups.append(InstanceLookup{
+        .opaque_instance = @intCast(u32, instance_offset),
+    });
+
+    return instance_handle;
+}
+
+/// Destroy the instance handle
+pub fn destroyInstanceHandle(self: *RenderContext, instance_handle: InstanceHandle) void {
+    var mesh_instance_lookups = self.instance_handle_map.getPtr(instance_handle.mesh_handle).?;
+    const remove_lookup = mesh_instance_lookups.items[instance_handle.lookup_index];
+
+    // remove draw instance entry and keep order of remaining data
+    _ = self.instance_data.orderedRemove(remove_lookup.opaque_instance);
+
+    // update the indices to the right of destroyed handle
+    if (mesh_instance_lookups.items.len > remove_lookup.opaque_instance) {
+        for (mesh_instance_lookups.items[remove_lookup.opaque_instance + 1 ..]) |*lookup| {
+            lookup.opaque_instance -= 1;
+        }
+    }
+
+    // update the draw command to draw one less object
+    self.indirect_commands.items[instance_handle.mesh_handle].instance_count -= 1;
+}
+
+inline fn instanceLookup(self: *RenderContext, instance_handle: InstanceHandle) *DrawInstance {
+    var mesh_instance_lookups = self.instance_handle_map.getPtr(instance_handle.mesh_handle).?;
+    const lookup = mesh_instance_lookups.items[instance_handle.lookup_index];
+    return &self.instance_data.items[lookup.opaque_instance];
 }
 
 pub inline fn setInstanceTransform(self: *RenderContext, instance_handle: InstanceHandle, transform: zm.Mat) void {
-    const instance_index = instance_handle.instance_handle;
-    self.instance_data.items[instance_index].transform = transform;
+    var draw_instance = self.instanceLookup(instance_handle);
+    draw_instance.transform = transform;
 }
 
-pub inline fn getInstanceTransform(self: *RenderContext, instance_handle: InstanceHandle) zm.Mat {
-    const instance_index = instance_handle.instance_handle;
-    return self.instance_data.items[instance_index].transform;
+pub inline fn getInstanceTransform(self: RenderContext, instance_handle: InstanceHandle) zm.Mat {
+    var draw_instance = self.instanceLookup(instance_handle);
+    return draw_instance.transform;
 }
 
 pub fn handleFramebufferResize(self: *RenderContext, window: glfw.Window) void {
