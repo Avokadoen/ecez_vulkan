@@ -513,7 +513,12 @@ pub fn init(
         break :blk desc_set;
     };
 
-    const camera = calculateCamera(45, swapchain_extent);
+    const camera = calculateCamera(
+        swapchain_extent,
+        45,
+        zm.qidentity(),
+        zm.f32x4(0, 0, -4, 1),
+    );
 
     const pipeline_layout = blk: {
         const push_constant_range = vk.PushConstantRange{
@@ -1213,18 +1218,27 @@ pub fn recreatePresentResources(self: *RenderContext, window: glfw.Window) !void
         self.depth_image_view,
     );
 
-    self.camera = calculateCamera(45, self.swapchain_extent);
+    self.updateCamera(
+        45,
+        zm.qidentity(),
+        zm.f32x4(0, 0, -4, 1),
+    );
 }
 
-fn calculateCamera(degree_fovy: f32, swapchain_extent: vk.Extent2D) Camera {
-    const fovy = std.math.degreesToRadians(f32, degree_fovy);
+pub fn updateCamera(self: *RenderContext, fov_degree: f32, orientation: zm.Quat, pos: zm.Vec) void {
+    self.camera = calculateCamera(
+        self.swapchain_extent,
+        fov_degree,
+        orientation,
+        pos,
+    );
+}
+
+inline fn calculateCamera(swapchain_extent: vk.Extent2D, fov_degree: f32, orientation: zm.Quat, pos: zm.Vec) Camera {
+    const fovy = std.math.degreesToRadians(f32, fov_degree);
     const aspect = @intToFloat(f32, swapchain_extent.width) / @intToFloat(f32, swapchain_extent.height);
     return Camera{
-        .view = zm.lookAtRh(
-            zm.f32x4(0.0, 0.0, 4.0, 1.0), // pos
-            zm.f32x4(0.0, 0.0, 1.0, 1.0), // target
-            zm.f32x4(0.0, 1.0, 0.0, 0.0), // up
-        ),
+        .view = zm.mul(zm.quatToMat(orientation), zm.translationV(pos)),
         .projection = zm.perspectiveFovRh(fovy, aspect, 0.01, 300),
     };
 }
