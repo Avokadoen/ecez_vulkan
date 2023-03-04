@@ -1741,6 +1741,11 @@ pub fn destroyInstanceHandle(self: *RenderContext, instance_handle: InstanceHand
         }
     }
 
+    // only if the current handle is the last entry will we remove it from the lookup array
+    if (mesh_instance_lookups.items.len - 1 == instance_handle.lookup_index) {
+        _ = mesh_instance_lookups.pop();
+    }
+
     // update the draw command to draw one less object
     self.indirect_commands.items[instance_handle.mesh_handle].instance_count -= 1;
 }
