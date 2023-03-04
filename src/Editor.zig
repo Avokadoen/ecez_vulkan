@@ -137,7 +137,11 @@ fn overrideWidgetGenerator(comptime Component: type) ?type {
                         if (zgui.selectable(mesh_entry.value_ptr.*, .{
                             .selected = mesh_handle == mesh_entry.key_ptr.*,
                         })) {
-                            if (mesh_handle != mesh_entry.key_ptr.*) {
+                            // If we are in the processing of adding a instance handle, then we do not want to
+                            // destroy none existing handle in the renderer, only set the in flight handle
+                            if (persistent_state.add_component_modal.is_active) {
+                                instance_handle.mesh_handle = mesh_entry.key_ptr.*;
+                            } else if (mesh_handle != mesh_entry.key_ptr.*) {
                                 // TODO: handle errors here and report to user
                                 const new_instance_handle = render_context.getNewInstance(mesh_entry.key_ptr.*) catch unreachable;
                                 editor.ecs.setComponent(persistent_state.selected_entity.?, new_instance_handle) catch unreachable;
@@ -145,6 +149,7 @@ fn overrideWidgetGenerator(comptime Component: type) ?type {
                                 // destroy old instance handle
                                 render_context.destroyInstanceHandle(instance_handle.*);
 
+                                instance_handle.* = new_instance_handle;
                                 editor.forceFlush() catch unreachable;
                             }
                         }
@@ -204,10 +209,9 @@ fn specializedAddHandle(comptime Component: type) ?type {
             pub fn add(editor: *Editor, instance_handle: *InstanceHandle) !void {
                 const persistent_state = editor.getPersitentState();
 
-                // TODO: less hacky way of sending this data to add (we use the instance handle as a mesh handle :( )
                 try editor.assignEntityMeshInstance(
                     persistent_state.selected_entity.?,
-                    @intCast(MeshHandle, instance_handle.lookup_index),
+                    instance_handle.mesh_handle,
                 );
             }
         },
@@ -503,6 +507,7 @@ const PersistentState = struct {
     const AddComponentModal = struct {
         selected_component_index: usize = fake_components.len,
         component_bytes: [biggest_component_size]u8 = undefined,
+        is_active: bool = false,
     };
 
     // common state
@@ -918,6 +923,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 // add component UI
                 {
                     if (zgui.button("Add", .{})) {
+                        persistent_state.add_component_modal.is_active = true;
                         zgui.openPopup("Add component", .{});
                     }
 
@@ -1007,6 +1013,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                             }
 
                             persistent_state.add_component_modal.selected_component_index = fake_components.len;
+                            persistent_state.add_component_modal.is_active = false;
                             zgui.closeCurrentPopup();
                         }
                         zgui.sameLine(.{});
@@ -1016,6 +1023,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                         zgui.sameLine(.{});
                         if (zgui.button("Cancel", .{ .w = 120, .h = 0 })) {
                             persistent_state.add_component_modal.selected_component_index = fake_components.len;
+                            persistent_state.add_component_modal.is_active = false;
                             zgui.closeCurrentPopup();
                         }
                     }
