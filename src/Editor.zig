@@ -219,6 +219,33 @@ fn specializedAddHandle(comptime Component: type) ?type {
     };
 }
 
+fn specializedRemoveHandle(comptime Component: type) ?type {
+    return switch (Component) {
+        InstanceHandle => struct {
+            pub fn remove(editor: *Editor) !void {
+                const selected_entity = editor.getPersitentState().selected_entity.?;
+                const instance_handle = blk: {
+                    const handle = try editor.ecs.getComponent(selected_entity, InstanceHandle);
+                    break :blk handle;
+                };
+                var render_context = editor.getRenderContext();
+
+                // destroy old instance handle
+                render_context.destroyInstanceHandle(instance_handle);
+
+                // In the event a remove failed, then the select index is in a inconsistent state
+                // and we do not really have to do anything
+                editor.ecs.removeComponent(selected_entity, Component) catch {
+                    // TODO: log here in debug builds
+                };
+
+                try editor.forceFlush();
+            }
+        },
+        else => null,
+    };
+}
+
 // TODO: it would be nicer here to use PeristentState as event data because it is easier to see when it is changed by systems
 /// Generate the entries of the object list depending on objects in the scene
 pub fn objectListSystem(metadata: *ObjectMetadata, persistent_state: *ecez.SharedState(PersistentState)) void {
@@ -726,8 +753,8 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
         zgui.io.setDeltaTime(delta_time);
 
-        var b = true;
-        _ = zgui.showDemoWindow(&b);
+        // var b = true;
+        // _ = zgui.showDemoWindow(&b);
 
         // define editor header
         const header_height = blk1: {
@@ -1042,13 +1069,15 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                         inline for (fake_components, 0..) |Component, comp_index| {
                             // deleting the metadata of an entity is illegal
                             if (Component != ObjectMetadata and comp_index == persistent_state.object_inspector.selected_component_index) {
-                                // In the event a remove failed, then the select index is in a inconsistent state
-                                // and we do not really have to do anything
-                                self.ecs.removeComponent(selected_entity, Component) catch {
-                                    // TODO: log here in debug builds
-                                };
-
-                                try self.forceFlush();
+                                if (specializedRemoveHandle(Component)) |remove_handle| {
+                                    try remove_handle.remove(self);
+                                } else {
+                                    // In the event a remove failed, then the select index is in a inconsistent state
+                                    // and we do not really have to do anything
+                                    self.ecs.removeComponent(selected_entity, Component) catch {
+                                        // TODO: log here in debug builds
+                                    };
+                                }
 
                                 // assign selection an invalid index
                                 // TODO: Selection should be persistent when removing current component
