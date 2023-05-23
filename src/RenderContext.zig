@@ -2171,7 +2171,7 @@ inline fn createRenderPass(vkd: DeviceDispatch, device: vk.Device, swapchain_for
 }
 
 // TODO: remove this, copy code inline instead
-inline fn createGraphicsPipeline(
+fn createGraphicsPipeline(
     allocator: Allocator,
     asset_handler: AssetHandler,
     vkd: DeviceDispatch,

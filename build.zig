@@ -2,7 +2,7 @@ const std = @import("std");
 const fs = std.fs;
 
 const LibExeObjStep = std.build.LibExeObjStep;
-const Builder = std.build.Builder;
+const Build = std.Build;
 const Step = std.build.Step;
 const ArrayList = std.ArrayList;
 
@@ -16,7 +16,7 @@ const glfw = @import("deps/mach-glfw/build.zig");
 
 const vkgen = @import("deps/vulkan-zig/generator/index.zig");
 
-pub fn build(b: *std.build.Builder) void {
+pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const mode = b.standardOptimizeOption(.{});
 
@@ -34,12 +34,12 @@ pub fn build(b: *std.build.Builder) void {
 
     // link glfw
     const glfw_module = glfw.module(b);
-    exe.addModule("glfw", glfw_module);
     glfw.link(b, exe, .{}) catch @panic("failed to link glfw");
+    exe.addModule("glfw", glfw_module);
 
     // link zmath
-    const zmath_pkg = zmath.package(b, .{});
-    exe.addModule("zmath", zmath_pkg.module);
+    const zmath_pkg = zmath.package(b, target, mode, .{});
+    zmath_pkg.link(exe);
 
     // link zigimg
     exe.addModule("zigimg", b.createModule(.{
@@ -47,25 +47,21 @@ pub fn build(b: *std.build.Builder) void {
     }));
 
     // link zmesh
-    const zmesh_pkg = zmesh.package(b, .{
+    const zmesh_pkg = zmesh.package(b, target, mode, .{
         .options = .{ .shape_use_32bit_indices = true },
     });
-    exe.addModule("zmesh", zmesh_pkg.module);
-    zmesh.link(exe, zmesh_pkg.options);
+    zmesh_pkg.link(exe);
 
     // link zgui
-    const zgui_pkg = zgui.package(b, .{
+    const zgui_pkg = zgui.package(b, target, mode, .{
         .options = .{ .backend = .no_backend },
     });
-    exe.addModule("zgui", zgui_pkg.module);
-    zgui.link(exe, zgui_pkg.options);
+    zgui_pkg.link(exe);
 
     // Create a step that generates vk.zig (stored in zig-cache) from the provided vulkan registry.
-    const gen = vkgen.VkGenerateStep.create(b, "deps/vk.xml");
+    const gen = vkgen.VkGenerateStep.create(b, thisDir() ++ "/deps/vk.xml");
     // Add the generated file as package to the final executable
     exe.addModule("vulkan", gen.getModule());
-
-    var asset_move_step = AssetMoveStep.init(b) catch unreachable;
 
     // TODO: -O (optimize), -I (includes)
     //  !always have -g as last entry! (see glslc_len definition)
@@ -86,12 +82,17 @@ pub fn build(b: *std.build.Builder) void {
     shader_comp.add("ui.vert.spv", "assets/shaders/ui.vert", .{});
     shader_comp.add("ui.frag.spv", "assets/shaders/ui.frag", .{});
 
+    var asset_move_step = AssetMoveStep.init(b) catch unreachable;
     exe.step.dependOn(&asset_move_step.step);
     asset_move_step.step.dependOn(&shader_comp.step);
 
-    exe.install();
+    var shader_move_step = ShaderMoveStep.init(b, shader_comp) catch unreachable;
+    exe.step.dependOn(&shader_move_step.step);
+    shader_move_step.step.dependOn(&asset_move_step.step);
 
-    const run_cmd = exe.run();
+    b.installArtifact(exe);
+
+    const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
         run_cmd.addArgs(args);
@@ -136,12 +137,90 @@ inline fn pathAndFile(file_path: []const u8) MoveDirError!SplitPath {
     return MoveDirError.NotFound;
 }
 
+const ShaderMoveStep = struct {
+    step: Step,
+    shader_compile_step: *vkgen.ShaderCompileStep,
+
+    fn init(b: *Build, shader_compile_step: *vkgen.ShaderCompileStep) !*ShaderMoveStep {
+        const self = try b.allocator.create(ShaderMoveStep);
+        self.* = .{
+            .step = Build.Step.init(.{
+                .id = .custom,
+                .name = "shaders_move",
+                .owner = b,
+                .makeFn = make,
+            }),
+            .shader_compile_step = shader_compile_step,
+        };
+
+        return self;
+    }
+
+    fn make(step: *Build.Step, progress: *std.Progress.Node) !void {
+        progress.setEstimatedTotalItems(4);
+        progress.activate();
+        defer progress.end();
+
+        const self: *ShaderMoveStep = @fieldParentPtr(ShaderMoveStep, "step", step);
+        var b: *Build = self.step.owner;
+
+        const dst_shader_directory_path = blk: {
+            const dst_asset_path_arr = [_][]const u8{ b.install_prefix, "assets", "shaders" };
+            break :blk try std.fs.path.join(b.allocator, dst_asset_path_arr[0..]);
+        };
+        var dst_shader_dir = try fs.openDirAbsolute(dst_shader_directory_path, .{});
+        defer dst_shader_dir.close();
+        progress.setCompletedItems(1);
+
+        const shaders_dir_path = try b.cache_root.join(
+            b.allocator,
+            &.{vkgen.ShaderCompileStep.cache_dir},
+        );
+        var src_shader_dir = try fs.openIterableDirAbsolute(shaders_dir_path, .{
+            .access_sub_paths = true,
+        });
+        defer src_shader_dir.close();
+        progress.setCompletedItems(2);
+
+        copyDir(b, src_shader_dir, dst_shader_dir);
+        progress.setCompletedItems(3);
+
+        var iter_dst_shader_dir = try fs.openIterableDirAbsolute(dst_shader_directory_path, .{});
+        defer iter_dst_shader_dir.close();
+        var walker = iter_dst_shader_dir.walk(b.allocator) catch unreachable;
+        defer walker.deinit();
+        walk_loop: while (walker.next() catch unreachable) |asset| {
+            switch (asset.kind) {
+                fs.File.Kind.File => {
+                    const actual_shader_name = blk: {
+                        for (self.shader_compile_step.shaders.items) |shader| {
+                            if (std.mem.eql(u8, asset.basename, &shader.hash)) {
+                                break :blk shader.name;
+                            }
+                        }
+                        continue :walk_loop;
+                    };
+
+                    const dst_shader_path = blk: {
+                        const dst_asset_path_arr = [_][]const u8{ dst_shader_directory_path, actual_shader_name };
+                        break :blk try std.fs.path.join(b.allocator, &dst_asset_path_arr);
+                    };
+
+                    asset.dir.rename(asset.path, dst_shader_path) catch unreachable;
+                },
+                else => {}, // don't care
+            }
+        }
+        progress.setCompletedItems(4);
+    }
+};
+
 const AssetMoveStep = struct {
     step: Step,
-    builder: *Builder,
+    builder: *Build,
 
-    fn init(b: *Builder) !*AssetMoveStep {
-        var step = Step.init(.custom, "assets", b.allocator, make);
+    fn init(b: *Build) !*AssetMoveStep {
+        var step = Step.init(.{ .id = .custom, .name = "assets", .owner = b, .makeFn = make });
 
         const self = try b.allocator.create(AssetMoveStep);
         self.* = .{
@@ -152,7 +231,7 @@ const AssetMoveStep = struct {
         return self;
     }
 
-    fn make(step: *Step) anyerror!void {
+    fn make(step: *Step, prog_node: *std.Progress.Node) anyerror!void {
         const self: *AssetMoveStep = @fieldParentPtr(AssetMoveStep, "step", step);
 
         try createFolder(self.builder.install_prefix);
@@ -162,64 +241,46 @@ const AssetMoveStep = struct {
             break :blk try std.fs.path.join(self.builder.allocator, dst_asset_path_arr[0..]);
         };
         try createFolder(dst_asset_path);
-        var dst_assets_dir = try fs.openIterableDirAbsolute(dst_asset_path, .{});
+        var dst_assets_dir = try fs.openDirAbsolute(dst_asset_path, .{});
         defer dst_assets_dir.close();
 
-        {
-            var src_raw_assets_dir = try fs.cwd().openIterableDir("assets/", .{
-                .access_sub_paths = true,
-            });
-            defer src_raw_assets_dir.close();
+        var src_assets_dir = try fs.openIterableDirAbsolute(thisDir() ++ "/assets", .{
+            .access_sub_paths = true,
+        });
+        defer src_assets_dir.close();
 
-            copyDir(src_raw_assets_dir, dst_assets_dir);
-        }
+        copyDir(self.builder, src_assets_dir, dst_assets_dir);
 
-        {
-            var src_shader_assets_dir = try fs.cwd().openIterableDir("zig-cache/assets/", .{
-                .access_sub_paths = true,
-            });
-            defer src_shader_assets_dir.close();
-
-            copyDir(src_shader_assets_dir, dst_assets_dir);
-        }
+        prog_node.completeOne();
     }
 };
 
 // TODO: HACK: catch unreachable to avoid error hell from recursion
-fn copyDir(src_dir: fs.IterableDir, dst_parent_dir: fs.IterableDir) void {
+fn copyDir(b: *Build, src_dir: fs.IterableDir, dst_parent_dir: fs.Dir) void {
     const Kind = fs.File.Kind;
 
-    var iter = src_dir.iterate();
-    search: while (iter.next() catch unreachable) |asset| {
+    var walker = src_dir.walk(b.allocator) catch unreachable;
+    defer walker.deinit();
+    while (walker.next() catch unreachable) |asset| {
         switch (asset.kind) {
             Kind.Directory => {
-                var src_child_dir = src_dir.dir.openIterableDir(asset.name, .{
+                var src_child_dir = src_dir.dir.openIterableDir(asset.path, .{
                     .access_sub_paths = true,
                 }) catch unreachable;
                 defer src_child_dir.close();
 
-                dst_parent_dir.dir.makeDir(asset.name) catch |err| switch (err) {
+                dst_parent_dir.makeDir(asset.path) catch |err| switch (err) {
                     std.os.MakeDirError.PathAlreadyExists => {}, // ok
                     else => unreachable,
                 };
-
-                var dst_child_dir = dst_parent_dir.dir.openIterableDir(asset.name, .{}) catch unreachable;
+                var dst_child_dir = dst_parent_dir.openDir(asset.path, .{}) catch unreachable;
                 defer dst_child_dir.close();
-
-                copyDir(src_child_dir, dst_child_dir);
             },
             Kind.File => {
-                for ([_][]const u8{
-                    ".frag",
-                    ".vert",
-                    ".comp",
-                }) |shader_ending| {
-                    if (std.mem.endsWith(u8, asset.name, shader_ending)) {
-                        continue :search; // skip shader folder which will be compiled by glslc before being moved
-                    }
+                if (std.mem.eql(u8, asset.path[0..7], "shaders")) {
+                    continue; // skip shader folder which will be compiled by glslc before being moved
                 }
-
-                std.fs.Dir.copyFile(src_dir.dir, asset.name, dst_parent_dir.dir, asset.name, .{}) catch unreachable;
+                src_dir.dir.copyFile(asset.path, dst_parent_dir, asset.path, .{}) catch unreachable;
             },
             else => {}, // don't care
         }

@@ -282,7 +282,7 @@ pub fn objectListSystem(metadata: *ObjectMetadata, persistent_state: *ecez.Share
                 persistent_state.object_inspector.name_buffer[display_name.len] = 0;
 
                 persistent_state.object_list.renaming_entity = false;
-                std.mem.set(u8, &persistent_state.object_list.renaming_buffer, 0);
+                @memset(&persistent_state.object_list.renaming_buffer, 0);
             }
         }
     } else {
@@ -691,7 +691,7 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
     };
 }
 
-pub fn export_to_file(self: *Editor, file_name: []const u8) !void {
+pub fn exportToFile(self: *Editor, file_name: []const u8) !void {
     const ecs_bytes = try self.ecs.serialize(self.allocator);
     defer self.allocator.free(ecs_bytes);
 
@@ -705,7 +705,7 @@ pub fn export_to_file(self: *Editor, file_name: []const u8) !void {
     try std.fs.cwd().writeFile(file_name, ecs_bytes);
 }
 
-pub fn import_from_file(self: *Editor, file_name: []const u8) !void {
+pub fn importFromFile(self: *Editor, file_name: []const u8) !void {
     var scene_file = try std.fs.cwd().openFile(file_name, .{});
     defer scene_file.close();
 
@@ -733,8 +733,9 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
     zgui.io.setDisplayFramebufferScale(1.0, 1.0);
 
     // NOTE: getting cursor must be done before calling zgui.newFrame
+    window.setInputModeCursor(.normal);
     switch (zgui.getMouseCursor()) {
-        .none => window.setCursor(self.pointing_hand),
+        .none => window.setInputModeCursor(.hidden),
         .arrow => window.setCursor(self.arrow),
         .text_input => window.setCursor(self.ibeam),
         .resize_all => window.setCursor(self.crosshair),
@@ -825,7 +826,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 if (zgui.button("Export scene", .{})) {
                     const file_name_len = std.mem.indexOf(u8, &persistent_state.export_import_file_name, &[_]u8{0}).?;
                     // TODO: show error as a modal
-                    try self.export_to_file(persistent_state.export_import_file_name[0..file_name_len]);
+                    try self.exportToFile(persistent_state.export_import_file_name[0..file_name_len]);
                     persistent_state.export_file_modal_popen = false;
                     zgui.closeCurrentPopup();
                 }
@@ -857,7 +858,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 if (zgui.button("Import scene", .{})) {
                     const file_name_len = std.mem.indexOf(u8, &persistent_state.export_import_file_name, &[_]u8{0}).?;
                     // TODO: show error as a modal
-                    try self.import_from_file(persistent_state.export_import_file_name[0..file_name_len]);
+                    try self.importFromFile(persistent_state.export_import_file_name[0..file_name_len]);
                     persistent_state.import_file_modal_popen = false;
                     zgui.closeCurrentPopup();
                 }
@@ -983,7 +984,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                                     .flags = .{ .dont_close_popups = true },
                                 })) {
                                     persistent_state.add_component_modal.selected_component_index = comp_index;
-                                    std.mem.set(u8, &persistent_state.add_component_modal.component_bytes, 0);
+                                    @memset(&persistent_state.add_component_modal.component_bytes, 0);
                                 }
                             }
                         }
@@ -1348,12 +1349,13 @@ inline fn marker(message: []const u8, marker_type: MarkerType) void {
     };
     zgui.textDisabled(marker_txt, .{});
     if (zgui.isItemHovered(.{})) {
-        zgui.beginTooltip();
-        defer zgui.endTooltip();
+        if (zgui.beginTooltip()) {
+            defer zgui.endTooltip();
 
-        zgui.pushTextWrapPos(zgui.getFontSize() * 35);
-        zgui.textUnformatted(message);
-        zgui.popTextWrapPos();
+            zgui.pushTextWrapPos(zgui.getFontSize() * 35);
+            zgui.textUnformatted(message);
+            zgui.popTextWrapPos();
+        }
     }
 }
 

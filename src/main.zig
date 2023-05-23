@@ -12,8 +12,7 @@ pub fn main() !void {
     var alloc = if (RenderContext.is_debug_build) std.heap.GeneralPurposeAllocator(.{}){} else std.heap.c_allocator;
     defer {
         if (RenderContext.is_debug_build) {
-            const leak = alloc.deinit();
-            if (leak) {
+            if (alloc.deinit() == .leak) {
                 std.debug.print("leak detected in gpa!", .{});
             }
         }

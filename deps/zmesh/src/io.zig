@@ -1,7 +1,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const mem = @import("memory.zig");
-const zcgltf = @import("zcgltf.zig");
+pub const zcgltf = @import("zcgltf.zig");
 
 pub fn parseAndLoadFile(pathname: [:0]const u8) zcgltf.Error!*zcgltf.Data {
     const options = zcgltf.Options{
@@ -93,6 +93,7 @@ pub fn appendMeshPrimitive(
             assert(buffer_view.buffer.data != null);
 
             assert(accessor.stride == buffer_view.stride or buffer_view.stride == 0);
+            // assert(accessor.stride * accessor.count == buffer_view.size);
 
             const data_addr = @ptrCast([*]const u8, buffer_view.buffer.data) +
                 accessor.offset + buffer_view.offset;

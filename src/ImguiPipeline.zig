@@ -465,7 +465,7 @@ pub fn init(
     var buffer_offsets = try allocator.alloc(vk.DeviceSize, swapchain_count * 2);
     errdefer allocator.free(buffer_offsets);
 
-    std.mem.set(vk.DeviceSize, buffer_offsets, 0);
+    @memset(buffer_offsets, 0);
 
     return ImguiPipeline{
         .font_sampler = font_sampler,

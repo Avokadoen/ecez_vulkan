@@ -3,8 +3,8 @@
 	url = https://github.com/Avokadoen/ecez.git
 [submodule "deps/vulkan-zig"]
 	path = deps/vulkan-zig
-	url = https://github.com/Snektron/vulkan-zig.git
-	branch = zig-stage1-compat
+	url = https://github.com/Avokadoen/vulkan-zig.git
+	branch = store-hash
 [submodule "deps/zigimg"]
 	path = deps/zigimg
 	url = https://github.com/zigimg/zigimg.git

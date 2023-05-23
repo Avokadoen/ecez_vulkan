@@ -115,6 +115,10 @@
 // saturateFast(v: F32xN) F32xN
 // lerp(v0: F32xN, v1: F32xN, t: f32) F32xN
 // lerpV(v0: F32xN, v1: F32xN, t: F32xN) F32xN
+// lerpInverse(v0: F32xN, v1: F32xN, t: f32) F32xN
+// lerpInverseV(v0: F32xN, v1: F32xN, t: F32xN) F32xN
+// mapLinear(v: F32xN, min1: f32, max1: f32, min2: f32, max2: f32) F32xN
+// mapLinearV(v: F32xN, min1: F32xN, max1: F32xN, min2: F32xN, max2: F32xN) F32xN
 // sqrt(v: F32xN) F32xN
 // abs(v: F32xN) F32xN
 // mod(v0: F32xN, v1: F32xN) F32xN
@@ -216,6 +220,7 @@
 // qidentity() Quat
 // conjugate(quat: Quat) Quat
 // inverse(q: Quat) Quat
+// rotate(q: Quat, v: Vec) Vec
 // slerp(q0: Quat, q1: Quat, t: f32) Quat
 // slerpV(q0: Quat, q1: Quat, t: F32x4) Quat
 // quatToMat(quat: Quat) Mat
@@ -1357,6 +1362,44 @@ pub inline fn lerpV(v0: anytype, v1: anytype, t: anytype) @TypeOf(v0, v1, t) {
     return v0 + (v1 - v0) * t; // subps, addps, mulps
 }
 
+pub inline fn lerpInverse(v0: anytype, v1: anytype, t: anytype) @TypeOf(v0, v1) {
+    const T = @TypeOf(v0, v1);
+    return (splat(T, t) - v0) / (v1 - v0);
+}
+
+pub inline fn lerpInverseV(v0: anytype, v1: anytype, t: anytype) @TypeOf(v0, v1, t) {
+    return (t - v0) / (v1 - v0);
+}
+test "zmath.lerpInverse" {
+    try expect(math.approxEqAbs(f32, lerpInverseV(10.0, 100.0, 10.0), 0, 0.0005));
+    try expect(math.approxEqAbs(f32, lerpInverseV(10.0, 100.0, 100.0), 1, 0.0005));
+    try expect(math.approxEqAbs(f32, lerpInverseV(10.0, 100.0, 55.0), 0.5, 0.05));
+    try expect(approxEqAbs(lerpInverse(f32x4(0, 0, 10, 10), f32x4(100, 200, 100, 100), 10.0), f32x4(0.1, 0.05, 0, 0), 0.0005));
+}
+
+/// To transform a vector of values from one range to another.
+pub inline fn mapLinear(v: anytype, min1: anytype, max1: anytype, min2: anytype, max2: anytype) @TypeOf(v) {
+    const T = @TypeOf(v);
+    const min1V = splat(T, min1);
+    const max1V = splat(T, max1);
+    const min2V = splat(T, min2);
+    const max2V = splat(T, max2);
+    const dV = max1V - min1V;
+    return min2V + (v - min1V) * (max2V - min2V) / dV;
+}
+
+pub inline fn mapLinearV(v: anytype, min1: anytype, max1: anytype, min2: anytype, max2: anytype) @TypeOf(v, min1, max1, min2, max2) {
+    const d = max1 - min1;
+    return min2 + (v - min1) * (max2 - min2) / d;
+}
+test "zmath.mapLinear" {
+    try expect(math.approxEqAbs(f32, mapLinearV(0, 0, 1.2, 10, 100), 10, 0.0005));
+    try expect(math.approxEqAbs(f32, mapLinearV(1.2, 0, 1.2, 10, 100), 100, 0.0005));
+    try expect(math.approxEqAbs(f32, mapLinearV(0.6, 0, 1.2, 10, 100), 55, 0.0005));
+    try expect(approxEqAbs(mapLinearV(splat(F32x4, 0), splat(F32x4, 0), splat(F32x4, 1.2), splat(F32x4, 10), splat(F32x4, 100)), splat(F32x4, 10), 0.0005));
+    try expect(approxEqAbs(mapLinear(f32x4(0, 0, 0.6, 1.2), 0, 1.2, 10, 100), f32x4(10, 10, 55, 100), 0.0005));
+}
+
 pub const F32x4Component = enum { x, y, z, w };
 
 pub inline fn swizzle(
@@ -1415,7 +1458,7 @@ test "zmath.modAngle" {
 
 pub inline fn mulAdd(v0: anytype, v1: anytype, v2: anytype) @TypeOf(v0, v1, v2) {
     const T = @TypeOf(v0, v1, v2);
-    if (@import("zmath_options").prefer_determinism) {
+    if (@import("zmath_options").enable_cross_platform_determinism) {
         return v0 * v1 + v2; // Compiler will generate mul, add sequence (no fma even if the target supports it).
     } else {
         if (cpu_arch == .x86_64 and has_avx and has_fma) {
@@ -2220,7 +2263,7 @@ test "zmath.matrix.lookToLh" {
 pub fn perspectiveFovLh(fovy: f32, aspect: f32, near: f32, far: f32) Mat {
     const scfov = sincos(0.5 * fovy);
 
-    assert(near > 0.0 and far > 0.0 and far > near);
+    assert(near > 0.0 and far > 0.0);
     assert(!math.approxEqAbs(f32, scfov[0], 0.0, 0.001));
     assert(!math.approxEqAbs(f32, far, near, 0.001));
     assert(!math.approxEqAbs(f32, aspect, 0.0, 0.01));
@@ -2238,7 +2281,7 @@ pub fn perspectiveFovLh(fovy: f32, aspect: f32, near: f32, far: f32) Mat {
 pub fn perspectiveFovRh(fovy: f32, aspect: f32, near: f32, far: f32) Mat {
     const scfov = sincos(0.5 * fovy);
 
-    assert(near > 0.0 and far > 0.0 and far > near);
+    assert(near > 0.0 and far > 0.0);
     assert(!math.approxEqAbs(f32, scfov[0], 0.0, 0.001));
     assert(!math.approxEqAbs(f32, far, near, 0.001));
     assert(!math.approxEqAbs(f32, aspect, 0.0, 0.01));
@@ -2258,7 +2301,7 @@ pub fn perspectiveFovRh(fovy: f32, aspect: f32, near: f32, far: f32) Mat {
 pub fn perspectiveFovLhGl(fovy: f32, aspect: f32, near: f32, far: f32) Mat {
     const scfov = sincos(0.5 * fovy);
 
-    assert(near > 0.0 and far > 0.0 and far > near);
+    assert(near > 0.0 and far > 0.0);
     assert(!math.approxEqAbs(f32, scfov[0], 0.0, 0.001));
     assert(!math.approxEqAbs(f32, far, near, 0.001));
     assert(!math.approxEqAbs(f32, aspect, 0.0, 0.01));
@@ -2278,7 +2321,7 @@ pub fn perspectiveFovLhGl(fovy: f32, aspect: f32, near: f32, far: f32) Mat {
 pub fn perspectiveFovRhGl(fovy: f32, aspect: f32, near: f32, far: f32) Mat {
     const scfov = sincos(0.5 * fovy);
 
-    assert(near > 0.0 and far > 0.0 and far > near);
+    assert(near > 0.0 and far > 0.0);
     assert(!math.approxEqAbs(f32, scfov[0], 0.0, 0.001));
     assert(!math.approxEqAbs(f32, far, near, 0.001));
     assert(!math.approxEqAbs(f32, aspect, 0.0, 0.01));
@@ -2544,7 +2587,7 @@ pub fn inverseDet(m: Mat, out_det: ?*F32x4) Mat {
         out_det.?.* = det;
     }
 
-    if (math.approxEqAbs(f32, det[0], 0.0, 0.0001)) {
+    if (math.approxEqAbs(f32, det[0], 0.0, math.f32_epsilon)) {
         return .{
             f32x4(0.0, 0.0, 0.0, 0.0),
             f32x4(0.0, 0.0, 0.0, 0.0),
@@ -2957,6 +3000,24 @@ test "zmath.quaternion.inverseQuat" {
     try expect(approxEqAbs(inverse(qidentity()), qidentity(), 0.0001));
 }
 
+// Algorithm from: https://github.com/g-truc/glm/blob/master/glm/detail/type_quat.inl
+pub fn rotate(q: Quat, v: Vec) Vec {
+    const w = splat(F32x4, q[3]);
+    const axis = f32x4(q[0], q[1], q[2], 0.0);
+    const uv = cross3(axis, v);
+    return v + ((uv * w) + cross3(axis, uv)) * splat(F32x4, 2.0);
+}
+test "zmath.quaternion.rotate" {
+    const quat = quatFromRollPitchYaw(0.1 * math.pi, 0.2 * math.pi, 0.3 * math.pi);
+    const mat = matFromQuat(quat);
+    const forward = f32x4(0.0, 0.0, -1.0, 0.0);
+    const up = f32x4(0.0, 1.0, 0.0, 0.0);
+    const right = f32x4(1.0, 0.0, 0.0, 0.0);
+    try expect(approxEqAbs(rotate(quat, forward), mul(forward, mat), 0.0001));
+    try expect(approxEqAbs(rotate(quat, up), mul(up, mat), 0.0001));
+    try expect(approxEqAbs(rotate(quat, right), mul(right, mat), 0.0001));
+}
+
 pub fn slerp(q0: Quat, q1: Quat, t: f32) Quat {
     return slerpV(q0, q1, splat(F32x4, t));
 }
@@ -2986,6 +3047,70 @@ test "zmath.quaternion.slerp" {
     const to = f32x4(0.5, 0.5, -0.5, 0.5);
     const result = slerp(from, to, 0.5);
     try expect(approxEqAbs(result, f32x4(0.28867513, 0.28867513, -0.28867513, 0.86602540), 0.0001));
+}
+
+// Converts q back to euler angles, assuming a YXZ rotation order.
+// See: http://www.euclideanspace.com/maths/geometry/rotations/conversions/quaternionToEuler
+pub fn quatToRollPitchYaw(q: Quat) [3]f32 {
+    var angles: [3]f32 = undefined;
+
+    const p = swizzle(q, .w, .y, .x, .z);
+    const sign = -1.0;
+
+    const singularity = p[0] * p[2] + sign * p[1] * p[3];
+    if (singularity > 0.499) {
+        angles[0] = math.pi * 0.5;
+        angles[1] = 2.0 * math.atan2(f32, p[1], p[0]);
+        angles[2] = 0.0;
+    } else if (singularity < -0.499) {
+        angles[0] = -math.pi * 0.5;
+        angles[1] = 2.0 * math.atan2(f32, p[1], p[0]);
+        angles[2] = 0.0;
+    } else {
+        const sq = p * p;
+        var y = splat(F32x4, 2.0) * f32x4(p[0] * p[1] - sign * p[2] * p[3], p[0] * p[3] - sign * p[1] * p[2], 0.0, 0.0);
+        var x = splat(F32x4, 1.0) - (splat(F32x4, 2.0) * f32x4(sq[1] + sq[2], sq[2] + sq[3], 0.0, 0.0));
+        var res = atan2(y, x);
+        angles[0] = math.asin(2.0 * singularity);
+        angles[1] = res[0];
+        angles[2] = res[1];
+    }
+
+    return angles;
+}
+
+test "zmath.quaternion.quatToRollPitchYaw" {
+    {
+        const expected = f32x4(0.1 * math.pi, 0.2 * math.pi, 0.3 * math.pi, 0.0);
+        const quat = quatFromRollPitchYaw(expected[0], expected[1], expected[2]);
+        const result = quatToRollPitchYaw(quat);
+        try expect(approxEqAbs(loadArr3(result), expected, 0.0001));
+    }
+
+    {
+        const expected = f32x4(0.3 * math.pi, 0.1 * math.pi, 0.2 * math.pi, 0.0);
+        const quat = quatFromRollPitchYaw(expected[0], expected[1], expected[2]);
+        const result = quatToRollPitchYaw(quat);
+        try expect(approxEqAbs(loadArr3(result), expected, 0.0001));
+    }
+
+    // North pole singularity
+    {
+        const angle = f32x4(0.5 * math.pi, 0.2 * math.pi, 0.3 * math.pi, 0.0);
+        const expected = f32x4(0.5 * math.pi, -0.1 * math.pi, 0.0, 0.0);
+        const quat = quatFromRollPitchYaw(angle[0], angle[1], angle[2]);
+        const result = quatToRollPitchYaw(quat);
+        try expect(approxEqAbs(loadArr3(result), expected, 0.0001));
+    }
+
+    // South pole singularity
+    {
+        const angle = f32x4(-0.5 * math.pi, 0.2 * math.pi, 0.3 * math.pi, 0.0);
+        const expected = f32x4(-0.5 * math.pi, 0.5 * math.pi, 0.0, 0.0);
+        const quat = quatFromRollPitchYaw(angle[0], angle[1], angle[2]);
+        const result = quatToRollPitchYaw(quat);
+        try expect(approxEqAbs(loadArr3(result), expected, 0.0001));
+    }
 }
 
 pub fn quatFromRollPitchYaw(pitch: f32, yaw: f32, roll: f32) Quat {
@@ -4260,7 +4385,7 @@ test "zmath.ifft" {
         var re: [128]F32x4 = undefined;
         var im = [_]F32x4{f32x4s(0.0)} ** 128;
 
-        for (re, 0..) |*v, i| {
+        for (&re, 0..) |*v, i| {
             const f = @intToFloat(f32, i * 4);
             v.* = f32x4(f + 1.0, f + 2.0, f + 3.0, f + 4.0);
         }
