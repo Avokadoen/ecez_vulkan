@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const ecez = @import("ecez");
+const ezby = ecez.ezby;
 
 const zgui = @import("zgui");
 const glfw = @import("glfw");
@@ -37,56 +38,53 @@ pub const Scale = struct {
 };
 // TODO: rename "EntityMetadata"
 pub const ObjectMetadata = struct {
-    entity: ecez.Entity,
+    const buffer_len = 127;
+    const hash_len = "##".len + @sizeOf(ecez.Entity);
 
-    id_len: u32,
-    buffer: [64]u8,
+    id_len: u8,
+    id_buffer: [buffer_len]u8,
 
-    inline fn init(name: []const u8, entity: ecez.Entity) ObjectMetadata {
-        const hash_fluff = "##" ++ [_]u8{
-            @intCast(u8, (entity.id) & 0xFF),
-            @intCast(u8, ((entity.id) >> 8) & 0xFF),
-            @intCast(u8, ((entity.id) >> 16) & 0xFF),
-            @intCast(u8, ((entity.id) >> 24) & 0xFF),
-        };
-        var buffer: [64]u8 = undefined;
-        const id_len = name.len + hash_fluff.len;
-        std.debug.assert(buffer.len > id_len);
+    fn init(name: []const u8, entity: ecez.Entity) ObjectMetadata {
+        const id_len = name.len + hash_len;
+        std.debug.assert(id_len < buffer_len);
 
-        std.mem.copy(u8, buffer[0..], name);
-        std.mem.copy(u8, buffer[name.len..], hash_fluff);
-        buffer[id_len] = 0;
+        const hash_fluff = "##" ++ std.mem.asBytes(&entity.id);
+        var id_buffer: [buffer_len]u8 = undefined;
+
+        @memcpy(id_buffer[0..name.len], name);
+        @memcpy(id_buffer[name.len .. name.len + hash_fluff.len], hash_fluff);
+        id_buffer[id_len] = 0;
 
         return ObjectMetadata{
-            .entity = entity,
-            .id_len = @intCast(u32, id_len),
-            .buffer = buffer,
+            .id_len = @intCast(id_len),
+            .id_buffer = id_buffer,
         };
     }
 
-    inline fn rename(self: *ObjectMetadata, name: []const u8) void {
-        const hash_fluff = "##" ++ [_]u8{
-            @intCast(u8, (self.entity.id) & 0xFF),
-            @intCast(u8, ((self.entity.id) >> 8) & 0xFF),
-            @intCast(u8, ((self.entity.id) >> 16) & 0xFF),
-            @intCast(u8, ((self.entity.id) >> 24) & 0xFF),
-        };
-        const id_len = name.len + hash_fluff.len;
-        std.debug.assert(self.buffer.len > id_len);
+    fn rename(self: *ObjectMetadata, name: []const u8) void {
+        const id_len = name.len + hash_len;
+        std.debug.assert(id_len < buffer_len);
 
-        std.mem.copy(u8, self.buffer[0..], name);
-        std.mem.copy(u8, self.buffer[name.len..], hash_fluff);
-        self.buffer[id_len] = 0;
-        self.id_len = @intCast(u32, id_len);
+        // move the hash to its new postion
+        // we could use mem.rotate here for better efficiency, but KISS
+        const hash_start_pos = name.len;
+        var tmp_hash_buffer: [hash_len]u8 = undefined;
+        @memcpy(&tmp_hash_buffer, self.id_buffer[hash_start_pos .. hash_start_pos + id_len]);
+        @memcpy(self.id_buffer[name.len .. name.len + hash_len], &tmp_hash_buffer);
+
+        // copy new name over
+        @memcpy(self.id_buffer[0..name.len], name);
+        self.id_buffer[id_len] = 0;
+        self.id_len = @intCast(id_len);
     }
 
     pub inline fn getId(self: ObjectMetadata) [:0]const u8 {
-        return self.buffer[0..self.id_len :0];
+        return self.id_buffer[0..self.id_len :0];
     }
 
     pub inline fn getDisplayName(self: ObjectMetadata) []const u8 {
         // name - "##xyzw"
-        return self.buffer[0 .. self.id_len - 6];
+        return self.id_buffer[0 .. self.id_len - hash_len];
     }
 };
 
@@ -144,7 +142,7 @@ fn overrideWidgetGenerator(comptime Component: type) ?type {
                             } else if (mesh_handle != mesh_entry.key_ptr.*) {
                                 // TODO: handle errors here and report to user
                                 const new_instance_handle = render_context.getNewInstance(mesh_entry.key_ptr.*) catch unreachable;
-                                editor.ecs.setComponent(persistent_state.selected_entity.?, new_instance_handle) catch unreachable;
+                                editor.storage.setComponent(persistent_state.selected_entity.?, new_instance_handle) catch unreachable;
 
                                 // destroy old instance handle
                                 render_context.destroyInstanceHandle(instance_handle.*);
@@ -225,7 +223,7 @@ fn specializedRemoveHandle(comptime Component: type) ?type {
             pub fn remove(editor: *Editor) !void {
                 const selected_entity = editor.getPersitentState().selected_entity.?;
                 const instance_handle = blk: {
-                    const handle = try editor.ecs.getComponent(selected_entity, InstanceHandle);
+                    const handle = try editor.storage.getComponent(selected_entity, InstanceHandle);
                     break :blk handle;
                 };
                 var render_context = editor.getRenderContext();
@@ -235,7 +233,7 @@ fn specializedRemoveHandle(comptime Component: type) ?type {
 
                 // In the event a remove failed, then the select index is in a inconsistent state
                 // and we do not really have to do anything
-                editor.ecs.removeComponent(selected_entity, Component) catch {
+                editor.storage.removeComponent(selected_entity, Component) catch {
                     // TODO: log here in debug builds
                 };
 
@@ -248,18 +246,19 @@ fn specializedRemoveHandle(comptime Component: type) ?type {
 
 // TODO: it would be nicer here to use PeristentState as event data because it is easier to see when it is changed by systems
 /// Generate the entries of the object list depending on objects in the scene
-pub fn objectListSystem(metadata: *ObjectMetadata, persistent_state: *ecez.SharedState(PersistentState)) void {
+pub fn objectListSystem(entity: ecez.Entity, metadata: *ObjectMetadata, persistent_state: *ecez.SharedState(PersistentState)) void {
     const selected_entity_id = blk: {
         // selected entity is either our persistent user selction, or an invalid/unlikely InstanceHandle.
-        if (persistent_state.selected_entity) |entity| {
-            break :blk entity.id;
+        if (persistent_state.selected_entity) |selected_entity| {
+            break :blk selected_entity.id;
         } else {
             const invalid_entity_id: ecez.EntityId = std.math.maxInt(ecez.EntityId);
-            break :blk @bitCast(ecez.EntityId, invalid_entity_id);
+            break :blk @as(ecez.EntityId, @bitCast(invalid_entity_id));
         }
     };
+
     // if user is renaming the selectable
-    if (persistent_state.object_list.renaming_entity and metadata.entity.id == selected_entity_id) {
+    if (persistent_state.object_list.renaming_entity and entity.id == selected_entity_id) {
 
         // make sure the user can start typing as soon as they initiate renaming
         if (persistent_state.object_list.first_rename_draw) {
@@ -287,7 +286,7 @@ pub fn objectListSystem(metadata: *ObjectMetadata, persistent_state: *ecez.Share
         }
     } else {
         if (zgui.selectable(metadata.getId(), .{
-            .selected = metadata.entity.id == selected_entity_id,
+            .selected = entity.id == selected_entity_id,
             .flags = .{ .allow_double_click = true },
         })) {
             // set object name field to current selection
@@ -300,19 +299,19 @@ pub fn objectListSystem(metadata: *ObjectMetadata, persistent_state: *ecez.Share
 
             persistent_state.object_list.first_rename_draw = true;
             persistent_state.object_list.renaming_entity = zgui.isItemHovered(.{}) and zgui.isMouseDoubleClicked(zgui.MouseButton.left);
-            persistent_state.selected_entity = metadata.entity;
+            persistent_state.selected_entity = entity;
         }
     }
 }
 
 /// Synchronize the state of instance handles so that they have a valid handle according to the running render context
 pub fn importInstanceHandlesSystem(instance_handle: *InstanceHandle, shared_render_context: *ecez.SharedState(RenderContext)) void {
-    var render_context = @ptrCast(*RenderContext, shared_render_context);
+    var render_context = @as(*RenderContext, @ptrCast(shared_render_context));
     // TODO: handle error
     instance_handle.* = render_context.getNewInstance(instance_handle.mesh_handle) catch unreachable;
 }
 
-// TODO: Doing these things for all enitites in the scene is extremely inneficient
+// TODO: Doing these things for all enitites in the scene is extremely inefficient
 //       since the scene editor is "static". This should only be done for the object
 const TransformSystems = struct {
     /// Reset the transform
@@ -339,7 +338,7 @@ const TransformSystems = struct {
 
     /// This system takes each instance handle and transform pair and send the transform to the renderer storage to be rendered
     pub fn propagateToRenderer(instance_handle: InstanceHandle, transform: Transform, render_context: *ecez.SharedState(RenderContext)) void {
-        var _render_context = @ptrCast(*RenderContext, render_context);
+        var _render_context = @as(*RenderContext, @ptrCast(render_context));
         _render_context.setInstanceTransform(instance_handle, transform.mat);
     }
 };
@@ -370,16 +369,16 @@ fn fieldWidget(comptime Component: type, comptime T: type, comptime id_mod: usiz
     const c_id = input_id_buf[0..id.len :0];
     switch (@typeInfo(T)) {
         .Int => {
-            var value = @intCast(i32, field.*);
+            var value = @as(i32, @intCast(field.*));
             if (zgui.inputInt(c_id, .{ .v = &value })) {
-                field.* = @intCast(T, value);
+                field.* = @as(T, @intCast(value));
                 field_changed = true;
             }
         },
         .Float => {
-            var value = @intCast(f32, field.*);
+            var value = @as(f32, @intCast(field.*));
             if (zgui.inputFloat(c_id, .{ .v = &value })) {
-                field.* = @intCast(T, value);
+                field.* = @as(T, @intCast(value));
                 field_changed = true;
             }
         },
@@ -388,13 +387,13 @@ fn fieldWidget(comptime Component: type, comptime T: type, comptime id_mod: usiz
                 .Float => {
                     var values: [array_info.len]f32 = undefined;
                     for (&values, 0..) |*value, j| {
-                        value.* = @floatCast(f32, field.*[j]);
+                        value.* = @as(f32, @floatCast(field.*[j]));
                     }
 
                     var array_input = false;
                     switch (array_info.len) {
                         1 => {
-                            var value = @intCast(f32, field.*);
+                            var value = @as(f32, @intCast(field.*));
                             if (zgui.inputFloat(c_id, .{ .v = &value })) {
                                 array_input = true;
                             }
@@ -419,7 +418,7 @@ fn fieldWidget(comptime Component: type, comptime T: type, comptime id_mod: usiz
                     if (array_input) {
                         field_changed = true;
                         for (values, 0..) |value, j| {
-                            field.*[j] = @floatCast(array_info.child, value);
+                            field.*[j] = @as(array_info.child, @floatCast(value));
                         }
                     }
                 },
@@ -431,13 +430,13 @@ fn fieldWidget(comptime Component: type, comptime T: type, comptime id_mod: usiz
                     } else {
                         var values: [array_info.len]i32 = undefined;
                         for (values, 0..) |*value, j| {
-                            value.* = @floatCast(i32, field.*[j]);
+                            value.* = @as(i32, @floatCast(field.*[j]));
                         }
 
                         var array_input = false;
                         switch (array_info.len) {
                             1 => {
-                                var value = @intCast(i32, field.*);
+                                var value = @as(i32, @intCast(field.*));
                                 if (zgui.inputFloat(c_id, .{ .v = &value })) {
                                     array_input = true;
                                 }
@@ -462,7 +461,7 @@ fn fieldWidget(comptime Component: type, comptime T: type, comptime id_mod: usiz
                         if (array_input) {
                             field_changed = true;
                             for (values, 0..) |value, j| {
-                                field.*[j] = @floatCast(array_info.child, value);
+                                field.*[j] = @as(array_info.child, @floatCast(value));
                             }
                         }
                     }
@@ -481,7 +480,7 @@ fn fieldWidget(comptime Component: type, comptime T: type, comptime id_mod: usiz
                 .Float => {
                     var values: [vec_info.len]f32 = undefined;
                     for (&values, 0..) |*value, j| {
-                        value.* = @floatCast(f32, field.*[j]);
+                        value.* = @as(f32, @floatCast(field.*[j]));
                     }
 
                     if (fieldWidget(Component, @TypeOf(values), id_mod << 1, &values)) {
@@ -495,7 +494,7 @@ fn fieldWidget(comptime Component: type, comptime T: type, comptime id_mod: usiz
                 .Int => {
                     var values: [vec_info.len]i32 = undefined;
                     for (&values, 0..) |*value, j| {
-                        value.* = @floatCast(i32, field.*[j]);
+                        value.* = @as(i32, @floatCast(field.*[j]));
                     }
 
                     if (fieldWidget(Component, @TypeOf(values), id_mod << 1, &values)) {
@@ -521,13 +520,13 @@ fn fieldWidget(comptime Component: type, comptime T: type, comptime id_mod: usiz
 
 const PersistentState = struct {
     const ObjectList = struct {
-        renaming_buffer: [64]u8,
+        renaming_buffer: [128]u8,
         first_rename_draw: bool,
         renaming_entity: bool,
     };
 
     const ObjectInspector = struct {
-        name_buffer: [64]u8,
+        name_buffer: [128]u8,
         selected_component_index: usize,
     };
 
@@ -550,7 +549,7 @@ const PersistentState = struct {
     add_component_modal: AddComponentModal,
 };
 
-const World = ecez.WorldBuilder().WithComponents(.{
+const Storage = ecez.CreateStorage(.{
     // TODO: generate this!
     fake_components[0],
     fake_components[1],
@@ -558,10 +557,13 @@ const World = ecez.WorldBuilder().WithComponents(.{
     fake_components[3],
     fake_components[4],
     fake_components[5],
-}).WithSharedState(.{
+}, .{
     PersistentState,
     RenderContext,
-}).WithEvents(.{
+});
+
+// TODO: convert draw_object_list and on_import to simple queries inline
+const Scheduler = ecez.CreateScheduler(Storage, .{
     // event to draw all objects in the scene as an item in a list
     ecez.Event("draw_object_list", .{objectListSystem}, .{}),
     // event to apply all transformation and update render buffers as needed
@@ -575,7 +577,7 @@ const World = ecez.WorldBuilder().WithComponents(.{
     ecez.Event("on_import", .{
         importInstanceHandlesSystem,
     }, .{}),
-}).Build();
+});
 
 // TODO: editor should not be part of renderer
 
@@ -594,7 +596,8 @@ resize_nesw: glfw.Cursor,
 resize_nwse: glfw.Cursor,
 not_allowed: glfw.Cursor,
 
-ecs: World,
+storage: Storage,
+scheduler: Scheduler,
 
 pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers: []const MeshInstancehInitializeContex) !Editor {
     var render_context = try RenderContext.init(allocator, window, mesh_instance_initalizers, .{
@@ -646,8 +649,6 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
         persistent_state.mesh_names.putAssumeCapacity(mesh_handle, mesh_name_mem[0..only_file_name.len :0]);
     }
 
-    const ecs = try World.init(allocator, .{ persistent_state, render_context });
-
     // Color scheme
     const StyleCol = zgui.StyleCol;
     const style = zgui.getStyle();
@@ -676,6 +677,10 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
     const not_allowed = glfw.Cursor.createStandard(.not_allowed) orelse return error.CreateCursorFailed;
     errdefer not_allowed.destroy();
 
+    // initialize our ecs api
+    var storage = try Storage.init(allocator, .{ persistent_state, render_context });
+    const scheduler = Scheduler.init();
+
     return Editor{
         .allocator = allocator,
         .pointing_hand = pointing_hand,
@@ -687,49 +692,56 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
         .resize_nesw = resize_nesw,
         .resize_nwse = resize_nwse,
         .not_allowed = not_allowed,
-        .ecs = ecs,
+        .storage = storage,
+        .scheduler = scheduler,
     };
 }
 
 pub fn exportToFile(self: *Editor, file_name: []const u8) !void {
-    const ecs_bytes = try self.ecs.serialize(self.allocator);
-    defer self.allocator.free(ecs_bytes);
+    const ezby_stream = try ezby.serialize(Storage, self.allocator, self.storage, .{});
+    defer self.allocator.free(ezby_stream);
 
     // TODO: this is an horrible idea since we don't know if the write will be sucessfull
-    // delete file if it exist to make sure we don't
+    // delete file if it exist already
     std.fs.cwd().deleteFile(file_name) catch |err| switch (err) {
         error.FileNotFound => {}, // ok
         else => return err,
     };
 
-    try std.fs.cwd().writeFile(file_name, ecs_bytes);
+    try std.fs.cwd().writeFile(file_name, ezby_stream);
 }
 
 pub fn importFromFile(self: *Editor, file_name: []const u8) !void {
     var scene_file = try std.fs.cwd().openFile(file_name, .{});
     defer scene_file.close();
 
+    // prealloc file bytes
     const file_metadata = try scene_file.metadata();
     const file_bytes = try self.allocator.alloc(u8, file_metadata.size());
     defer self.allocator.free(file_bytes);
 
-    const read_bytes = try scene_file.read(file_bytes);
-    std.debug.assert(read_bytes == file_bytes.len);
-    try self.ecs.deserialize(file_bytes);
+    // read file bytes
+    const read_bytes_count = try scene_file.read(file_bytes);
+    std.debug.assert(read_bytes_count == file_bytes.len);
+
+    // deserialize bytes into the ecs storage
+    try ezby.deserialize(Storage, &self.storage, file_bytes);
 
     // restart the render context to make sure all required instances has and appropriate handle
     var render_context = self.getRenderContext();
     render_context.clearInstancesRetainingCapacity();
 
-    try self.ecs.triggerEvent(.on_import, .{});
-    self.ecs.waitEvent(.on_import);
+    // this will make each render instance component get a new handle from the renderer
+    self.scheduler.dispatchEvent(&self.storage, .on_import, .{}, .{});
+    self.scheduler.waitEvent(.on_import);
 
+    // propagate all the changes to the GPU
     try self.forceFlush();
 }
 
 pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
     const frame_size = window.getFramebufferSize();
-    zgui.io.setDisplaySize(@intToFloat(f32, frame_size.width), @intToFloat(f32, frame_size.height));
+    zgui.io.setDisplaySize(@as(f32, @floatFromInt(frame_size.width)), @as(f32, @floatFromInt(frame_size.height)));
     zgui.io.setDisplayFramebufferScale(1.0, 1.0);
 
     // NOTE: getting cursor must be done before calling zgui.newFrame
@@ -872,9 +884,9 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
         // define Object List
         {
-            const width = @intToFloat(f32, frame_size.width) / 6;
+            const width = @as(f32, @floatFromInt(frame_size.width)) / 6;
 
-            zgui.setNextWindowSize(.{ .w = width, .h = @intToFloat(f32, frame_size.height), .cond = .always });
+            zgui.setNextWindowSize(.{ .w = width, .h = @as(f32, @floatFromInt(frame_size.height)), .cond = .always });
             zgui.setNextWindowPos(.{ .x = 0, .y = header_height, .cond = .always });
             _ = zgui.begin("Object List", .{ .popen = null, .flags = .{
                 .menu_bar = false,
@@ -895,17 +907,17 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                     try self.createNewEntityMenu();
                 }
 
-                try self.ecs.triggerEvent(.draw_object_list, .{});
-                self.ecs.waitEvent(.draw_object_list);
+                self.scheduler.dispatchEvent(&self.storage, .draw_object_list, .{}, .{});
+                self.scheduler.waitEvent(.draw_object_list);
             }
         }
 
         // define Object Inspector
         {
-            const width = @intToFloat(f32, frame_size.width) / 6;
+            const width = @as(f32, @floatFromInt(frame_size.width)) / 6;
 
-            zgui.setNextWindowSize(.{ .w = width, .h = @intToFloat(f32, frame_size.height), .cond = .always });
-            zgui.setNextWindowPos(.{ .x = @intToFloat(f32, frame_size.width) - width, .y = header_height, .cond = .always });
+            zgui.setNextWindowSize(.{ .w = width, .h = @as(f32, @floatFromInt(frame_size.height)), .cond = .always });
+            zgui.setNextWindowPos(.{ .x = @as(f32, @floatFromInt(frame_size.width)) - width, .y = header_height, .cond = .always });
             _ = zgui.begin("Object Inspector", .{ .popen = null, .flags = .{
                 .menu_bar = false,
                 .no_move = true,
@@ -927,9 +939,9 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                     const new_len = std.mem.indexOf(u8, &persistent_state.object_inspector.name_buffer, &[_]u8{0}).?;
 
                     if (new_len > 0) {
-                        var metadata = try self.ecs.getComponent(selected_entity, ObjectMetadata);
+                        var metadata = try self.storage.getComponent(selected_entity, ObjectMetadata);
                         metadata.rename(persistent_state.object_inspector.name_buffer[0..new_len]);
-                        try self.ecs.setComponent(selected_entity, metadata);
+                        try self.storage.setComponent(selected_entity, metadata);
                     }
                 }
 
@@ -940,7 +952,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                     defer zgui.endListBox();
 
                     inline for (fake_components, 0..) |Component, comp_index| {
-                        if (self.ecs.hasComponent(selected_entity, Component)) {
+                        if (self.storage.hasComponent(selected_entity, Component)) {
                             if (zgui.selectable(@typeName(Component), .{ .selected = comp_index == persistent_state.object_inspector.selected_component_index })) {
                                 persistent_state.object_inspector.selected_component_index = comp_index;
                             }
@@ -973,7 +985,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                             // you can never add a ObjectMetadata
                             if (Component == ObjectMetadata) continue;
 
-                            if (self.ecs.hasComponent(selected_entity, Component) == false) {
+                            if (self.storage.hasComponent(selected_entity, Component) == false) {
                                 // if the component index is not set, then we set it to current component index
                                 if (persistent_state.add_component_modal.selected_component_index == fake_components.len) {
                                     persistent_state.add_component_modal.selected_component_index = comp_index;
@@ -1000,10 +1012,10 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                                 if (comp_index == persistent_state.add_component_modal.selected_component_index) {
                                     zgui.text("{s}:", .{@typeName(Component)});
 
-                                    const component_ptr = blk: {
+                                    const component_ptr: *Component = blk: {
                                         // @setRuntimeSafety(false);
                                         const ptr = std.mem.bytesAsValue(Component, persistent_state.add_component_modal.component_bytes[0..@sizeOf(Component)]);
-                                        break :blk @alignCast(@alignOf(Component), ptr);
+                                        break :blk @alignCast(ptr);
                                     };
 
                                     // if component has specialized widget
@@ -1025,15 +1037,15 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                                 if (Component == ObjectMetadata) continue;
 
                                 if (comp_index == persistent_state.add_component_modal.selected_component_index) {
-                                    const component = @ptrCast(
+                                    const component = @as(
                                         *Component,
-                                        @alignCast(@alignOf(Component), &persistent_state.add_component_modal.component_bytes),
+                                        @ptrCast(@alignCast(&persistent_state.add_component_modal.component_bytes)),
                                     );
 
                                     if (specializedAddHandle(Component)) |add_handle| {
                                         try add_handle.add(self, component);
                                     } else {
-                                        try self.ecs.setComponent(selected_entity, component.*);
+                                        try self.storage.setComponent(selected_entity, component.*);
                                     }
 
                                     try self.forceFlush();
@@ -1075,7 +1087,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                                 } else {
                                     // In the event a remove failed, then the select index is in a inconsistent state
                                     // and we do not really have to do anything
-                                    self.ecs.removeComponent(selected_entity, Component) catch {
+                                    self.storage.removeComponent(selected_entity, Component) catch {
                                         // TODO: log here in debug builds
                                     };
                                 }
@@ -1095,11 +1107,11 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                         continue :comp_iter;
                     }
 
-                    if (self.ecs.hasComponent(selected_entity, Component)) {
+                    if (self.storage.hasComponent(selected_entity, Component)) {
                         zgui.separator();
                         zgui.text("{s}:", .{@typeName(Component)});
 
-                        var component = self.ecs.getComponent(selected_entity, Component) catch unreachable;
+                        var component = self.storage.getComponent(selected_entity, Component) catch unreachable;
                         var changed = false;
                         // if component has specialized widget
                         if (overrideWidgetGenerator(Component)) |Override| {
@@ -1111,7 +1123,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                         }
 
                         if (changed) {
-                            try self.ecs.setComponent(selected_entity, component);
+                            try self.storage.setComponent(selected_entity, component);
                             try self.forceFlush();
                         }
 
@@ -1127,6 +1139,8 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 }
 
 pub fn deinit(self: *Editor) void {
+    self.scheduler.waitIdle();
+
     const persistent_state = self.getPersitentState();
     for (persistent_state.mesh_names.values()) |mesh_name| {
         self.allocator.free(mesh_name);
@@ -1144,7 +1158,7 @@ pub fn deinit(self: *Editor) void {
     self.not_allowed.destroy();
 
     self.getRenderContext().deinit(self.allocator);
-    self.ecs.deinit();
+    self.storage.deinit();
 }
 
 pub fn handleFramebufferResize(self: *Editor, window: glfw.Window) void {
@@ -1184,7 +1198,7 @@ pub fn charCallback(window: glfw.Window, codepoint: u21) void {
     const len = std.unicode.utf8Encode(codepoint, buffer[0..]) catch return;
     const cstr = buffer[0 .. len + 1];
     cstr[len] = 0; // null terminator
-    zgui.io.addInputCharactersUTF8(@ptrCast([*:0]const u8, cstr.ptr));
+    zgui.io.addInputCharactersUTF8(@as([*:0]const u8, @ptrCast(cstr.ptr)));
 }
 
 pub fn mouseButtonCallback(window: glfw.Window, button: glfw.MouseButton, action: glfw.Action, mods: glfw.Mods) void {
@@ -1209,13 +1223,13 @@ pub fn mouseButtonCallback(window: glfw.Window, button: glfw.MouseButton, action
 pub fn cursorPosCallback(window: glfw.Window, xpos: f64, ypos: f64) void {
     _ = window;
 
-    zgui.io.addMousePositionEvent(@floatCast(f32, xpos), @floatCast(f32, ypos));
+    zgui.io.addMousePositionEvent(@as(f32, @floatCast(xpos)), @as(f32, @floatCast(ypos)));
 }
 
 pub fn scrollCallback(window: glfw.Window, xoffset: f64, yoffset: f64) void {
     _ = window;
 
-    zgui.io.addMouseWheelEvent(@floatCast(f32, xoffset), @floatCast(f32, yoffset));
+    zgui.io.addMouseWheelEvent(@as(f32, @floatCast(xoffset)), @as(f32, @floatCast(yoffset)));
 }
 
 pub fn getNthMeshHandle(self: *Editor, nth: usize) MeshHandle {
@@ -1223,16 +1237,16 @@ pub fn getNthMeshHandle(self: *Editor, nth: usize) MeshHandle {
 }
 
 pub fn newSceneEntity(self: *Editor, name: []const u8) !ecez.Entity {
-    const entity = try self.ecs.createEntity(.{});
+    const entity = try self.storage.createEntity(.{});
     var metadata = ObjectMetadata.init(name, entity);
-    try self.ecs.setComponent(entity, metadata);
+    try self.storage.setComponent(entity, metadata);
 
     return entity;
 }
 
 /// This function retrieves a instance handle from the renderer and assigns it to the argument entity
 pub fn assignEntityMeshInstance(self: *Editor, entity: ecez.Entity, mesh_handle: MeshHandle) !void {
-    if (self.ecs.hasComponent(entity, InstanceHandle)) {
+    if (self.storage.hasComponent(entity, InstanceHandle)) {
         return error.EntityAlreadyHasInstance;
     }
 
@@ -1242,13 +1256,13 @@ pub fn assignEntityMeshInstance(self: *Editor, entity: ecez.Entity, mesh_handle:
         std.debug.panic("attemped to get new instance {d} failed with error {any}", .{ mesh_handle, err });
     };
 
-    try self.ecs.setComponent(entity, new_instance);
+    try self.storage.setComponent(entity, new_instance);
 }
 
 pub fn renameEntity(self: *Editor, entity: ecez.Entity, name: []const u8) !void {
-    var metadata = try self.ecs.getComponent(entity, ObjectMetadata);
+    var metadata = try self.storage.getComponent(entity, ObjectMetadata);
     metadata.rename(name);
-    try self.ecs.setComponent(entity, metadata);
+    try self.storage.setComponent(entity, metadata);
 }
 
 pub fn getMeshNames(self: *Editor) []const [:0]const u8 {
@@ -1286,16 +1300,16 @@ pub fn createNewVisbleObject(
     try self.assignEntityMeshInstance(new_entity, mesh_handle);
 
     if (config.position) |position| {
-        try self.ecs.setComponent(new_entity, position);
+        try self.storage.setComponent(new_entity, position);
     }
     if (config.rotation) |rotation| {
-        try self.ecs.setComponent(new_entity, rotation);
+        try self.storage.setComponent(new_entity, rotation);
     }
     if (config.scale) |scale| {
-        try self.ecs.setComponent(new_entity, scale);
+        try self.storage.setComponent(new_entity, scale);
     }
     // new visible object must have a transform component to be visible in the scene
-    try self.ecs.setComponent(new_entity, Editor.Transform{ .mat = undefined });
+    try self.storage.setComponent(new_entity, Editor.Transform{ .mat = undefined });
 
     // Make sure editor updates renderer after we have set some render state programatically.
     // This is highly sub-optimal and should not be done in any hot loop
@@ -1305,8 +1319,8 @@ pub fn createNewVisbleObject(
 }
 
 inline fn forceFlush(self: *Editor) !void {
-    try self.ecs.triggerEvent(.transform_update, .{});
-    self.ecs.waitEvent(.transform_update);
+    self.scheduler.dispatchEvent(&self.storage, .transform_update, .{}, .{});
+    self.scheduler.waitEvent(.transform_update);
     self.signalRenderUpdate();
 }
 
@@ -1331,11 +1345,11 @@ inline fn createNewEntityMenu(self: *Editor) !void {
 }
 
 inline fn getRenderContext(self: *Editor) *RenderContext {
-    return @ptrCast(*RenderContext, self.ecs.getSharedStatePtrWithSharedStateType(*ecez.SharedState(RenderContext)));
+    return @as(*RenderContext, @ptrCast(self.storage.getSharedStatePtrWithSharedStateType(*ecez.SharedState(RenderContext))));
 }
 
 inline fn getPersitentState(self: *Editor) *PersistentState {
-    return @ptrCast(*PersistentState, self.ecs.getSharedStatePtrWithSharedStateType(*ecez.SharedState(PersistentState)));
+    return @as(*PersistentState, @ptrCast(self.storage.getSharedStatePtrWithSharedStateType(*ecez.SharedState(PersistentState))));
 }
 
 const MarkerType = enum {

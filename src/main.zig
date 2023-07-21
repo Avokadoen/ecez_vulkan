@@ -74,7 +74,7 @@ pub fn main() !void {
         glfw.pollEvents();
 
         const now = std.time.microTimestamp();
-        const delta_time = @max(@intToFloat(f32, now - then) / std.time.us_per_s, 0.000001);
+        const delta_time = @max(@as(f32, @floatFromInt(now - then)) / std.time.us_per_s, 0.000001);
         then = now;
 
         try editor.newFrame(window, delta_time);

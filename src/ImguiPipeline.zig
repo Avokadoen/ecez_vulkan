@@ -85,9 +85,9 @@ pub fn init(
             .image_type = .@"2d",
             .format = font_image_format,
             .extent = .{
-                .width = @intCast(u32, font_atlas_width),
-                .height = @intCast(u32, font_atlas_height),
-                .depth = @intCast(u32, 1),
+                .width = @as(u32, @intCast(font_atlas_width)),
+                .height = @as(u32, @intCast(font_atlas_height)),
+                .depth = @as(u32, @intCast(1)),
             },
             .mip_levels = 1,
             .array_layers = 1,
@@ -152,11 +152,11 @@ pub fn init(
     try image_staging_buffer.scheduleTransferToDst(
         font_image,
         vk.Extent2D{
-            .width = @intCast(u32, font_atlas_width),
-            .height = @intCast(u32, font_atlas_height),
+            .width = @as(u32, @intCast(font_atlas_width)),
+            .height = @as(u32, @intCast(font_atlas_height)),
         },
         u32,
-        font_atlas_pixels[0..@intCast(usize, font_atlas_width * font_atlas_height)],
+        font_atlas_pixels[0..@as(usize, @intCast(font_atlas_width * font_atlas_height))],
     );
     try image_staging_buffer.scheduleLayoutTransitionAfterTransfers(font_image, .{
         .format = font_image_format,
@@ -196,7 +196,7 @@ pub fn init(
             .flags = .{},
             .max_sets = swapchain_count,
             .pool_size_count = pool_sizes.len,
-            .p_pool_sizes = @ptrCast([*]const vk.DescriptorPoolSize, &pool_sizes),
+            .p_pool_sizes = @as([*]const vk.DescriptorPoolSize, @ptrCast(&pool_sizes)),
         };
         break :blk try vkd.createDescriptorPool(device, &descriptor_pool_info, null);
     };
@@ -215,7 +215,7 @@ pub fn init(
         const set_layout_info = vk.DescriptorSetLayoutCreateInfo{
             .flags = .{},
             .binding_count = set_layout_bindings.len,
-            .p_bindings = @ptrCast([*]const vk.DescriptorSetLayoutBinding, &set_layout_bindings),
+            .p_bindings = @as([*]const vk.DescriptorSetLayoutBinding, @ptrCast(&set_layout_bindings)),
         };
         break :blk try vkd.createDescriptorSetLayout(device, &set_layout_info, null);
     };
@@ -225,13 +225,13 @@ pub fn init(
         const alloc_info = vk.DescriptorSetAllocateInfo{
             .descriptor_pool = descriptor_pool,
             .descriptor_set_count = 1,
-            .p_set_layouts = @ptrCast([*]const vk.DescriptorSetLayout, &descriptor_set_layout),
+            .p_set_layouts = @as([*]const vk.DescriptorSetLayout, @ptrCast(&descriptor_set_layout)),
         };
         var descriptor_set_tmp: vk.DescriptorSet = undefined;
         try vkd.allocateDescriptorSets(
             device,
             &alloc_info,
-            @ptrCast([*]vk.DescriptorSet, &descriptor_set_tmp),
+            @as([*]vk.DescriptorSet, @ptrCast(&descriptor_set_tmp)),
         );
         break :blk descriptor_set_tmp;
     };
@@ -248,14 +248,14 @@ pub fn init(
             .dst_array_element = 0,
             .descriptor_count = 1,
             .descriptor_type = .combined_image_sampler,
-            .p_image_info = @ptrCast([*]const vk.DescriptorImageInfo, &descriptor_info),
+            .p_image_info = @as([*]const vk.DescriptorImageInfo, @ptrCast(&descriptor_info)),
             .p_buffer_info = undefined,
             .p_texel_buffer_view = undefined,
         }};
         vkd.updateDescriptorSets(
             device,
             write_descriptor_sets.len,
-            @ptrCast([*]const vk.WriteDescriptorSet, &write_descriptor_sets),
+            @as([*]const vk.WriteDescriptorSet, @ptrCast(&write_descriptor_sets)),
             0,
             undefined,
         );
@@ -270,9 +270,9 @@ pub fn init(
         const pipeline_layout_info = vk.PipelineLayoutCreateInfo{
             .flags = .{},
             .set_layout_count = 1,
-            .p_set_layouts = @ptrCast([*]const vk.DescriptorSetLayout, &descriptor_set_layout),
+            .p_set_layouts = @as([*]const vk.DescriptorSetLayout, @ptrCast(&descriptor_set_layout)),
             .push_constant_range_count = 1,
-            .p_push_constant_ranges = @ptrCast([*]const vk.PushConstantRange, &push_constant_range),
+            .p_push_constant_ranges = @as([*]const vk.PushConstantRange, @ptrCast(&push_constant_range)),
         };
         break :blk try vkd.createPipelineLayout(device, &pipeline_layout_info, null);
     };
@@ -344,8 +344,8 @@ pub fn init(
         const viewport = vk.Viewport{
             .x = 0,
             .y = 0,
-            .width = @intToFloat(f32, swapchain_extent.width),
-            .height = @intToFloat(f32, swapchain_extent.height),
+            .width = @as(f32, @floatFromInt(swapchain_extent.width)),
+            .height = @as(f32, @floatFromInt(swapchain_extent.height)),
             .min_depth = 0,
             .max_depth = 1,
         };
@@ -364,9 +364,9 @@ pub fn init(
         const viewport_state_info = vk.PipelineViewportStateCreateInfo{
             .flags = .{},
             .viewport_count = 1,
-            .p_viewports = @ptrCast([*]const vk.Viewport, &viewport),
+            .p_viewports = @as([*]const vk.Viewport, @ptrCast(&viewport)),
             .scissor_count = 1,
-            .p_scissors = @ptrCast([*]const vk.Rect2D, &scissor),
+            .p_scissors = @as([*]const vk.Rect2D, @ptrCast(&scissor)),
         };
 
         const rasterization_state_info = vk.PipelineRasterizationStateCreateInfo{
@@ -414,7 +414,7 @@ pub fn init(
             .logic_op_enable = vk.FALSE,
             .logic_op = .clear,
             .attachment_count = 1,
-            .p_attachments = @ptrCast([*]const vk.PipelineColorBlendAttachmentState, &color_blend_attachment),
+            .p_attachments = @as([*]const vk.PipelineColorBlendAttachmentState, @ptrCast(&color_blend_attachment)),
             .blend_constants = [4]f32{ 0, 0, 0, 0 },
         };
 
@@ -444,9 +444,9 @@ pub fn init(
             device,
             .null_handle,
             1,
-            @ptrCast([*]const vk.GraphicsPipelineCreateInfo, &pipeline_info),
+            @as([*]const vk.GraphicsPipelineCreateInfo, @ptrCast(&pipeline_info)),
             null,
-            @ptrCast([*]vk.Pipeline, &pipeline),
+            @as([*]vk.Pipeline, @ptrCast(&pipeline)),
         );
     }
     errdefer vkd.destroyPipeline(device, pipeline, null);
@@ -506,7 +506,7 @@ pub inline fn updateDisplay(self: ImguiPipeline, swapchain_extent: vk.Extent2D) 
     _ = self;
 
     // update gui state
-    zgui.io.setDisplaySize(@intToFloat(f32, swapchain_extent.width), @intToFloat(f32, swapchain_extent.height));
+    zgui.io.setDisplaySize(@as(f32, @floatFromInt(swapchain_extent.width)), @as(f32, @floatFromInt(swapchain_extent.height)));
     zgui.io.setDisplayFramebufferScale(1.0, 1.0);
 }
 
@@ -530,8 +530,8 @@ inline fn updateBuffers(self: *ImguiPipeline, vkd: DeviceDispatch, device: vk.De
     const vertex_count = draw_data.total_vtx_count;
     const index_count = draw_data.total_idx_count;
 
-    const vertex_size = @intCast(vk.DeviceSize, vertex_count * @sizeOf(zgui.DrawVert));
-    const index_size = @intCast(vk.DeviceSize, index_count * @sizeOf(zgui.DrawIdx));
+    const vertex_size = @as(vk.DeviceSize, @intCast(vertex_count * @sizeOf(zgui.DrawVert)));
+    const index_size = @as(vk.DeviceSize, @intCast(index_count * @sizeOf(zgui.DrawIdx)));
 
     if (index_size == 0 or vertex_size == 0) {
         return; // nothing to draw
@@ -546,22 +546,22 @@ inline fn updateBuffers(self: *ImguiPipeline, vkd: DeviceDispatch, device: vk.De
         // update current frame index_offset
         self.index_buffer_offsets[current_frame] = index_offset;
 
-        const command_lists = draw_data.cmd_lists[0..@intCast(usize, draw_data.cmd_lists_count)];
+        const command_lists = draw_data.cmd_lists[0..@as(usize, @intCast(draw_data.cmd_lists_count))];
         for (command_lists) |command_list| {
             // transfer vertex data for this command list
             {
                 const vertex_buffer_length = command_list.getVertexBufferLength();
-                const vertex_buffer_data = command_list.getVertexBufferData()[0..@intCast(usize, vertex_buffer_length)];
+                const vertex_buffer_data = command_list.getVertexBufferData()[0..@as(usize, @intCast(vertex_buffer_length))];
                 try self.vertex_index_buffer.scheduleTransfer(vertex_offset, zgui.DrawVert, vertex_buffer_data);
-                vertex_offset += @intCast(vk.DeviceSize, @sizeOf(zgui.DrawVert) * vertex_buffer_length);
+                vertex_offset += @as(vk.DeviceSize, @intCast(@sizeOf(zgui.DrawVert) * vertex_buffer_length));
             }
 
             // transfer index data for this command list
             {
                 const index_buffer_length = command_list.getIndexBufferLength();
-                const index_buffer_data = command_list.getIndexBufferData()[0..@intCast(usize, index_buffer_length)];
+                const index_buffer_data = command_list.getIndexBufferData()[0..@as(usize, @intCast(index_buffer_length))];
                 try self.vertex_index_buffer.scheduleTransfer(index_offset, zgui.DrawIdx, index_buffer_data);
-                index_offset += @intCast(vk.DeviceSize, @sizeOf(zgui.DrawIdx) * index_buffer_length);
+                index_offset += @as(vk.DeviceSize, @intCast(@sizeOf(zgui.DrawIdx) * index_buffer_length));
             }
         }
         // send changes to GPU
@@ -602,7 +602,7 @@ inline fn recordCommandBuffer(self: ImguiPipeline, vkd: DeviceDispatch, command_
         self.pipeline_layout,
         0,
         1,
-        @ptrCast([*]const vk.DescriptorSet, &self.descriptor_set),
+        @as([*]const vk.DescriptorSet, @ptrCast(&self.descriptor_set)),
         0,
         undefined,
     );
@@ -614,7 +614,7 @@ inline fn recordCommandBuffer(self: ImguiPipeline, vkd: DeviceDispatch, command_
         .min_depth = 0,
         .max_depth = 1,
     };
-    vkd.cmdSetViewport(command_buffer, 0, 1, @ptrCast([*]const vk.Viewport, &viewport));
+    vkd.cmdSetViewport(command_buffer, 0, 1, @as([*]const vk.Viewport, @ptrCast(&viewport)));
 
     // UI scale and translate via push constants
     const push_constant = PushConstant{
@@ -631,7 +631,7 @@ inline fn recordCommandBuffer(self: ImguiPipeline, vkd: DeviceDispatch, command_
             command_buffer,
             0,
             1,
-            @ptrCast([*]const vk.Buffer, &self.vertex_index_buffer.buffer),
+            @as([*]const vk.Buffer, @ptrCast(&self.vertex_index_buffer.buffer)),
             self.vertex_buffer_offsets[current_frame..].ptr,
         );
         vkd.cmdBindIndexBuffer(
@@ -644,27 +644,27 @@ inline fn recordCommandBuffer(self: ImguiPipeline, vkd: DeviceDispatch, command_
         // Render commands
         var vertex_offset: i32 = 0;
         var index_offset: u32 = 0;
-        const command_lists = draw_data.cmd_lists[0..@intCast(usize, draw_data.cmd_lists_count)];
+        const command_lists = draw_data.cmd_lists[0..@as(usize, @intCast(draw_data.cmd_lists_count))];
         for (command_lists) |command_list| {
             const command_buffer_length = command_list.getCmdBufferLength();
             const command_buffer_data = command_list.getCmdBufferData();
 
-            for (command_buffer_data[0..@intCast(usize, command_buffer_length)]) |draw_command| {
+            for (command_buffer_data[0..@as(usize, @intCast(command_buffer_length))]) |draw_command| {
                 const X = 0;
                 const Y = 1;
                 const Z = 2;
                 const W = 3;
                 const scissor_rect = vk.Rect2D{
                     .offset = .{
-                        .x = @max(@floatToInt(i32, draw_command.clip_rect[X]), 0),
-                        .y = @max(@floatToInt(i32, draw_command.clip_rect[Y]), 0),
+                        .x = @max(@as(i32, @intFromFloat(draw_command.clip_rect[X])), 0),
+                        .y = @max(@as(i32, @intFromFloat(draw_command.clip_rect[Y])), 0),
                     },
                     .extent = .{
-                        .width = @floatToInt(u32, draw_command.clip_rect[Z] - draw_command.clip_rect[X]),
-                        .height = @floatToInt(u32, draw_command.clip_rect[W] - draw_command.clip_rect[Y]),
+                        .width = @as(u32, @intFromFloat(draw_command.clip_rect[Z] - draw_command.clip_rect[X])),
+                        .height = @as(u32, @intFromFloat(draw_command.clip_rect[W] - draw_command.clip_rect[Y])),
                     },
                 };
-                vkd.cmdSetScissor(command_buffer, 0, 1, @ptrCast([*]const vk.Rect2D, &scissor_rect));
+                vkd.cmdSetScissor(command_buffer, 0, 1, @as([*]const vk.Rect2D, @ptrCast(&scissor_rect)));
                 vkd.cmdDrawIndexed(
                     command_buffer,
                     draw_command.elem_count,

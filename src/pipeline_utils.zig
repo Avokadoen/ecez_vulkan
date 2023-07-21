@@ -29,7 +29,7 @@ pub inline fn createShaderModule(vkd: DeviceDispatch, device: vk.Device, shader_
     const create_info = vk.ShaderModuleCreateInfo{
         .flags = .{},
         .code_size = shader_code.len,
-        .p_code = @ptrCast([*]const u32, @alignCast(@alignOf(u32), shader_code.ptr)),
+        .p_code = @as([*]const u32, @ptrCast(@alignCast(shader_code.ptr))),
     };
     return vkd.createShaderModule(device, &create_info, null);
 }
