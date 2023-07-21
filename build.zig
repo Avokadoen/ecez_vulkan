@@ -12,7 +12,7 @@ const ecez = @import("deps/ecez/build.zig");
 const zmath = @import("deps/zmath/build.zig");
 const zmesh = @import("deps/zmesh/build.zig");
 const zgui = @import("deps/zgui/build.zig");
-const glfw = @import("deps/mach-glfw/build.zig");
+const glfw = @import("mach_glfw");
 
 const vkgen = @import("deps/vulkan-zig/generator/index.zig");
 
@@ -33,9 +33,7 @@ pub fn build(b: *std.Build) void {
     ecez.link(b, exe, true, ztracy_enable);
 
     // link glfw
-    const glfw_module = glfw.module(b);
-    glfw.link(b, exe, .{}) catch @panic("failed to link glfw");
-    exe.addModule("glfw", glfw_module);
+    glfwLink(b, exe);
 
     // link zmath
     const zmath_pkg = zmath.package(b, target, mode, .{});
@@ -191,7 +189,7 @@ const ShaderMoveStep = struct {
         defer walker.deinit();
         walk_loop: while (walker.next() catch unreachable) |asset| {
             switch (asset.kind) {
-                fs.File.Kind.File => {
+                fs.File.Kind.directory => {
                     const actual_shader_name = blk: {
                         for (self.shader_compile_step.shaders.items) |shader| {
                             if (std.mem.eql(u8, asset.basename, &shader.hash)) {
@@ -263,7 +261,7 @@ fn copyDir(b: *Build, src_dir: fs.IterableDir, dst_parent_dir: fs.Dir) void {
     defer walker.deinit();
     while (walker.next() catch unreachable) |asset| {
         switch (asset.kind) {
-            Kind.Directory => {
+            Kind.directory => {
                 var src_child_dir = src_dir.dir.openIterableDir(asset.path, .{
                     .access_sub_paths = true,
                 }) catch unreachable;
@@ -276,7 +274,7 @@ fn copyDir(b: *Build, src_dir: fs.IterableDir, dst_parent_dir: fs.Dir) void {
                 var dst_child_dir = dst_parent_dir.openDir(asset.path, .{}) catch unreachable;
                 defer dst_child_dir.close();
             },
-            Kind.File => {
+            Kind.file => {
                 if (std.mem.eql(u8, asset.path[0..7], "shaders")) {
                     continue; // skip shader folder which will be compiled by glslc before being moved
                 }
@@ -296,4 +294,29 @@ inline fn createFolder(path: []const u8) std.os.MakeDirError!void {
         },
         else => |e| return e,
     }
+}
+
+fn glfwLink(b: *std.Build, step: *std.build.CompileStep) void {
+    const glfw_dep = b.dependency("mach_glfw", .{
+        .target = step.target,
+        .optimize = step.optimize,
+    });
+    step.linkLibrary(glfw_dep.artifact("mach-glfw"));
+    step.addModule("glfw", glfw_dep.module("mach-glfw"));
+
+    // TODO(build-system): Zig package manager currently can't handle transitive deps like this, so we need to use
+    // these explicitly here:
+    @import("glfw").addPaths(step);
+    step.linkLibrary(b.dependency("vulkan_headers", .{
+        .target = step.target,
+        .optimize = step.optimize,
+    }).artifact("vulkan-headers"));
+    step.linkLibrary(b.dependency("x11_headers", .{
+        .target = step.target,
+        .optimize = step.optimize,
+    }).artifact("x11-headers"));
+    step.linkLibrary(b.dependency("wayland_headers", .{
+        .target = step.target,
+        .optimize = step.optimize,
+    }).artifact("wayland-headers"));
 }

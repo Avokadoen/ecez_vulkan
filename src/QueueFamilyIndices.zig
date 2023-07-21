@@ -62,7 +62,7 @@ pub fn init(vki: InstanceDispatch, physical_device: vk.PhysicalDevice, surface: 
 
         // graphics queue is usually the first and only one with this bit
         if ((flags.contains(vk.QueueFlags{ .graphics_bit = true }))) {
-            const index = @intCast(u32, i);
+            const index = @as(u32, @intCast(i));
             const support_present = (try vki.getPhysicalDeviceSurfaceSupportKHR(physical_device, index, surface)) != 0;
             queues.graphics = FamilyEntry{ .index = index, .support_present = support_present };
             queues.graphics_queue_count = property.queue_count;
@@ -71,7 +71,7 @@ pub fn init(vki: InstanceDispatch, physical_device: vk.PhysicalDevice, surface: 
         // grab dedicated compute family index if any
         const is_dedicated_compute = !flags.graphics_bit and flags.compute_bit;
         if (is_dedicated_compute or (queues.compute == null and flags.contains(vk.QueueFlags{ .compute_bit = true }))) {
-            const index = @intCast(u32, i);
+            const index = @as(u32, @intCast(i));
             const support_present = (try vki.getPhysicalDeviceSurfaceSupportKHR(physical_device, index, surface)) != 0;
             queues.compute = FamilyEntry{ .index = index, .support_present = support_present };
             queues.compute_queue_count = property.queue_count;
@@ -80,7 +80,7 @@ pub fn init(vki: InstanceDispatch, physical_device: vk.PhysicalDevice, surface: 
         // grab dedicated transfer family index if any
         const is_dedicated_transfer = !flags.graphics_bit and !flags.compute_bit and flags.transfer_bit;
         if (is_dedicated_transfer or (queues.transfer == null and flags.contains(vk.QueueFlags{ .transfer_bit = true }))) {
-            const index = @intCast(u32, i);
+            const index = @as(u32, @intCast(i));
             const support_present = (try vki.getPhysicalDeviceSurfaceSupportKHR(physical_device, index, surface)) != 0;
             queues.transfer = FamilyEntry{ .index = index, .support_present = support_present };
             queues.transfer_queue_count = property.queue_count;
@@ -124,7 +124,7 @@ inline fn checkDeviceExtensionSupport(vki: InstanceDispatch, physical_device: vk
     var matched_extensions: u8 = 0;
     for (application_ext_layers.required_extensions) |required_extension| {
         for (available_extensions[0..extension_count]) |available_extension| {
-            if (std.cstr.cmp(required_extension, @ptrCast([*:0]const u8, &available_extension.extension_name)) == 0) {
+            if (std.mem.orderZ(u8, required_extension, @as([*:0]const u8, @ptrCast(&available_extension.extension_name))) == .eq) {
                 matched_extensions += 1;
                 break;
             }

@@ -1,4 +1,18 @@
 //--------------------------------------------------------------------------------------------------
+//
+// Zig bindings for 'dear imgui' library. Easy to use, hand-crafted API with default arguments,
+// named parameters and Zig style text formatting.
+//
+//--------------------------------------------------------------------------------------------------
+pub const version = @import("std").SemanticVersion{ .major = 1, .minor = 89, .patch = 6 };
+
+pub const plot = @import("plot.zig");
+pub const backend = switch (@import("zgui_options").backend) {
+    .glfw_wgpu => @import("backend_glfw_wgpu.zig"),
+    .win32_dx12 => .{}, // TODO:
+    .no_backend => .{},
+};
+//--------------------------------------------------------------------------------------------------
 const std = @import("std");
 const assert = std.debug.assert;
 //--------------------------------------------------------------------------------------------------
@@ -35,7 +49,7 @@ pub fn deinit() void {
             while (it.next()) |kv| {
                 const address = kv.key_ptr.*;
                 const size = kv.value_ptr.*;
-                mem_allocator.?.free(@intToPtr([*]align(mem_alignment) u8, address)[0..size]);
+                mem_allocator.?.free(@as([*]align(mem_alignment) u8, @ptrFromInt(address))[0..size]);
                 std.log.info(
                     "[zgui] Possible memory leak or static memory usage detected: (address: 0x{x}, size: {d})",
                     .{ address, size },
@@ -80,7 +94,7 @@ fn zguiMemAlloc(size: usize, _: ?*anyopaque) callconv(.C) ?*anyopaque {
         size,
     ) catch @panic("zgui: out of memory");
 
-    mem_allocations.?.put(@ptrToInt(mem.ptr), size) catch @panic("zgui: out of memory");
+    mem_allocations.?.put(@intFromPtr(mem.ptr), size) catch @panic("zgui: out of memory");
 
     return mem.ptr;
 }
@@ -91,8 +105,8 @@ fn zguiMemFree(maybe_ptr: ?*anyopaque, _: ?*anyopaque) callconv(.C) void {
         defer mem_mutex.unlock();
 
         if (mem_allocations != null) {
-            const size = mem_allocations.?.fetchRemove(@ptrToInt(ptr)).?.value;
-            const mem = @ptrCast([*]align(mem_alignment) u8, @alignCast(mem_alignment, ptr))[0..size];
+            const size = mem_allocations.?.fetchRemove(@intFromPtr(ptr)).?.value;
+            const mem = @as([*]align(mem_alignment) u8, @ptrCast(@alignCast(ptr)))[0..size];
             mem_allocator.?.free(mem);
         }
     }
@@ -165,7 +179,7 @@ pub const io = struct {
     ) Font;
 
     pub fn addFontFromMemory(fontdata: []const u8, size_pixels: f32) Font {
-        return zguiIoAddFontFromMemory(fontdata.ptr, @intCast(i32, fontdata.len), size_pixels);
+        return zguiIoAddFontFromMemory(fontdata.ptr, @as(i32, @intCast(fontdata.len)), size_pixels);
     }
     extern fn zguiIoAddFontFromMemory(font_data: *const anyopaque, font_size: i32, size_pixels: f32) Font;
 
@@ -175,7 +189,13 @@ pub const io = struct {
         config: ?FontConfig,
         ranges: ?[*]const Wchar,
     ) Font {
-        return zguiIoAddFontFromMemoryWithConfig(fontdata.ptr, @intCast(i32, fontdata.len), size_pixels, if (config) |c| &c else null, ranges);
+        return zguiIoAddFontFromMemoryWithConfig(
+            fontdata.ptr,
+            @as(i32, @intCast(fontdata.len)),
+            size_pixels,
+            if (config) |c| &c else null,
+            ranges,
+        );
     }
     extern fn zguiIoAddFontFromMemoryWithConfig(
         font_data: *const anyopaque,
@@ -822,10 +842,10 @@ pub const Style = extern struct {
     extern fn zguiStyle_ScaleAllSizes(style: *Style, scale_factor: f32) void;
 
     pub fn getColor(style: Style, idx: StyleCol) [4]f32 {
-        return style.colors[@enumToInt(idx)];
+        return style.colors[@intFromEnum(idx)];
     }
     pub fn setColor(style: *Style, idx: StyleCol, color: [4]f32) void {
-        style.colors[@enumToInt(idx)] = color;
+        style.colors[@intFromEnum(idx)] = color;
     }
 };
 /// `pub fn getStyle() *Style`
@@ -3339,9 +3359,11 @@ pub const DrawCmd = extern struct {
     vtx_offset: u32,
     idx_offset: u32,
     elem_count: u32,
-    user_callback: ?*anyopaque,
+    user_callback: ?DrawCallback,
     user_callback_data: ?*anyopaque,
 };
+
+pub const DrawCallback = *const fn (*const anyopaque, *const DrawCmd) callconv(.C) void;
 
 pub const getWindowDrawList = zguiGetWindowDrawList;
 pub const getBackgroundDrawList = zguiGetBackgroundDrawList;
@@ -3726,7 +3748,7 @@ pub const DrawList = *opaque {
         zguiDrawList_AddPolyline(
             draw_list,
             points.ptr,
-            @intCast(u32, points.len),
+            @as(u32, @intCast(points.len)),
             args.col,
             args.flags,
             args.thickness,
@@ -3749,7 +3771,7 @@ pub const DrawList = *opaque {
         zguiDrawList_AddConvexPolyFilled(
             draw_list,
             points.ptr,
-            @intCast(u32, points.len),
+            @as(u32, @intCast(points.len)),
             col,
         );
     }
@@ -4131,5 +4153,15 @@ pub const DrawList = *opaque {
         draw_list: DrawList,
         idx: DrawIdx,
     ) void;
+
     //----------------------------------------------------------------------------------------------
+
+    pub fn addCallback(draw_list: DrawList, callback: DrawCallback, callback_data: ?*anyopaque) void {
+        zguiDrawList_AddCallback(draw_list, callback, callback_data);
+    }
+    extern fn zguiDrawList_AddCallback(draw_list: DrawList, callback: DrawCallback, callback_data: ?*anyopaque) void;
+    pub fn addResetRenderStateCallback(draw_list: DrawList) void {
+        zguiDrawList_AddResetRenderStateCallback(draw_list);
+    }
+    extern fn zguiDrawList_AddResetRenderStateCallback(draw_list: DrawList) void;
 };

@@ -68,7 +68,7 @@ pub inline fn init(
 
     const device_data: []u8 = blk: {
         var raw_device_ptr = try vkd.mapMemory(device, memory, 0, size, .{});
-        break :blk @ptrCast([*]u8, raw_device_ptr)[0..size];
+        break :blk @as([*]u8, @ptrCast(raw_device_ptr))[0..size];
     };
 
     return MutableBuffer{
@@ -104,7 +104,7 @@ pub inline fn scheduleTransfer(
     self.incoherent_memory_offset = @min(self.incoherent_memory_offset, offset);
 
     // calculate out current flush size
-    const transfer_cursor = offset + @intCast(vk.DeviceSize, raw_data.len);
+    const transfer_cursor = offset + @as(vk.DeviceSize, @intCast(raw_data.len));
     const buffer_cursor = self.incoherent_memory_offset + self.incoherent_memory_size;
     const rightmost_cursor = @max(transfer_cursor, buffer_cursor);
     self.incoherent_memory_size = rightmost_cursor - self.incoherent_memory_offset;

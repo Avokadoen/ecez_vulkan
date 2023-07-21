@@ -86,14 +86,14 @@ const StagingContext = struct {
             .level = .primary,
             .command_buffer_count = 1,
         };
-        try vkd.allocateCommandBuffers(device, &cmd_buffer_info, @ptrCast([*]vk.CommandBuffer, &command_buffer));
+        try vkd.allocateCommandBuffers(device, &cmd_buffer_info, @as([*]vk.CommandBuffer, @ptrCast(&command_buffer)));
 
         const transfer_fence = try sync.createFence(vkd, device, false);
         errdefer vkd.destroyFence(device, transfer_fence, null);
 
         const device_data: []u8 = blk: {
             var raw_device_ptr = try vkd.mapMemory(device, memory, 0, size, .{});
-            break :blk @ptrCast([*]u8, raw_device_ptr)[0..size];
+            break :blk @as([*]u8, @ptrCast(raw_device_ptr))[0..size];
         };
 
         return StagingContext{
@@ -110,7 +110,7 @@ const StagingContext = struct {
     }
 
     pub inline fn deinit(self: StagingContext, vkd: DeviceDispatch, device: vk.Device) void {
-        _ = vkd.waitForFences(device, 1, @ptrCast([*]const vk.Fence, &self.transfer_fence), vk.TRUE, std.time.ns_per_s) catch {};
+        _ = vkd.waitForFences(device, 1, @as([*]const vk.Fence, @ptrCast(&self.transfer_fence)), vk.TRUE, std.time.ns_per_s) catch {};
         vkd.unmapMemory(device, self.memory);
         vkd.destroyFence(device, self.transfer_fence, null);
         vkd.destroyCommandPool(device, self.command_pool, null);
@@ -179,7 +179,7 @@ pub const Buffer = struct {
 
         const aligned_memory_size = dmem.pow2Align(
             self.ctx.non_coherent_atom_size,
-            @intCast(vk.DeviceSize, raw_data.len),
+            @as(vk.DeviceSize, @intCast(raw_data.len)),
         );
 
         var vacant_device_data = self.ctx.device_data[self.ctx.incoherent_memory_bytes..];
@@ -238,15 +238,15 @@ pub const Buffer = struct {
             .p_wait_semaphores = undefined,
             .p_wait_dst_stage_mask = undefined,
             .command_buffer_count = 1,
-            .p_command_buffers = @ptrCast([*]vk.CommandBuffer, &self.ctx.command_buffer),
-            .signal_semaphore_count = if (transfers_complete_semaphores) |semaphores| @intCast(u32, semaphores.len) else 0,
+            .p_command_buffers = @as([*]vk.CommandBuffer, @ptrCast(&self.ctx.command_buffer)),
+            .signal_semaphore_count = if (transfers_complete_semaphores) |semaphores| @as(u32, @intCast(semaphores.len)) else 0,
             .p_signal_semaphores = if (transfers_complete_semaphores) |semaphores| semaphores.ptr else undefined,
         };
-        try vkd.queueSubmit(self.ctx.transfer_queue, 1, @ptrCast([*]const vk.SubmitInfo, &submit_into), self.ctx.transfer_fence);
+        try vkd.queueSubmit(self.ctx.transfer_queue, 1, @as([*]const vk.SubmitInfo, @ptrCast(&submit_into)), self.ctx.transfer_fence);
 
         // TODO: do not force wait if there is a semaphore
-        _ = vkd.waitForFences(device, 1, @ptrCast([*]const vk.Fence, &self.ctx.transfer_fence), vk.TRUE, std.time.ns_per_s) catch {};
-        try vkd.resetFences(device, 1, @ptrCast([*]const vk.Fence, &self.ctx.transfer_fence));
+        _ = vkd.waitForFences(device, 1, @as([*]const vk.Fence, @ptrCast(&self.ctx.transfer_fence)), vk.TRUE, std.time.ns_per_s) catch {};
+        try vkd.resetFences(device, 1, @as([*]const vk.Fence, @ptrCast(&self.ctx.transfer_fence)));
 
         self.ctx.memory_in_flight = 0;
         self.ctx.incoherent_memory_bytes = 0;
@@ -323,7 +323,7 @@ pub const Image = struct {
             return error.OutOfMemory;
         }
 
-        const aligned_memory_size = dmem.pow2Align(self.ctx.non_coherent_atom_size, @intCast(vk.DeviceSize, raw_data.len));
+        const aligned_memory_size = dmem.pow2Align(self.ctx.non_coherent_atom_size, @as(vk.DeviceSize, @intCast(raw_data.len)));
         var vacant_device_data = self.ctx.device_data[self.ctx.incoherent_memory_bytes..];
         std.mem.copy(u8, vacant_device_data, raw_data);
 
@@ -334,8 +334,8 @@ pub const Image = struct {
         };
         self.image_destinations[self.ctx.memory_in_flight] = ImageTransferJob{
             .image = destination_image,
-            .width = @intCast(u32, image_extent.width),
-            .height = @intCast(u32, image_extent.height),
+            .width = @as(u32, @intCast(image_extent.width)),
+            .height = @as(u32, @intCast(image_extent.height)),
         };
 
         self.ctx.memory_in_flight += 1;
@@ -435,7 +435,7 @@ pub const Image = struct {
             region.image_extent.width = dest.width;
             region.image_extent.height = dest.height;
 
-            vkd.cmdCopyBufferToImage(self.ctx.command_buffer, self.ctx.buffer, dest.image, .transfer_dst_optimal, 1, @ptrCast([*]const vk.BufferImageCopy, &region));
+            vkd.cmdCopyBufferToImage(self.ctx.command_buffer, self.ctx.buffer, dest.image, .transfer_dst_optimal, 1, @as([*]const vk.BufferImageCopy, @ptrCast(&region)));
         }
 
         for (self.image_transitions_after[0..self.transitions_after_transfer_in_flight]) |transition_job| {
@@ -457,15 +457,15 @@ pub const Image = struct {
             .p_wait_semaphores = undefined,
             .p_wait_dst_stage_mask = undefined,
             .command_buffer_count = 1,
-            .p_command_buffers = @ptrCast([*]vk.CommandBuffer, &self.ctx.command_buffer),
-            .signal_semaphore_count = if (transfers_complete_semaphores) |semaphores| @intCast(u32, semaphores.len) else 0,
+            .p_command_buffers = @as([*]vk.CommandBuffer, @ptrCast(&self.ctx.command_buffer)),
+            .signal_semaphore_count = if (transfers_complete_semaphores) |semaphores| @as(u32, @intCast(semaphores.len)) else 0,
             .p_signal_semaphores = if (transfers_complete_semaphores) |semaphores| semaphores.ptr else undefined,
         };
-        try vkd.queueSubmit(self.ctx.transfer_queue, 1, @ptrCast([*]const vk.SubmitInfo, &submit_into), self.ctx.transfer_fence);
+        try vkd.queueSubmit(self.ctx.transfer_queue, 1, @as([*]const vk.SubmitInfo, @ptrCast(&submit_into)), self.ctx.transfer_fence);
 
         // TODO: we dont want to force fence wait here (should be a manuall call to reset, same for staging buffer)
-        _ = vkd.waitForFences(device, 1, @ptrCast([*]const vk.Fence, &self.ctx.transfer_fence), vk.TRUE, std.time.ns_per_s) catch {};
-        try vkd.resetFences(device, 1, @ptrCast([*]const vk.Fence, &self.ctx.transfer_fence));
+        _ = vkd.waitForFences(device, 1, @as([*]const vk.Fence, @ptrCast(&self.ctx.transfer_fence)), vk.TRUE, std.time.ns_per_s) catch {};
+        try vkd.resetFences(device, 1, @as([*]const vk.Fence, @ptrCast(&self.ctx.transfer_fence)));
 
         try vkd.resetCommandPool(device, self.ctx.command_pool, .{});
 
@@ -554,7 +554,7 @@ pub const Image = struct {
             0,
             undefined,
             1,
-            @ptrCast([*]const vk.ImageMemoryBarrier, &barrier),
+            @as([*]const vk.ImageMemoryBarrier, @ptrCast(&barrier)),
         );
     }
 

@@ -282,9 +282,9 @@ pub fn init(
     errdefer asset_handler.deinit(allocator);
 
     // bind the glfw instance proc pointer
-    const vk_proc = @ptrCast(
+    const vk_proc = @as(
         *const fn (instance: vk.Instance, procname: [*:0]const u8) callconv(.C) vk.PfnVoidFunction,
-        &glfw.getInstanceProcAddress,
+        @ptrCast(&glfw.getInstanceProcAddress),
     );
     const vkb = try BaseDispatch.load(vk_proc);
 
@@ -321,9 +321,9 @@ pub fn init(
             .flags = .{},
             .p_next = if (is_debug_build) null else &debug_message_info,
             .p_application_info = &application_info,
-            .enabled_layer_count = @intCast(u32, validation_layers.len),
+            .enabled_layer_count = @as(u32, @intCast(validation_layers.len)),
             .pp_enabled_layer_names = validation_layers.ptr,
-            .enabled_extension_count = @intCast(u32, extensions.items.len),
+            .enabled_extension_count = @as(u32, @intCast(extensions.items.len)),
             .pp_enabled_extension_names = extensions.items.ptr,
         };
         break :blk (try vkb.createInstance(&instance_info, null));
@@ -333,7 +333,7 @@ pub fn init(
 
     const surface = blk: {
         var s: vk.SurfaceKHR = undefined;
-        const result = @intToEnum(vk.Result, glfw.createWindowSurface(instance, window, null, &s));
+        const result = @as(vk.Result, @enumFromInt(glfw.createWindowSurface(instance, window, null, &s)));
         if (result != .success) {
             return error.FailedToCreateSurface;
         }
@@ -474,7 +474,7 @@ pub fn init(
     }
 
     // we have one base color texture per mesh
-    const texture_count = @intCast(u32, mesh_instance_initalizers.len);
+    const texture_count = @as(u32, @intCast(mesh_instance_initalizers.len));
     const instances_desc_set_layout = try createDescriptorSetLayout(vkd, device, texture_count);
     errdefer vkd.destroyDescriptorSetLayout(device, instances_desc_set_layout, null);
 
@@ -506,10 +506,10 @@ pub fn init(
             .p_next = &variable_descriptor_count_alloc_info,
             .descriptor_pool = instances_desc_set_pool,
             .descriptor_set_count = 1,
-            .p_set_layouts = @ptrCast([*]const vk.DescriptorSetLayout, &instances_desc_set_layout),
+            .p_set_layouts = @as([*]const vk.DescriptorSetLayout, @ptrCast(&instances_desc_set_layout)),
         };
         var desc_set: vk.DescriptorSet = undefined;
-        try vkd.allocateDescriptorSets(device, &alloc_info, @ptrCast([*]vk.DescriptorSet, &desc_set));
+        try vkd.allocateDescriptorSets(device, &alloc_info, @as([*]vk.DescriptorSet, @ptrCast(&desc_set)));
         break :blk desc_set;
     };
 
@@ -529,9 +529,9 @@ pub fn init(
         const pipeline_layout_info = vk.PipelineLayoutCreateInfo{
             .flags = .{},
             .set_layout_count = 1,
-            .p_set_layouts = @ptrCast([*]const vk.DescriptorSetLayout, &instances_desc_set_layout),
+            .p_set_layouts = @as([*]const vk.DescriptorSetLayout, @ptrCast(&instances_desc_set_layout)),
             .push_constant_range_count = 1,
-            .p_push_constant_ranges = @ptrCast([*]const vk.PushConstantRange, &push_constant_range),
+            .p_push_constant_ranges = @as([*]const vk.PushConstantRange, @ptrCast(&push_constant_range)),
         };
         break :blk try vkd.createPipelineLayout(device, &pipeline_layout_info, null);
     };
@@ -586,7 +586,7 @@ pub fn init(
                 .level = .primary,
                 .command_buffer_count = 1,
             };
-            try vkd.allocateCommandBuffers(device, &cmd_buffer_info, @ptrCast([*]vk.CommandBuffer, cmd_buffer));
+            try vkd.allocateCommandBuffers(device, &cmd_buffer_info, @as([*]vk.CommandBuffer, @ptrCast(cmd_buffer)));
         }
         break :blk buffers;
     };
@@ -868,14 +868,14 @@ pub fn init(
 
             // store the byte size of the image for when we bind the memory later
             // the sizes will be shifted once to get offsets later
-            image_memory_offsets[i] = @intCast(
+            image_memory_offsets[i] = @as(
                 vk.DeviceSize,
-                model_base_color_images[i].imageByteSize(),
+                @intCast(model_base_color_images[i].imageByteSize()),
             ) + if (i > 0) image_memory_offsets[i - 1] else 0;
 
             const loaded_image_extent = vk.Extent2D{
-                .width = @intCast(u32, model_base_color_images[i].width),
-                .height = @intCast(u32, model_base_color_images[i].height),
+                .width = @as(u32, @intCast(model_base_color_images[i].width)),
+                .height = @as(u32, @intCast(model_base_color_images[i].height)),
             };
 
             instance_images[i] = try createImage(vkd, device, .r8g8b8a8_srgb, .{ .transfer_dst_bit = true, .sampled_bit = true }, loaded_image_extent);
@@ -903,9 +903,9 @@ pub fn init(
 
             // populate our indirect commands with some initial state
             indirect_commands.appendAssumeCapacity(vk.DrawIndexedIndirectCommand{
-                .vertex_offset = @intCast(i32, vertex_buffer_position / @sizeOf(MeshVertex)),
-                .first_index = @intCast(u32, index_buffer_position - index_buffer_offset) / 4,
-                .index_count = @intCast(u32, index_size / 4),
+                .vertex_offset = @as(i32, @intCast(vertex_buffer_position / @sizeOf(MeshVertex))),
+                .first_index = @as(u32, @intCast(index_buffer_position - index_buffer_offset)) / 4,
+                .index_count = @as(u32, @intCast(index_size / 4)),
                 .instance_count = 0,
                 .first_instance = instance_count,
             });
@@ -950,7 +950,7 @@ pub fn init(
                 .dst_set = instances_desc_set,
                 .dst_binding = 0,
                 .dst_array_element = 0,
-                .descriptor_count = @intCast(u32, instances_desc_image_info.len),
+                .descriptor_count = @as(u32, @intCast(instances_desc_image_info.len)),
                 .descriptor_type = .combined_image_sampler,
                 .p_image_info = instances_desc_image_info.ptr,
                 .p_buffer_info = undefined,
@@ -966,7 +966,7 @@ pub fn init(
         var j: usize = 0;
         while (j < instancing_init.instance_count) : (j += 1) {
             instance_data.appendAssumeCapacity(.{
-                .texture_index = @intCast(u32, i),
+                .texture_index = @as(u32, @intCast(i)),
                 .transform = undefined,
             });
         }
@@ -1035,7 +1035,7 @@ pub fn init(
         device,
         non_coherent_atom_size,
         swapchain_extent,
-        @intCast(u32, swapchain_images.len),
+        @as(u32, @intCast(swapchain_images.len)),
         render_pass,
         &image_staging_buffer,
     ) else undefined;
@@ -1061,7 +1061,7 @@ pub fn init(
         };
 
         instance_handle_map.putAssumeCapacity(
-            @intCast(MeshHandle, i),
+            @as(MeshHandle, @intCast(i)),
             InstanceLookupList.init(allocator),
         );
     }
@@ -1153,7 +1153,7 @@ pub fn recreatePresentResources(self: *RenderContext, window: glfw.Window) !void
     );
     self.vkd.destroySwapchainKHR(self.device, old_swapchain, null);
 
-    var image_count = @intCast(u32, self.swapchain_images.len);
+    var image_count = @as(u32, @intCast(self.swapchain_images.len));
     _ = try self.vkd.getSwapchainImagesKHR(
         self.device,
         self.swapchain,
@@ -1236,7 +1236,7 @@ pub fn updateCamera(self: *RenderContext, fov_degree: f32, orientation: zm.Quat,
 
 inline fn calculateCamera(swapchain_extent: vk.Extent2D, fov_degree: f32, orientation: zm.Quat, pos: zm.Vec) Camera {
     const fovy = std.math.degreesToRadians(f32, fov_degree);
-    const aspect = @intToFloat(f32, swapchain_extent.width) / @intToFloat(f32, swapchain_extent.height);
+    const aspect = @as(f32, @floatFromInt(swapchain_extent.width)) / @as(f32, @floatFromInt(swapchain_extent.height));
     return Camera{
         .view = zm.mul(zm.quatToMat(orientation), zm.translationV(pos)),
         .projection = zm.perspectiveFovRh(fovy, aspect, 0.01, 300),
@@ -1374,7 +1374,7 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window, delta_time: f32) !vo
         );
     }
 
-    _ = try self.vkd.waitForFences(self.device, 1, @ptrCast([*]const vk.Fence, &self.in_flight_fences[self.current_frame]), vk.TRUE, std.math.maxInt(u64));
+    _ = try self.vkd.waitForFences(self.device, 1, @as([*]const vk.Fence, @ptrCast(&self.in_flight_fences[self.current_frame])), vk.TRUE, std.math.maxInt(u64));
 
     if (enable_imgui) {
         // flush instance data changes to GPU before rendering
@@ -1395,7 +1395,7 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window, delta_time: f32) !vo
         break :blk result.image_index;
     };
 
-    try self.vkd.resetFences(self.device, 1, @ptrCast([*]const vk.Fence, &self.in_flight_fences[self.current_frame]));
+    try self.vkd.resetFences(self.device, 1, @as([*]const vk.Fence, @ptrCast(&self.in_flight_fences[self.current_frame])));
 
     try self.vkd.resetCommandPool(self.device, self.command_pools[self.current_frame], .{});
 
@@ -1435,13 +1435,13 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window, delta_time: f32) !vo
         const viewport = vk.Viewport{
             .x = 0,
             .y = 0,
-            .width = @intToFloat(f32, self.swapchain_extent.width),
-            .height = @intToFloat(f32, self.swapchain_extent.height),
+            .width = @as(f32, @floatFromInt(self.swapchain_extent.width)),
+            .height = @as(f32, @floatFromInt(self.swapchain_extent.height)),
             .min_depth = 0,
             .max_depth = 1,
         };
-        self.vkd.cmdSetViewport(command_buffer, 0, 1, @ptrCast([*]const vk.Viewport, &viewport));
-        self.vkd.cmdSetScissor(command_buffer, 0, 1, @ptrCast([*]const vk.Rect2D, &render_area));
+        self.vkd.cmdSetViewport(command_buffer, 0, 1, @as([*]const vk.Viewport, @ptrCast(&viewport)));
+        self.vkd.cmdSetScissor(command_buffer, 0, 1, @as([*]const vk.Rect2D, @ptrCast(&render_area)));
 
         const push_constant = PushConstant.fromCamera(self.camera);
         self.vkd.cmdPushConstants(
@@ -1458,7 +1458,7 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window, delta_time: f32) !vo
             command_buffer,
             MeshVertex.binding,
             1,
-            @ptrCast([*]const vk.Buffer, &self.vertex_index_buffer.buffer),
+            @as([*]const vk.Buffer, @ptrCast(&self.vertex_index_buffer.buffer)),
             &vertex_offsets,
         );
         self.vkd.cmdBindIndexBuffer(
@@ -1468,18 +1468,18 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window, delta_time: f32) !vo
             vk.IndexType.uint32,
         );
 
-        const instance_offset = [_]vk.DeviceSize{@intCast(
+        const instance_offset = [_]vk.DeviceSize{@as(
             vk.DeviceSize,
-            dmem.pow2Align(
+            @intCast(dmem.pow2Align(
                 self.nonCoherentAtomSize(),
                 self.instance_data.items.len * @sizeOf(DrawInstance),
-            ) * self.current_frame,
+            ) * self.current_frame),
         )};
         self.vkd.cmdBindVertexBuffers(
             command_buffer,
             DrawInstance.binding,
             1,
-            @ptrCast([*]const vk.Buffer, &self.instance_data_buffer.buffer),
+            @as([*]const vk.Buffer, @ptrCast(&self.instance_data_buffer.buffer)),
             &instance_offset,
         );
 
@@ -1489,23 +1489,23 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window, delta_time: f32) !vo
             self.pipeline_layout,
             0,
             1,
-            @ptrCast([*]const vk.DescriptorSet, &self.instances_desc_set),
+            @as([*]const vk.DescriptorSet, @ptrCast(&self.instances_desc_set)),
             0,
             undefined,
         );
 
-        const index_buffer_offset = @intCast(
+        const index_buffer_offset = @as(
             vk.DeviceSize,
-            dmem.pow2Align(
+            @intCast(dmem.pow2Align(
                 self.nonCoherentAtomSize(),
                 self.indirect_commands.items.len * @sizeOf(vk.DrawIndexedIndirectCommand),
-            ) * self.current_frame,
+            ) * self.current_frame),
         );
         self.vkd.cmdDrawIndexedIndirect(
             command_buffer,
             self.indirect_commands_buffer.buffer,
             index_buffer_offset,
-            @intCast(u32, self.indirect_commands.items.len),
+            @as(u32, @intCast(self.indirect_commands.items.len)),
             @sizeOf(vk.DrawIndexedIndirectCommand),
         );
 
@@ -1518,20 +1518,20 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window, delta_time: f32) !vo
         try self.vkd.endCommandBuffer(command_buffer);
     }
 
-    const render_finish_semaphore = @ptrCast([*]const vk.Semaphore, &self.render_finished_semaphores[self.current_frame]);
+    const render_finish_semaphore = @as([*]const vk.Semaphore, @ptrCast(&self.render_finished_semaphores[self.current_frame]));
     const submit_info = vk.SubmitInfo{
         .wait_semaphore_count = 1,
         .p_wait_semaphores = &[_]vk.Semaphore{self.image_available_semaphores[self.current_frame]},
         .p_wait_dst_stage_mask = &[_]vk.PipelineStageFlags{.{ .color_attachment_output_bit = true }},
         .command_buffer_count = 1,
-        .p_command_buffers = @ptrCast([*]const vk.CommandBuffer, &self.command_buffers[self.current_frame]),
+        .p_command_buffers = @as([*]const vk.CommandBuffer, @ptrCast(&self.command_buffers[self.current_frame])),
         .signal_semaphore_count = 1,
         .p_signal_semaphores = render_finish_semaphore,
     };
     try self.vkd.queueSubmit(
         self.primary_graphics_queue,
         1,
-        @ptrCast([*]const vk.SubmitInfo, &submit_info),
+        @as([*]const vk.SubmitInfo, @ptrCast(&submit_info)),
         self.in_flight_fences[self.current_frame],
     );
 
@@ -1540,8 +1540,8 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window, delta_time: f32) !vo
             .wait_semaphore_count = 1,
             .p_wait_semaphores = render_finish_semaphore,
             .swapchain_count = 1,
-            .p_swapchains = @ptrCast([*]const vk.SwapchainKHR, &self.swapchain),
-            .p_image_indices = @ptrCast([*]const u32, &image_index),
+            .p_swapchains = @as([*]const vk.SwapchainKHR, @ptrCast(&self.swapchain)),
+            .p_image_indices = @as([*]const u32, @ptrCast(&image_index)),
             .p_results = null,
         };
         const result = self.vkd.queuePresentKHR(self.primary_graphics_queue, &present_info) catch |err| {
@@ -1621,8 +1621,8 @@ fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki: Instan
                 const selected_limit_field = @field(selected_device_properties.limits, field.name);
                 const current_limit_field = @field(current_device_properties.limits, field.name);
 
-                selected_limit_score += @intCast(u32, @boolToInt(selected_limit_field > current_limit_field));
-                current_limit_score += @intCast(u32, @boolToInt(selected_limit_field <= current_limit_field));
+                selected_limit_score += @as(u32, @intCast(@intFromBool(selected_limit_field > current_limit_field)));
+                current_limit_score += @as(u32, @intCast(@intFromBool(selected_limit_field <= current_limit_field)));
             }
 
             if (current_limit_score < selected_limit_score) {
@@ -1648,8 +1648,8 @@ fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki: Instan
                 @compileError("unexpected field type"); // something has changed in vk wrapper
             }
 
-            selected_feature_sum += @intCast(u32, @field(selected_device_features, field.name));
-            current_feature_sum += @intCast(u32, @field(current_device_features, field.name));
+            selected_feature_sum += @as(u32, @intCast(@field(selected_device_features, field.name)));
+            current_feature_sum += @as(u32, @intCast(@field(current_device_features, field.name)));
         }
 
         // if current should be selected
@@ -1675,7 +1675,7 @@ fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki: Instan
 
 pub inline fn getNthMeshHandle(self: RenderContext, nth: usize) MeshHandle {
     std.debug.assert(nth < self.instance_contexts.len);
-    return @intCast(MeshHandle, nth);
+    return @as(MeshHandle, @intCast(nth));
 }
 
 pub fn getNewInstance(self: *RenderContext, mesh_handle: MeshHandle) !InstanceHandle {
@@ -1688,7 +1688,7 @@ pub fn getNewInstance(self: *RenderContext, mesh_handle: MeshHandle) !InstanceHa
     // add the inital offset for this mesh handle
     var instance_offset: u64 = active_instance_count;
     for (self.instance_contexts[0..mesh_handle]) |other_instance_context| {
-        instance_offset += @intCast(u64, other_instance_context.total_instance_count);
+        instance_offset += @as(u64, @intCast(other_instance_context.total_instance_count));
     }
 
     self.indirect_commands.items[mesh_handle].instance_count += 1;
@@ -1716,11 +1716,11 @@ pub fn getNewInstance(self: *RenderContext, mesh_handle: MeshHandle) !InstanceHa
     var mesh_instance_lookups = self.instance_handle_map.getPtr(mesh_handle).?;
     const instance_handle = InstanceHandle{
         .mesh_handle = mesh_handle,
-        .lookup_index = @intCast(u48, mesh_instance_lookups.items.len),
+        .lookup_index = @as(u48, @intCast(mesh_instance_lookups.items.len)),
     };
 
     try mesh_instance_lookups.append(InstanceLookup{
-        .opaque_instance = @intCast(u32, instance_offset),
+        .opaque_instance = @as(u32, @intCast(instance_offset)),
     });
 
     return instance_handle;
@@ -1821,7 +1821,7 @@ pub const SwapchainSupportDetails = struct {
             break :blk try allocator.alloc(vk.SurfaceFormatKHR, format_count);
         };
         errdefer allocator.free(formats);
-        var format_len: u32 = @intCast(u32, formats.len);
+        var format_len: u32 = @as(u32, @intCast(formats.len));
         _ = try vki.getPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &format_len, formats.ptr);
 
         const preferred_format_index = blk: {
@@ -1843,7 +1843,7 @@ pub const SwapchainSupportDetails = struct {
             break :blk try allocator.alloc(vk.PresentModeKHR, present_count);
         };
         errdefer allocator.free(present_modes);
-        var present_modes_len: u32 = @intCast(u32, present_modes.len);
+        var present_modes_len: u32 = @as(u32, @intCast(present_modes.len));
         _ = try vki.getPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &present_modes_len, present_modes.ptr);
 
         const preferred_present_mode = blk: {
@@ -2004,7 +2004,7 @@ inline fn createLogicalDevice(
         .flags = .{},
         .queue_create_info_count = if (one_index) 1 else queue_create_info.len,
         .p_queue_create_infos = &queue_create_info,
-        .enabled_layer_count = if (is_debug_build) @intCast(u32, validation_layers.len) else 0,
+        .enabled_layer_count = if (is_debug_build) @as(u32, @intCast(validation_layers.len)) else 0,
         .pp_enabled_layer_names = validation_layers.ptr,
         .enabled_extension_count = application_ext_layers.required_extensions_cstr.len,
         .pp_enabled_extension_names = &application_ext_layers.required_extensions_cstr,
@@ -2104,7 +2104,7 @@ inline fn createRenderPass(vkd: DeviceDispatch, device: vk.Device, swapchain_for
         .input_attachment_count = 0,
         .p_input_attachments = undefined,
         .color_attachment_count = 1,
-        .p_color_attachments = @ptrCast([*]const vk.AttachmentReference, &common_color_attachment_ref),
+        .p_color_attachments = @as([*]const vk.AttachmentReference, @ptrCast(&common_color_attachment_ref)),
         .p_resolve_attachments = null,
         .p_depth_stencil_attachment = &game_depth_attachment_ref,
         .preserve_attachment_count = 0,
@@ -2128,7 +2128,7 @@ inline fn createRenderPass(vkd: DeviceDispatch, device: vk.Device, swapchain_for
         .input_attachment_count = 0,
         .p_input_attachments = undefined,
         .color_attachment_count = 1,
-        .p_color_attachments = @ptrCast([*]const vk.AttachmentReference, &common_color_attachment_ref),
+        .p_color_attachments = @as([*]const vk.AttachmentReference, @ptrCast(&common_color_attachment_ref)),
         .p_resolve_attachments = null,
         .p_depth_stencil_attachment = null,
         .preserve_attachment_count = 0,
@@ -2245,8 +2245,8 @@ fn createGraphicsPipeline(
     const viewport = vk.Viewport{
         .x = 0,
         .y = 0,
-        .width = @intToFloat(f32, swapchain_extent.width),
-        .height = @intToFloat(f32, swapchain_extent.height),
+        .width = @as(f32, @floatFromInt(swapchain_extent.width)),
+        .height = @as(f32, @floatFromInt(swapchain_extent.height)),
         .min_depth = 0,
         .max_depth = 1,
     };
@@ -2265,9 +2265,9 @@ fn createGraphicsPipeline(
     const viewport_state_info = vk.PipelineViewportStateCreateInfo{
         .flags = .{},
         .viewport_count = 1,
-        .p_viewports = @ptrCast([*]const vk.Viewport, &viewport),
+        .p_viewports = @as([*]const vk.Viewport, @ptrCast(&viewport)),
         .scissor_count = 1,
-        .p_scissors = @ptrCast([*]const vk.Rect2D, &scissor),
+        .p_scissors = @as([*]const vk.Rect2D, @ptrCast(&scissor)),
     };
 
     const rasterization_state_info = vk.PipelineRasterizationStateCreateInfo{
@@ -2315,7 +2315,7 @@ fn createGraphicsPipeline(
         .logic_op_enable = vk.FALSE,
         .logic_op = .copy,
         .attachment_count = 1,
-        .p_attachments = @ptrCast([*]const vk.PipelineColorBlendAttachmentState, &color_blend_attachment),
+        .p_attachments = @as([*]const vk.PipelineColorBlendAttachmentState, @ptrCast(&color_blend_attachment)),
         .blend_constants = [4]f32{ 0, 0, 0, 0 },
     };
 
@@ -2365,9 +2365,9 @@ fn createGraphicsPipeline(
         device,
         .null_handle,
         1,
-        @ptrCast([*]const vk.GraphicsPipelineCreateInfo, &pipeline_info),
+        @as([*]const vk.GraphicsPipelineCreateInfo, @ptrCast(&pipeline_info)),
         null,
-        @ptrCast([*]vk.Pipeline, &pipeline),
+        @as([*]vk.Pipeline, @ptrCast(&pipeline)),
     );
 
     return pipeline;

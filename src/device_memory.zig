@@ -81,11 +81,11 @@ inline fn findMemoryTypeIndex(vki: InstanceDispatch, physical_device: vk.Physica
     for (properties.memory_types[0..properties.memory_type_count], 0..) |memory_type, i| {
         std.debug.assert(i < 32);
 
-        const u5_i = @intCast(u5, i);
+        const u5_i = @as(u5, @intCast(i));
         const type_match = (type_filter & (@as(u32, 1) << u5_i)) != 0;
         const property_match = memory_type.property_flags.contains(property_flags);
         if (type_match and property_match) {
-            return @intCast(u32, i);
+            return @as(u32, @intCast(i));
         }
     }
 
@@ -102,11 +102,11 @@ pub fn transferMemoryToDevice(
 ) !void {
     const raw_data = std.mem.sliceAsBytes(data);
 
-    const aligned_memory_size = pow2Align(non_coherent_atom_size, @intCast(vk.DeviceSize, raw_data.len));
+    const aligned_memory_size = pow2Align(non_coherent_atom_size, @as(vk.DeviceSize, @intCast(raw_data.len)));
 
     var device_data = blk: {
         var raw_device_ptr = try vkd.mapMemory(device, memory, 0, aligned_memory_size, .{});
-        break :blk @ptrCast([*]u8, raw_device_ptr)[0..raw_data.len];
+        break :blk @as([*]u8, @ptrCast(raw_device_ptr))[0..raw_data.len];
     };
     defer vkd.unmapMemory(device, memory);
 
@@ -118,7 +118,7 @@ pub fn transferMemoryToDevice(
         .offset = 0,
         .size = aligned_memory_size,
     };
-    try vkd.flushMappedMemoryRanges(device, 1, @ptrCast([*]const vk.MappedMemoryRange, &mapped_range));
+    try vkd.flushMappedMemoryRanges(device, 1, @as([*]const vk.MappedMemoryRange, @ptrCast(&mapped_range)));
 }
 
 pub inline fn pow2Align(alignment: vk.DeviceSize, size: vk.DeviceSize) vk.DeviceSize {

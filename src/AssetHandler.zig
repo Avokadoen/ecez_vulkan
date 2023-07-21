@@ -28,5 +28,5 @@ pub inline fn getCPath(self: AssetHandler, allocator: Allocator, file_path: []co
     var absolute_file_path = try std.fs.path.resolve(allocator, &join_path);
     defer allocator.free(absolute_file_path);
 
-    return std.cstr.addNullByte(allocator, absolute_file_path);
+    return allocator.dupeZ(u8, absolute_file_path);
 }

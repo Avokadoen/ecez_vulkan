@@ -43,7 +43,7 @@ pub inline fn getValidationLayers(allocator: Allocator, vkb: BaseDispatch) ![]co
         var found: bool = false;
 
         inner: for (existing_layers) |existing_layer| {
-            if (std.cstr.cmp(desired_layer, @ptrCast([*:0]const u8, &existing_layer.layer_name)) == 0) {
+            if (std.mem.orderZ(u8, desired_layer, @as([*:0]const u8, @ptrCast(&existing_layer.layer_name))) == .eq) {
                 found = true;
                 break :inner;
             }
