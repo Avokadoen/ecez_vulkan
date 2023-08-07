@@ -30,7 +30,14 @@ pub fn build(b: *std.Build) void {
     // let user enable/disable tracy
     const ztracy_enable = b.option(bool, "enable-tracy", "Enable Tracy profiler") orelse false;
     // link ecez and ztracy
-    ecez.link(b, exe, true, ztracy_enable);
+    ecez.link(
+        b,
+        exe,
+        target,
+        mode,
+        true,
+        ztracy_enable,
+    );
 
     // link glfw
     glfwLink(b, exe);

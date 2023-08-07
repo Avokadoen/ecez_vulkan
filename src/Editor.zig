@@ -337,7 +337,7 @@ const TransformSystems = struct {
     }
 
     /// This system takes each instance handle and transform pair and send the transform to the renderer storage to be rendered
-    pub fn propagateToRenderer(instance_handle: InstanceHandle, transform: Transform, render_context: *ecez.SharedState(RenderContext)) void {
+    pub fn propagateToRenderer(transform: Transform, instance_handle: InstanceHandle, render_context: *ecez.SharedState(RenderContext)) void {
         var _render_context = @as(*RenderContext, @ptrCast(render_context));
         _render_context.setInstanceTransform(instance_handle, transform.mat);
     }
