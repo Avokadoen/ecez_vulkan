@@ -1345,11 +1345,11 @@ inline fn createNewEntityMenu(self: *Editor) !void {
 }
 
 inline fn getRenderContext(self: *Editor) *RenderContext {
-    return @as(*RenderContext, @ptrCast(self.storage.getSharedStatePtrWithSharedStateType(*ecez.SharedState(RenderContext))));
+    return @ptrCast(self.storage.getSharedStatePtrWithSharedStateType(*ecez.SharedState(RenderContext)));
 }
 
 inline fn getPersitentState(self: *Editor) *PersistentState {
-    return @as(*PersistentState, @ptrCast(self.storage.getSharedStatePtrWithSharedStateType(*ecez.SharedState(PersistentState))));
+    return @ptrCast(self.storage.getSharedStatePtrWithSharedStateType(*ecez.SharedState(PersistentState)));
 }
 
 const MarkerType = enum {
