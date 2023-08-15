@@ -244,13 +244,6 @@ fn specializedRemoveHandle(comptime Component: type) ?type {
     };
 }
 
-/// Synchronize the state of instance handles so that they have a valid handle according to the running render context
-pub fn importInstanceHandlesSystem(instance_handle: *InstanceHandle, shared_render_context: *ecez.SharedState(RenderContext)) void {
-    var render_context = @as(*RenderContext, @ptrCast(shared_render_context));
-    // TODO: handle error
-    instance_handle.* = render_context.getNewInstance(instance_handle.mesh_handle) catch unreachable;
-}
-
 // TODO: Doing these things for all enitites in the scene is extremely inefficient
 //       since the scene editor is "static". This should only be done for the object
 const TransformSystems = struct {
@@ -512,9 +505,6 @@ const Scheduler = ecez.CreateScheduler(Storage, .{
         ecez.DependOn(TransformSystems.applyPosition, .{TransformSystems.applyRotation}),
         ecez.DependOn(TransformSystems.propagateToRenderer, .{TransformSystems.applyPosition}),
     }, .{}),
-    ecez.Event("on_import", .{
-        importInstanceHandlesSystem,
-    }, .{}),
 });
 
 // TODO: editor should not be part of renderer
@@ -669,9 +659,16 @@ pub fn importFromFile(self: *Editor, file_name: []const u8) !void {
     var render_context = self.getRenderContext();
     render_context.clearInstancesRetainingCapacity();
 
-    // this will make each render instance component get a new handle from the renderer
-    self.scheduler.dispatchEvent(&self.storage, .on_import, .{}, .{});
-    self.scheduler.waitEvent(.on_import);
+    const RenderInstanceHandleQuery = Storage.Query(struct {
+        instance_handle: *InstanceHandle,
+    }, .{});
+
+    var instance_handle_iter = RenderInstanceHandleQuery.submit(&self.storage);
+
+    // Synchronize the state of instance handles so that they have a valid handle according to the running render context
+    while (instance_handle_iter.next()) |item| {
+        item.instance_handle.* = try render_context.getNewInstance(item.instance_handle.mesh_handle);
+    }
 
     // propagate all the changes to the GPU
     try self.forceFlush();
