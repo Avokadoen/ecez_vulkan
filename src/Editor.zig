@@ -244,66 +244,6 @@ fn specializedRemoveHandle(comptime Component: type) ?type {
     };
 }
 
-// TODO: it would be nicer here to use PeristentState as event data because it is easier to see when it is changed by systems
-/// Generate the entries of the object list depending on objects in the scene
-pub fn objectListSystem(entity: ecez.Entity, metadata: *ObjectMetadata, persistent_state: *ecez.SharedState(PersistentState)) void {
-    const selected_entity_id = blk: {
-        // selected entity is either our persistent user selction, or an invalid/unlikely InstanceHandle.
-        if (persistent_state.selected_entity) |selected_entity| {
-            break :blk selected_entity.id;
-        } else {
-            const invalid_entity_id: ecez.EntityId = std.math.maxInt(ecez.EntityId);
-            break :blk @as(ecez.EntityId, @bitCast(invalid_entity_id));
-        }
-    };
-
-    // if user is renaming the selectable
-    if (persistent_state.object_list.renaming_entity and entity.id == selected_entity_id) {
-
-        // make sure the user can start typing as soon as they initiate renaming
-        if (persistent_state.object_list.first_rename_draw) {
-            zgui.setKeyboardFocusHere(0);
-            persistent_state.object_list.first_rename_draw = false;
-        }
-
-        if (zgui.inputText("##object_list_rename", .{
-            .buf = &persistent_state.object_list.renaming_buffer,
-            .flags = .{ .enter_returns_true = true },
-        })) {
-            const new_len = std.mem.indexOf(u8, &persistent_state.object_list.renaming_buffer, &[_]u8{0}).?;
-
-            if (new_len > 0) {
-                metadata.rename(persistent_state.object_list.renaming_buffer[0..new_len]);
-
-                // set object name field to current selection
-                const display_name = metadata.getDisplayName();
-                std.mem.copy(u8, &persistent_state.object_inspector.name_buffer, display_name);
-                persistent_state.object_inspector.name_buffer[display_name.len] = 0;
-
-                persistent_state.object_list.renaming_entity = false;
-                @memset(&persistent_state.object_list.renaming_buffer, 0);
-            }
-        }
-    } else {
-        if (zgui.selectable(metadata.getId(), .{
-            .selected = entity.id == selected_entity_id,
-            .flags = .{ .allow_double_click = true },
-        })) {
-            // set object name field to current selection
-            const display_name = metadata.getDisplayName();
-            std.mem.copy(u8, &persistent_state.object_inspector.name_buffer, display_name);
-
-            // Set index to a non existing index. This makes no object selected
-            persistent_state.object_inspector.selected_component_index = fake_components.len;
-            persistent_state.object_inspector.name_buffer[display_name.len] = 0;
-
-            persistent_state.object_list.first_rename_draw = true;
-            persistent_state.object_list.renaming_entity = zgui.isItemHovered(.{}) and zgui.isMouseDoubleClicked(zgui.MouseButton.left);
-            persistent_state.selected_entity = entity;
-        }
-    }
-}
-
 /// Synchronize the state of instance handles so that they have a valid handle according to the running render context
 pub fn importInstanceHandlesSystem(instance_handle: *InstanceHandle, shared_render_context: *ecez.SharedState(RenderContext)) void {
     var render_context = @as(*RenderContext, @ptrCast(shared_render_context));
@@ -562,10 +502,8 @@ const Storage = ecez.CreateStorage(.{
     RenderContext,
 });
 
-// TODO: convert draw_object_list and on_import to simple queries inline
+// TODO: convert on_import to simple queries inline
 const Scheduler = ecez.CreateScheduler(Storage, .{
-    // event to draw all objects in the scene as an item in a list
-    ecez.Event("draw_object_list", .{objectListSystem}, .{}),
     // event to apply all transformation and update render buffers as needed
     ecez.Event("transform_update", .{
         TransformSystems.reset,
@@ -907,8 +845,74 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                     try self.createNewEntityMenu();
                 }
 
-                self.scheduler.dispatchEvent(&self.storage, .draw_object_list, .{}, .{});
-                self.scheduler.waitEvent(.draw_object_list);
+                const ObjectListQuery = Storage.Query(
+                    struct {
+                        entity: ecez.Entity,
+                        metadata: *ObjectMetadata,
+                    },
+                    .{},
+                );
+
+                var list_item_iter = ObjectListQuery.submit(&self.storage);
+
+                var persistent_state = self.getPersitentState();
+                while (list_item_iter.next()) |list_item| {
+                    const selected_entity_id = blk: {
+                        // selected entity is either our persistent user selction, or an invalid/unlikely InstanceHandle.
+                        if (persistent_state.selected_entity) |selected_entity| {
+                            break :blk selected_entity.id;
+                        } else {
+                            const invalid_entity_id: ecez.EntityId = std.math.maxInt(ecez.EntityId);
+                            break :blk @as(ecez.EntityId, @bitCast(invalid_entity_id));
+                        }
+                    };
+
+                    // if user is renaming the selectable
+                    if (persistent_state.object_list.renaming_entity and list_item.entity.id == selected_entity_id) {
+
+                        // make sure the user can start typing as soon as they initiate renaming
+                        if (persistent_state.object_list.first_rename_draw) {
+                            zgui.setKeyboardFocusHere(0);
+                            persistent_state.object_list.first_rename_draw = false;
+                        }
+
+                        if (zgui.inputText("##object_list_rename", .{
+                            .buf = &persistent_state.object_list.renaming_buffer,
+                            .flags = .{ .enter_returns_true = true },
+                        })) {
+                            const new_len = std.mem.indexOf(u8, &persistent_state.object_list.renaming_buffer, &[_]u8{0}).?;
+
+                            if (new_len > 0) {
+                                list_item.metadata.rename(persistent_state.object_list.renaming_buffer[0..new_len]);
+
+                                // set object name field to current selection
+                                const display_name = list_item.metadata.getDisplayName();
+                                std.mem.copy(u8, &persistent_state.object_inspector.name_buffer, display_name);
+                                persistent_state.object_inspector.name_buffer[display_name.len] = 0;
+
+                                persistent_state.object_list.renaming_entity = false;
+                                @memset(&persistent_state.object_list.renaming_buffer, 0);
+                            }
+                        }
+                    } else {
+                        if (zgui.selectable(list_item.metadata.getId(), .{
+                            .selected = list_item.entity.id == selected_entity_id,
+                            .flags = .{ .allow_double_click = true },
+                        })) {
+                            // set object name field to current selection
+                            const display_name = list_item.metadata.getDisplayName();
+                            std.mem.copy(u8, &persistent_state.object_inspector.name_buffer, display_name);
+
+                            // Set index to a non existing index. This makes no object selected
+                            persistent_state.object_inspector.selected_component_index = fake_components.len;
+                            persistent_state.object_inspector.name_buffer[display_name.len] = 0;
+
+                            persistent_state.object_list.first_rename_draw = true;
+                            persistent_state.object_list.renaming_entity = zgui.isItemHovered(.{}) and zgui.isMouseDoubleClicked(zgui.MouseButton.left);
+                            persistent_state.selected_entity = list_item.entity;
+                        }
+                    }
+                }
             }
         }
 
@@ -1319,7 +1323,6 @@ pub fn createNewVisbleObject(
 }
 
 fn forceFlush(self: *Editor) !void {
-    // TODO: use query here instead
     self.scheduler.dispatchEvent(&self.storage, .transform_update, .{}, .{});
     self.scheduler.waitEvent(.transform_update);
     self.signalRenderUpdate();
