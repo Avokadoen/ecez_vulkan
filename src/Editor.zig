@@ -1318,7 +1318,8 @@ pub fn createNewVisbleObject(
     }
 }
 
-inline fn forceFlush(self: *Editor) !void {
+fn forceFlush(self: *Editor) !void {
+    // TODO: use query here instead
     self.scheduler.dispatchEvent(&self.storage, .transform_update, .{}, .{});
     self.scheduler.waitEvent(.transform_update);
     self.signalRenderUpdate();

@@ -13,7 +13,7 @@
         {
             "label": "build release",
             "type": "shell",
-            "command": "zig build -Drelease-safe=true",
+            "command": "zig build -Doptimize=ReleaseSafe",
             "group": "build",
             "problemMatcher": [
                 "$gcc"

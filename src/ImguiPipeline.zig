@@ -20,8 +20,6 @@ const dmem = @import("device_memory.zig");
 
 const vertex_index_buffer_size = 8 * dmem.bytes_in_megabyte;
 
-const AssetHandler = @import("AssetHandler.zig");
-
 const ImguiPipeline = @This();
 
 pub const PushConstant = struct {
@@ -51,7 +49,6 @@ non_coherent_atom_size: vk.DeviceSize,
 
 pub fn init(
     allocator: Allocator,
-    asset_handler: AssetHandler,
     vki: InstanceDispatch,
     physical_device: vk.PhysicalDevice,
     vkd: DeviceDispatch,
@@ -280,15 +277,10 @@ pub fn init(
 
     var pipeline: vk.Pipeline = undefined;
     {
-        const vert_bytes = blk: {
-            const path = try asset_handler.getPath(allocator, "shaders/ui.vert.spv");
-            defer allocator.free(path);
-            const bytes = try pipeline_utils.readFile(allocator, path);
-            break :blk bytes;
-        };
-        defer allocator.free(vert_bytes);
+        const shaders = @import("shaders");
 
-        const vert_module = try pipeline_utils.createShaderModule(vkd, device, vert_bytes);
+        const vert_bytes = shaders.ui_vert_spv;
+        const vert_module = try pipeline_utils.createShaderModule(vkd, device, &vert_bytes);
         defer vkd.destroyShaderModule(device, vert_module, null);
 
         const vert_stage_info = vk.PipelineShaderStageCreateInfo{
@@ -299,15 +291,8 @@ pub fn init(
             .p_specialization_info = null,
         };
 
-        const frag_bytes = blk: {
-            const path = try asset_handler.getPath(allocator, "shaders/ui.frag.spv");
-            defer allocator.free(path);
-            const bytes = try pipeline_utils.readFile(allocator, path);
-            break :blk bytes;
-        };
-        defer allocator.free(frag_bytes);
-
-        const frag_module = try pipeline_utils.createShaderModule(vkd, device, frag_bytes);
+        const frag_bytes = shaders.ui_frag_spv;
+        const frag_module = try pipeline_utils.createShaderModule(vkd, device, &frag_bytes);
         defer vkd.destroyShaderModule(device, frag_module, null);
 
         const frag_stage_info = vk.PipelineShaderStageCreateInfo{

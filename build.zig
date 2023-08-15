@@ -80,20 +80,22 @@ pub fn build(b: *std.Build) void {
     );
 
     // compile the mesh shaders
-    shader_comp.add("mesh.vert.spv", "assets/shaders/mesh.vert", .{});
-    shader_comp.add("mesh.frag.spv", "assets/shaders/mesh.frag", .{});
+    shader_comp.add("mesh_vert_spv", "assets/shaders/mesh.vert", .{});
+    shader_comp.add("mesh_frag_spv", "assets/shaders/mesh.frag", .{});
 
     // compile the ui shaders
-    shader_comp.add("ui.vert.spv", "assets/shaders/ui.vert", .{});
-    shader_comp.add("ui.frag.spv", "assets/shaders/ui.frag", .{});
+    shader_comp.add("ui_vert_spv", "assets/shaders/ui.vert", .{});
+    shader_comp.add("ui_frag_spv", "assets/shaders/ui.frag", .{});
 
     var asset_move_step = AssetMoveStep.init(b) catch unreachable;
     exe.step.dependOn(&asset_move_step.step);
     asset_move_step.step.dependOn(&shader_comp.step);
 
     var shader_move_step = ShaderMoveStep.init(b, shader_comp) catch unreachable;
+
     exe.step.dependOn(&shader_move_step.step);
-    shader_move_step.step.dependOn(&asset_move_step.step);
+    shader_move_step.step.dependOn(&shader_comp.step);
+    exe.addModule("shaders", shader_comp.getModule());
 
     b.installArtifact(exe);
 

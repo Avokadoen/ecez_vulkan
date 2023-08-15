@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const ztracy = @import("ztracy");
 const glfw = @import("glfw");
 const zm = @import("zmath");
 
@@ -8,6 +9,8 @@ const Editor = @import("Editor.zig");
 const RenderContext = @import("RenderContext.zig");
 
 pub fn main() !void {
+    ztracy.SetThreadName("main thread");
+
     // create a gpa with default configuration
     var alloc = if (RenderContext.is_debug_build) std.heap.GeneralPurposeAllocator(.{}){} else std.heap.c_allocator;
     defer {
@@ -71,6 +74,8 @@ pub fn main() !void {
     var then = std.time.microTimestamp();
     // Wait for the user to close the window.
     while (!window.shouldClose()) {
+        defer ztracy.FrameMark();
+
         glfw.pollEvents();
 
         const now = std.time.microTimestamp();

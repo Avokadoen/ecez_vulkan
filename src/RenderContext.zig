@@ -538,8 +538,6 @@ pub fn init(
     errdefer vkd.destroyPipelineLayout(device, pipeline_layout, null);
 
     const pipeline = try createGraphicsPipeline(
-        allocator,
-        asset_handler,
         vkd,
         device,
         swapchain_extent,
@@ -1028,7 +1026,6 @@ pub fn init(
 
     const imgui_pipeline = if (enable_imgui) try ImguiPipeline.init(
         allocator,
-        asset_handler,
         vki,
         physical_device,
         vkd,
@@ -2172,23 +2169,16 @@ inline fn createRenderPass(vkd: DeviceDispatch, device: vk.Device, swapchain_for
 
 // TODO: remove this, copy code inline instead
 fn createGraphicsPipeline(
-    allocator: Allocator,
-    asset_handler: AssetHandler,
     vkd: DeviceDispatch,
     device: vk.Device,
     swapchain_extent: vk.Extent2D,
     render_pass: vk.RenderPass,
     pipeline_layout: vk.PipelineLayout,
 ) !vk.Pipeline {
-    const vert_bytes = blk: {
-        const path = try asset_handler.getPath(allocator, "shaders/mesh.vert.spv");
-        defer allocator.free(path);
-        const bytes = try pipeline_utils.readFile(allocator, path);
-        break :blk bytes;
-    };
-    defer allocator.free(vert_bytes);
+    const shaders = @import("shaders");
 
-    const vert_module = try pipeline_utils.createShaderModule(vkd, device, vert_bytes);
+    const vert_bytes = shaders.mesh_vert_spv;
+    const vert_module = try pipeline_utils.createShaderModule(vkd, device, &vert_bytes);
     defer vkd.destroyShaderModule(device, vert_module, null);
 
     const vert_stage_info = vk.PipelineShaderStageCreateInfo{
@@ -2199,15 +2189,8 @@ fn createGraphicsPipeline(
         .p_specialization_info = null,
     };
 
-    const frag_bytes = blk: {
-        const path = try asset_handler.getPath(allocator, "shaders/mesh.frag.spv");
-        defer allocator.free(path);
-        const bytes = try pipeline_utils.readFile(allocator, path);
-        break :blk bytes;
-    };
-    defer allocator.free(frag_bytes);
-
-    const frag_module = try pipeline_utils.createShaderModule(vkd, device, frag_bytes);
+    const frag_bytes = shaders.mesh_frag_spv;
+    const frag_module = try pipeline_utils.createShaderModule(vkd, device, &frag_bytes);
     defer vkd.destroyShaderModule(device, frag_module, null);
 
     const frag_stage_info = vk.PipelineShaderStageCreateInfo{
