@@ -76,7 +76,7 @@ pub inline fn createDeviceImageMemory(
     return vkd.allocateMemory(device, &allocation_info, null);
 }
 
-inline fn findMemoryTypeIndex(vki: InstanceDispatch, physical_device: vk.PhysicalDevice, type_filter: u32, property_flags: vk.MemoryPropertyFlags) !u32 {
+pub inline fn findMemoryTypeIndex(vki: InstanceDispatch, physical_device: vk.PhysicalDevice, type_filter: u32, property_flags: vk.MemoryPropertyFlags) !u32 {
     const properties = vki.getPhysicalDeviceMemoryProperties(physical_device);
     for (properties.memory_types[0..properties.memory_type_count], 0..) |memory_type, i| {
         std.debug.assert(i < 32);

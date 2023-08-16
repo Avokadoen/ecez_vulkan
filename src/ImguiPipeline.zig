@@ -14,6 +14,8 @@ const MutableBuffer = @import("MutableBuffer.zig");
 const StagingBuffer = @import("StagingBuffer.zig");
 const dmem = @import("device_memory.zig");
 
+const ImageResource = @import("ImageResource.zig");
+
 // based on sascha's imgui example
 
 // TODO: do I even need all this logic?? https://github.com/GameTechDev/MetricsGui/blob/master/imgui/examples/imgui_impl_vulkan.h
@@ -27,10 +29,8 @@ pub const PushConstant = struct {
     translate: [2]f32,
 };
 
-font_sampler: vk.Sampler,
-font_image: vk.Image,
+font_image_resources: ImageResource,
 font_image_memory: vk.DeviceMemory,
-font_view: vk.ImageView,
 
 // TODO: we can have multiple frames in flight, we need multiple buffers to avoid race hazards
 vertex_index_buffer: MutableBuffer,
@@ -63,131 +63,47 @@ pub fn init(
     zgui.init(allocator);
     errdefer zgui.deinit();
 
-    {
-        // const font_path = try asset_handler.getCPath(allocator, "fonts/quinque-five-font/Quinquefive-K7qep.ttf");
-        // defer allocator.free(font_path);
-        // const font = zgui.io.addFontFromFile(font_path, 10.0);
-        // zgui.io.setDefaultFont(font);
-    }
+    // {
+    //     const font_path = try asset_handler.getCPath(allocator, "fonts/quinque-five-font/Quinquefive-K7qep.ttf");
+    //     defer allocator.free(font_path);
+    //     const font = zgui.io.addFontFromFile(font_path, 10.0);
+    //     zgui.io.setDefaultFont(font);
+    // }
 
     // Create font texture
-    var font_atlas_width: i32 = undefined;
-    var font_atlas_height: i32 = undefined;
-    const font_atlas_pixels = zgui.io.getFontsTextDataAsRgba32(&font_atlas_width, &font_atlas_height);
+    var font_image_memory: vk.DeviceMemory = .null_handle;
+    const font_image_resources = font_image_setup_blk: {
+        var font_atlas_width: i32 = undefined;
+        var font_atlas_height: i32 = undefined;
+        const font_atlas_pixels = zgui.io.getFontsTextDataAsRgba32(&font_atlas_width, &font_atlas_height);
 
-    const font_image_format: vk.Format = .r8g8b8a8_unorm;
-    const font_image = blk: {
-        const image_info = vk.ImageCreateInfo{
-            .flags = .{},
-            .image_type = .@"2d",
-            .format = font_image_format,
-            .extent = .{
-                .width = @as(u32, @intCast(font_atlas_width)),
-                .height = @as(u32, @intCast(font_atlas_height)),
-                .depth = @as(u32, @intCast(1)),
-            },
-            .mip_levels = 1,
-            .array_layers = 1,
-            .samples = .{
-                .@"1_bit" = true,
-            },
-            .tiling = .optimal,
-            .usage = .{
-                .sampled_bit = true,
-                .transfer_dst_bit = true,
-            },
-            .sharing_mode = .exclusive,
-            .queue_family_index_count = 0,
-            .p_queue_family_indices = undefined,
-            .initial_layout = .undefined,
-        };
-        break :blk try vkd.createImage(device, &image_info, null);
+        var image_resources = try ImageResource.init(
+            vkd,
+            device,
+            @intCast(font_atlas_width),
+            @intCast(font_atlas_height),
+        );
+        errdefer image_resources.deinit(vkd, device);
+
+        font_image_memory = try ImageResource.bindImagesToMemory(
+            vki,
+            vkd,
+            physical_device,
+            device,
+            &[_]*ImageResource{&image_resources},
+            &[_][]const u32{font_atlas_pixels[0..@as(usize, @intCast(font_atlas_width * font_atlas_height))]},
+            image_staging_buffer,
+        );
+
+        break :font_image_setup_blk image_resources;
     };
-    errdefer vkd.destroyImage(device, font_image, null);
-
-    // TODO: use same image buffer as main pipeline
-    const font_image_memory = try dmem.createDeviceImageMemory(
-        vki,
-        physical_device,
-        vkd,
-        device,
-        &[_]vk.Image{font_image},
-    );
+    errdefer font_image_resources.deinit(vkd, device);
     errdefer vkd.freeMemory(device, font_image_memory, null);
-    try vkd.bindImageMemory(device, font_image, font_image_memory, 0);
-
-    const font_view = blk: {
-        const view_info = vk.ImageViewCreateInfo{
-            .flags = .{},
-            .image = font_image,
-            .view_type = .@"2d",
-            .format = font_image_format,
-            .components = .{
-                .r = .identity,
-                .g = .identity,
-                .b = .identity,
-                .a = .identity,
-            },
-            .subresource_range = .{
-                .aspect_mask = .{ .color_bit = true },
-                .base_mip_level = 0,
-                .level_count = 1,
-                .base_array_layer = 0,
-                .layer_count = 1,
-            },
-        };
-        break :blk try vkd.createImageView(device, &view_info, null);
-    };
-    errdefer vkd.destroyImageView(device, font_view, null);
-
-    // upload texture data to gpu
-    try image_staging_buffer.scheduleLayoutTransitionBeforeTransfers(font_image, .{
-        .format = font_image_format,
-        .old_layout = .undefined,
-        .new_layout = .transfer_dst_optimal,
-    });
-    try image_staging_buffer.scheduleTransferToDst(
-        font_image,
-        vk.Extent2D{
-            .width = @as(u32, @intCast(font_atlas_width)),
-            .height = @as(u32, @intCast(font_atlas_height)),
-        },
-        u32,
-        font_atlas_pixels[0..@as(usize, @intCast(font_atlas_width * font_atlas_height))],
-    );
-    try image_staging_buffer.scheduleLayoutTransitionAfterTransfers(font_image, .{
-        .format = font_image_format,
-        .old_layout = .transfer_dst_optimal,
-        .new_layout = .shader_read_only_optimal,
-    });
-
-    const font_sampler = blk: {
-        const sampler_info = vk.SamplerCreateInfo{
-            .flags = .{},
-            .mag_filter = .linear,
-            .min_filter = .linear,
-            .mipmap_mode = .linear,
-            .address_mode_u = .clamp_to_edge,
-            .address_mode_v = .clamp_to_edge,
-            .address_mode_w = .clamp_to_edge,
-            .mip_lod_bias = 0,
-            .anisotropy_enable = vk.FALSE,
-            .max_anisotropy = 0,
-            .compare_enable = vk.FALSE,
-            .compare_op = .never,
-            .min_lod = 0,
-            .max_lod = 0,
-            .border_color = .float_opaque_white,
-            .unnormalized_coordinates = vk.FALSE,
-        };
-        break :blk try vkd.createSampler(device, &sampler_info, null);
-    };
-    errdefer vkd.destroySampler(device, font_sampler, null);
 
     const descriptor_pool = blk: {
         const pool_sizes = [_]vk.DescriptorPoolSize{.{
             .type = .combined_image_sampler,
-            .descriptor_count = 1, // TODO: swap image size ?
+            .descriptor_count = 1,
         }};
         const descriptor_pool_info = vk.DescriptorPoolCreateInfo{
             .flags = .{},
@@ -235,8 +151,8 @@ pub fn init(
 
     {
         const descriptor_info = vk.DescriptorImageInfo{
-            .sampler = font_sampler,
-            .image_view = font_view,
+            .sampler = font_image_resources.sampler,
+            .image_view = font_image_resources.view.?,
             .image_layout = .shader_read_only_optimal,
         };
         const write_descriptor_sets = [_]vk.WriteDescriptorSet{.{
@@ -453,10 +369,8 @@ pub fn init(
     @memset(buffer_offsets, 0);
 
     return ImguiPipeline{
-        .font_sampler = font_sampler,
-        .font_image = font_image,
+        .font_image_resources = font_image_resources,
         .font_image_memory = font_image_memory,
-        .font_view = font_view,
         .vertex_index_buffer = vertex_index_buffer,
         .buffer_offsets = buffer_offsets,
         .vertex_buffer_offsets = buffer_offsets[0..swapchain_count],
@@ -479,10 +393,9 @@ pub fn deinit(self: ImguiPipeline, allocator: Allocator, vkd: DeviceDispatch, de
     vkd.destroyPipelineLayout(device, self.pipeline_layout, null);
     vkd.destroyDescriptorSetLayout(device, self.descriptor_set_layout, null);
     vkd.destroyDescriptorPool(device, self.descriptor_pool, null);
-    vkd.destroySampler(device, self.font_sampler, null);
-    vkd.destroyImageView(device, self.font_view, null);
+
+    self.font_image_resources.deinit(vkd, device);
     vkd.freeMemory(device, self.font_image_memory, null);
-    vkd.destroyImage(device, self.font_image, null);
 
     zgui.deinit();
 }
