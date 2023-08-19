@@ -10,12 +10,11 @@ const StagingBuffer = @import("StagingBuffer.zig");
 
 const ImageResource = @This();
 
-// only support r8g8b8a8_unorm for now
-pub const image_format: vk.Format = .r8g8b8a8_unorm;
-
 image: vk.Image,
 view: ?vk.ImageView,
 sampler: vk.Sampler,
+
+format: vk.Format,
 
 width: u32,
 height: u32,
@@ -25,12 +24,13 @@ pub fn init(
     device: vk.Device,
     width: u32,
     height: u32,
+    format: vk.Format,
 ) !ImageResource {
     const image = blk: {
         const image_info = vk.ImageCreateInfo{
             .flags = .{},
             .image_type = .@"2d",
-            .format = image_format,
+            .format = format,
             .extent = .{
                 .width = width,
                 .height = height,
@@ -82,6 +82,7 @@ pub fn init(
         .image = image,
         .view = null,
         .sampler = sampler,
+        .format = format,
         .width = width,
         .height = height,
     };
@@ -101,7 +102,7 @@ pub fn bindImagesToMemory(
     physical_device: vk.PhysicalDevice,
     device: vk.Device,
     image_resources: []const *ImageResource,
-    image_pixels: []const []const u32,
+    image_pixels: []const []const u8,
     image_staging_buffer: *StagingBuffer.Image,
 ) !vk.DeviceMemory {
     // TODO: use same image buffer as main pipeline
@@ -142,7 +143,7 @@ pub fn bindImagesToMemory(
                 .flags = .{},
                 .image = image_resource.image,
                 .view_type = .@"2d",
-                .format = ImageResource.image_format,
+                .format = image_resource.format,
                 .components = .{
                     .r = .identity,
                     .g = .identity,
@@ -167,7 +168,7 @@ pub fn bindImagesToMemory(
     // upload texture data to gpu
     for (image_resources, image_pixels) |image_resource, pixels| {
         try image_staging_buffer.scheduleLayoutTransitionBeforeTransfers(image_resource.image, .{
-            .format = ImageResource.image_format,
+            .format = image_resource.format,
             .old_layout = .undefined,
             .new_layout = .transfer_dst_optimal,
         });
@@ -177,11 +178,11 @@ pub fn bindImagesToMemory(
                 .width = image_resource.width,
                 .height = image_resource.height,
             },
-            u32,
+            u8,
             pixels,
         );
         try image_staging_buffer.scheduleLayoutTransitionAfterTransfers(image_resource.image, .{
-            .format = ImageResource.image_format,
+            .format = image_resource.format,
             .old_layout = .transfer_dst_optimal,
             .new_layout = .shader_read_only_optimal,
         });

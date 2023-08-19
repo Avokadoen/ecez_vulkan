@@ -1035,6 +1035,7 @@ pub fn init(
         @as(u32, @intCast(swapchain_images.len)),
         render_pass,
         &image_staging_buffer,
+        asset_handler,
     ) else undefined;
 
     // transfer all data to GPU memory at the end of init

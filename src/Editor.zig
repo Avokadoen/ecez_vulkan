@@ -556,6 +556,8 @@ not_allowed: glfw.Cursor,
 storage: Storage,
 scheduler: Scheduler,
 
+icon: c_uint = 1,
+
 pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers: []const MeshInstancehInitializeContex) !Editor {
     var render_context = try RenderContext.init(allocator, window, mesh_instance_initalizers, .{
         .update_rate = .manually,
@@ -852,6 +854,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
             zgui.setNextWindowSize(.{ .w = width, .h = @as(f32, @floatFromInt(frame_size.height)), .cond = .always });
             zgui.setNextWindowPos(.{ .x = 0, .y = header_height, .cond = .always });
+
             _ = zgui.begin("Object List", .{ .popen = null, .flags = .{
                 .menu_bar = false,
                 .no_move = true,
@@ -861,6 +864,11 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 .no_collapse = true,
             } });
             defer zgui.end();
+
+            zgui.image(@ptrCast(&self.icon), .{ .w = 18, .h = 18, .uv1 = [_]f32{
+                0.0625,
+                0.0625,
+            } });
 
             {
                 // TODO: only have this if none of the selectables are hovered
@@ -1043,7 +1051,6 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                                     zgui.text("{s}:", .{@typeName(Component)});
 
                                     const component_ptr: *Component = blk: {
-                                        // @setRuntimeSafety(false);
                                         const ptr = std.mem.bytesAsValue(Component, persistent_state.add_component_modal.component_bytes[0..@sizeOf(Component)]);
                                         break :blk @alignCast(ptr);
                                     };

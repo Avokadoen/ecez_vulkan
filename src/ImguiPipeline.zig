@@ -3,6 +3,9 @@ const Allocator = std.mem.Allocator;
 
 const vk = @import("vulkan");
 const zgui = @import("zgui");
+const zigimg = @import("zigimg");
+
+const AssetHandler = @import("AssetHandler.zig");
 
 const vk_dispatch = @import("vk_dispatch.zig");
 const DeviceDispatch = vk_dispatch.DeviceDispatch;
@@ -24,13 +27,24 @@ const vertex_index_buffer_size = 8 * dmem.bytes_in_megabyte;
 
 const ImguiPipeline = @This();
 
-pub const PushConstant = struct {
+pub const UiPushConstant = extern struct {
     scale: [2]f32,
     translate: [2]f32,
 };
 
+// TODO: move out of ImguiPipeline
+pub const TextureIndices = struct {
+    font: c_uint = 0,
+    icon: c_uint = 1,
+};
+pub const FragDrawPushConstant = extern struct {
+    texture_index: c_uint,
+};
+
 font_image_resources: ImageResource,
-font_image_memory: vk.DeviceMemory,
+icon_image_resources: ImageResource,
+image_memory: vk.DeviceMemory,
+texture_indices: *TextureIndices,
 
 // TODO: we can have multiple frames in flight, we need multiple buffers to avoid race hazards
 vertex_index_buffer: MutableBuffer,
@@ -58,6 +72,7 @@ pub fn init(
     swapchain_count: u32,
     render_pass: vk.RenderPass,
     image_staging_buffer: *StagingBuffer.Image,
+    asset_handler: AssetHandler,
 ) !ImguiPipeline {
     // initialize imgui
     zgui.init(allocator);
@@ -70,40 +85,80 @@ pub fn init(
     //     zgui.io.setDefaultFont(font);
     // }
 
+    // TODO: image creation should be global since we are using descriptor indexing?
     // Create font texture
-    var font_image_memory: vk.DeviceMemory = .null_handle;
-    const font_image_resources = font_image_setup_blk: {
+    var image_memory: vk.DeviceMemory = .null_handle;
+    var font_image_resources: ImageResource = undefined;
+    var icon_image_resources: ImageResource = undefined;
+    {
         var font_atlas_width: i32 = undefined;
         var font_atlas_height: i32 = undefined;
         const font_atlas_pixels = zgui.io.getFontsTextDataAsRgba32(&font_atlas_width, &font_atlas_height);
 
-        var image_resources = try ImageResource.init(
+        font_image_resources = try ImageResource.init(
             vkd,
             device,
             @intCast(font_atlas_width),
             @intCast(font_atlas_height),
+            .r8g8b8a8_unorm,
         );
-        errdefer image_resources.deinit(vkd, device);
+        errdefer font_image_resources.deinit(vkd, device);
 
-        font_image_memory = try ImageResource.bindImagesToMemory(
+        const icon_path = try asset_handler.getPath(allocator, "images/iconset.png");
+        defer allocator.free(icon_path);
+
+        var icon_image = try zigimg.Image.fromFilePath(allocator, icon_path);
+        defer icon_image.deinit();
+
+        std.debug.assert(icon_image.pixelFormat() == .grayscale8);
+        icon_image_resources = try ImageResource.init(
+            vkd,
+            device,
+            @intCast(icon_image.width),
+            @intCast(icon_image.height),
+            .r8_unorm,
+        );
+        errdefer icon_image_resources.deinit(vkd, device);
+
+        const raw_font_atlas_pixels: [*]const u8 = @ptrCast(font_atlas_pixels);
+        const icon_image_pixels = icon_image.pixels.asBytes();
+
+        image_memory = try ImageResource.bindImagesToMemory(
             vki,
             vkd,
             physical_device,
             device,
-            &[_]*ImageResource{&image_resources},
-            &[_][]const u32{font_atlas_pixels[0..@as(usize, @intCast(font_atlas_width * font_atlas_height))]},
+            &[_]*ImageResource{
+                &font_image_resources,
+                &icon_image_resources,
+            },
+            &[_][]const u8{
+                raw_font_atlas_pixels[0..@intCast(font_atlas_width * font_atlas_height * @sizeOf(u32))],
+                icon_image_pixels,
+            },
             image_staging_buffer,
         );
+    }
+    errdefer {
+        vkd.freeMemory(device, image_memory, null);
+        icon_image_resources.deinit(vkd, device);
+        font_image_resources.deinit(vkd, device);
+    }
 
-        break :font_image_setup_blk image_resources;
-    };
-    errdefer font_image_resources.deinit(vkd, device);
-    errdefer vkd.freeMemory(device, font_image_memory, null);
+    const texture_indices = try allocator.create(TextureIndices);
+    errdefer allocator.destroy(texture_indices);
+
+    texture_indices.* = .{};
+    // set imgui font index
+    zgui.io.setFontsTexId(&texture_indices.font);
+
+    // font atlas + icon atlas
+    const image_count = 2;
 
     const descriptor_pool = blk: {
         const pool_sizes = [_]vk.DescriptorPoolSize{.{
             .type = .combined_image_sampler,
-            .descriptor_count = 1,
+            .descriptor_count = image_count,
         }};
         const descriptor_pool_info = vk.DescriptorPoolCreateInfo{
             .flags = .{},
@@ -119,13 +174,21 @@ pub fn init(
         const set_layout_bindings = [_]vk.DescriptorSetLayoutBinding{.{
             .binding = 0,
             .descriptor_type = .combined_image_sampler,
-            .descriptor_count = 1,
-            .stage_flags = .{
-                .fragment_bit = true,
-            },
+            .descriptor_count = image_count,
+            .stage_flags = .{ .fragment_bit = true },
             .p_immutable_samplers = null,
         }};
+
+        const binding_flags = [set_layout_bindings.len]vk.DescriptorBindingFlagsEXT{.{ .variable_descriptor_count_bit = true }};
+
+        // Mark descriptor binding as variable count
+        const set_layout_binding_flags = vk.DescriptorSetLayoutBindingFlagsCreateInfoEXT{
+            .binding_count = binding_flags.len,
+            .p_binding_flags = &binding_flags,
+        };
+
         const set_layout_info = vk.DescriptorSetLayoutCreateInfo{
+            .p_next = &set_layout_binding_flags,
             .flags = .{},
             .binding_count = set_layout_bindings.len,
             .p_bindings = @as([*]const vk.DescriptorSetLayoutBinding, @ptrCast(&set_layout_bindings)),
@@ -134,8 +197,15 @@ pub fn init(
     };
     errdefer vkd.destroyDescriptorSetLayout(device, descriptor_set_layout, null);
 
+    const variable_counts = [_]u32{image_count};
+    const variable_descriptor_count_alloc_info = vk.DescriptorSetVariableDescriptorCountAllocateInfoEXT{
+        .descriptor_set_count = variable_counts.len,
+        .p_descriptor_counts = &variable_counts,
+    };
+
     const descriptor_set = blk: {
         const alloc_info = vk.DescriptorSetAllocateInfo{
+            .p_next = &variable_descriptor_count_alloc_info,
             .descriptor_pool = descriptor_pool,
             .descriptor_set_count = 1,
             .p_set_layouts = @as([*]const vk.DescriptorSetLayout, @ptrCast(&descriptor_set_layout)),
@@ -150,18 +220,22 @@ pub fn init(
     };
 
     {
-        const descriptor_info = vk.DescriptorImageInfo{
+        const descriptor_info = [_]vk.DescriptorImageInfo{ .{
             .sampler = font_image_resources.sampler,
             .image_view = font_image_resources.view.?,
             .image_layout = .shader_read_only_optimal,
-        };
+        }, .{
+            .sampler = icon_image_resources.sampler,
+            .image_view = icon_image_resources.view.?,
+            .image_layout = .shader_read_only_optimal,
+        } };
         const write_descriptor_sets = [_]vk.WriteDescriptorSet{.{
             .dst_set = descriptor_set,
             .dst_binding = 0,
             .dst_array_element = 0,
-            .descriptor_count = 1,
+            .descriptor_count = descriptor_info.len,
             .descriptor_type = .combined_image_sampler,
-            .p_image_info = @as([*]const vk.DescriptorImageInfo, @ptrCast(&descriptor_info)),
+            .p_image_info = &descriptor_info,
             .p_buffer_info = undefined,
             .p_texel_buffer_view = undefined,
         }};
@@ -174,18 +248,28 @@ pub fn init(
         );
     }
 
+    // shaders assume 16
+    std.debug.assert(@sizeOf(UiPushConstant) == 16);
+
     const pipeline_layout = blk: {
-        const push_constant_range = vk.PushConstantRange{
-            .stage_flags = .{ .vertex_bit = true },
-            .offset = 0,
-            .size = @sizeOf(PushConstant),
+        const push_constant_range = [_]vk.PushConstantRange{
+            .{
+                .stage_flags = .{ .vertex_bit = true },
+                .offset = 0,
+                .size = @sizeOf(UiPushConstant),
+            },
+            .{
+                .stage_flags = .{ .fragment_bit = true },
+                .offset = @sizeOf(UiPushConstant),
+                .size = @sizeOf(FragDrawPushConstant),
+            },
         };
         const pipeline_layout_info = vk.PipelineLayoutCreateInfo{
             .flags = .{},
             .set_layout_count = 1,
             .p_set_layouts = @as([*]const vk.DescriptorSetLayout, @ptrCast(&descriptor_set_layout)),
-            .push_constant_range_count = 1,
-            .p_push_constant_ranges = @as([*]const vk.PushConstantRange, @ptrCast(&push_constant_range)),
+            .push_constant_range_count = push_constant_range.len,
+            .p_push_constant_ranges = &push_constant_range,
         };
         break :blk try vkd.createPipelineLayout(device, &pipeline_layout_info, null);
     };
@@ -370,7 +454,9 @@ pub fn init(
 
     return ImguiPipeline{
         .font_image_resources = font_image_resources,
-        .font_image_memory = font_image_memory,
+        .icon_image_resources = icon_image_resources,
+        .image_memory = image_memory,
+        .texture_indices = texture_indices,
         .vertex_index_buffer = vertex_index_buffer,
         .buffer_offsets = buffer_offsets,
         .vertex_buffer_offsets = buffer_offsets[0..swapchain_count],
@@ -386,6 +472,7 @@ pub fn init(
 }
 
 pub fn deinit(self: ImguiPipeline, allocator: Allocator, vkd: DeviceDispatch, device: vk.Device) void {
+    allocator.destroy(self.texture_indices);
     allocator.free(self.buffer_offsets);
     self.vertex_index_buffer.deinit(vkd, device);
 
@@ -394,8 +481,9 @@ pub fn deinit(self: ImguiPipeline, allocator: Allocator, vkd: DeviceDispatch, de
     vkd.destroyDescriptorSetLayout(device, self.descriptor_set_layout, null);
     vkd.destroyDescriptorPool(device, self.descriptor_pool, null);
 
+    vkd.freeMemory(device, self.image_memory, null);
+    self.icon_image_resources.deinit(vkd, device);
     self.font_image_resources.deinit(vkd, device);
-    vkd.freeMemory(device, self.font_image_memory, null);
 
     zgui.deinit();
 }
@@ -515,14 +603,21 @@ inline fn recordCommandBuffer(self: ImguiPipeline, vkd: DeviceDispatch, command_
     vkd.cmdSetViewport(command_buffer, 0, 1, @as([*]const vk.Viewport, @ptrCast(&viewport)));
 
     // UI scale and translate via push constants
-    const push_constant = PushConstant{
+    const ui_push_constant = UiPushConstant{
         .scale = [2]f32{ 2 / display_size_x, 2 / display_size_y },
         .translate = [2]f32{
             -1,
             -1,
         },
     };
-    vkd.cmdPushConstants(command_buffer, self.pipeline_layout, .{ .vertex_bit = true }, 0, @sizeOf(PushConstant), &push_constant);
+    vkd.cmdPushConstants(
+        command_buffer,
+        self.pipeline_layout,
+        .{ .vertex_bit = true },
+        0,
+        @sizeOf(UiPushConstant),
+        &ui_push_constant,
+    );
 
     if (draw_data.cmd_lists_count > 0) {
         vkd.cmdBindVertexBuffers(
@@ -563,6 +658,17 @@ inline fn recordCommandBuffer(self: ImguiPipeline, vkd: DeviceDispatch, command_
                     },
                 };
                 vkd.cmdSetScissor(command_buffer, 0, 1, @as([*]const vk.Rect2D, @ptrCast(&scissor_rect)));
+
+                const texture_id: *c_uint = @ptrCast(@alignCast(draw_command.texture_id));
+                vkd.cmdPushConstants(
+                    command_buffer,
+                    self.pipeline_layout,
+                    .{ .fragment_bit = true },
+                    @sizeOf(UiPushConstant),
+                    @sizeOf(FragDrawPushConstant),
+                    texture_id,
+                );
+
                 vkd.cmdDrawIndexed(
                     command_buffer,
                     draw_command.elem_count,
