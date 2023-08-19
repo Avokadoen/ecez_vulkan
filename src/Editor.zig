@@ -24,9 +24,6 @@ const MeshInstancehInitializeContex = RenderContext.MeshInstancehInitializeConte
 //       TODO: custom widget for adding a new component
 
 pub const InstanceHandle = RenderContext.InstanceHandle;
-pub const Transform = struct {
-    mat: zm.Mat,
-};
 pub const Position = struct {
     vec: zm.Vec,
 };
@@ -90,7 +87,6 @@ pub const ObjectMetadata = struct {
 
 const fake_components = [_]type{
     ObjectMetadata,
-    Transform,
     Position,
     Rotation,
     Scale,
@@ -119,43 +115,6 @@ const biggest_component_size = blk: {
 
 fn overrideWidgetGenerator(comptime Component: type) ?type {
     return switch (Component) {
-        Transform => struct {
-            pub fn widget(editor: *Editor, transform: *Transform) bool {
-                _ = editor;
-
-                zgui.text("Transform (readonly): ", .{});
-                {
-                    zgui.beginDisabled(.{ .disabled = true });
-                    defer zgui.endDisabled();
-
-                    var row_0: [4]f32 = transform.mat[0];
-                    _ = zgui.inputFloat4("##transform_row_0", .{
-                        .v = &row_0,
-                        .flags = .{ .read_only = true },
-                    });
-
-                    var row_1: [4]f32 = transform.mat[1];
-                    _ = zgui.inputFloat4("##transform_row_1", .{
-                        .v = &row_1,
-                        .flags = .{ .read_only = true },
-                    });
-
-                    var row_2: [4]f32 = transform.mat[2];
-                    _ = zgui.inputFloat4("##transform_row_2", .{
-                        .v = &row_2,
-                        .flags = .{ .read_only = true },
-                    });
-
-                    var row_3: [4]f32 = transform.mat[3];
-                    _ = zgui.inputFloat4("##transform_row_3", .{
-                        .v = &row_3,
-                        .flags = .{ .read_only = true },
-                    });
-                }
-
-                return false;
-            }
-        },
         InstanceHandle => struct {
             pub fn widget(editor: *Editor, instance_handle: *InstanceHandle) bool {
                 const persistent_state = editor.getPersitentState();
@@ -190,8 +149,37 @@ fn overrideWidgetGenerator(comptime Component: type) ?type {
                         }
                     }
                 }
-                zgui.sameLine(.{});
-                marker("You also need a transform for object to be visible", .hint);
+
+                const transform = render_context.getInstanceTransform(instance_handle.*);
+                zgui.text("Transform (readonly): ", .{});
+                {
+                    zgui.beginDisabled(.{ .disabled = true });
+                    defer zgui.endDisabled();
+
+                    var row_0: [4]f32 = transform[0];
+                    _ = zgui.inputFloat4("##transform_row_0", .{
+                        .v = &row_0,
+                        .flags = .{ .read_only = true },
+                    });
+
+                    var row_1: [4]f32 = transform[1];
+                    _ = zgui.inputFloat4("##transform_row_1", .{
+                        .v = &row_1,
+                        .flags = .{ .read_only = true },
+                    });
+
+                    var row_2: [4]f32 = transform[2];
+                    _ = zgui.inputFloat4("##transform_row_2", .{
+                        .v = &row_2,
+                        .flags = .{ .read_only = true },
+                    });
+
+                    var row_3: [4]f32 = transform[3];
+                    _ = zgui.inputFloat4("##transform_row_3", .{
+                        .v = &row_3,
+                        .flags = .{ .read_only = true },
+                    });
+                }
 
                 return false;
             }
@@ -285,31 +273,37 @@ fn specializedRemoveHandle(comptime Component: type) ?type {
 //       since the scene editor is "static". This should only be done for the object
 const TransformSystems = struct {
     /// Reset the transform
-    pub fn reset(transform: *Transform) void {
-        transform.mat = zm.identity();
+    pub fn reset(instance_handle: InstanceHandle, render_context: *ecez.SharedState(RenderContext)) void {
+        var _render_context = @as(*RenderContext, @ptrCast(render_context));
+        var transform = _render_context.getInstanceTransformPtr(instance_handle);
+
+        transform.* = zm.identity();
     }
 
     /// Apply scale to the transform/
-    pub fn applyScale(transform: *Transform, scale: Scale) void {
-        transform.mat[0][0] *= scale.vec[0];
-        transform.mat[1][1] *= scale.vec[1];
-        transform.mat[2][2] *= scale.vec[2];
+    pub fn applyScale(scale: Scale, instance_handle: InstanceHandle, render_context: *ecez.SharedState(RenderContext)) void {
+        var _render_context = @as(*RenderContext, @ptrCast(render_context));
+        var transform = _render_context.getInstanceTransformPtr(instance_handle);
+
+        transform[0][0] *= scale.vec[0];
+        transform[1][1] *= scale.vec[1];
+        transform[2][2] *= scale.vec[2];
     }
 
     /// Apply rotation to the transform/
-    pub fn applyRotation(transform: *Transform, rotation: Rotation) void {
-        transform.mat = zm.mul(transform.mat, zm.quatToMat(rotation.quat));
+    pub fn applyRotation(rotation: Rotation, instance_handle: InstanceHandle, render_context: *ecez.SharedState(RenderContext)) void {
+        var _render_context = @as(*RenderContext, @ptrCast(render_context));
+        var transform = _render_context.getInstanceTransformPtr(instance_handle);
+
+        transform.* = zm.mul(transform.*, zm.quatToMat(rotation.quat));
     }
 
     /// Apply position to the transform
-    pub fn applyPosition(transform: *Transform, position: Position) void {
-        transform.mat = zm.mul(transform.mat, zm.translationV(position.vec));
-    }
-
-    /// This system takes each instance handle and transform pair and send the transform to the renderer storage to be rendered
-    pub fn propagateToRenderer(transform: Transform, instance_handle: InstanceHandle, render_context: *ecez.SharedState(RenderContext)) void {
+    pub fn applyPosition(position: Position, instance_handle: InstanceHandle, render_context: *ecez.SharedState(RenderContext)) void {
         var _render_context = @as(*RenderContext, @ptrCast(render_context));
-        _render_context.setInstanceTransform(instance_handle, transform.mat);
+        var transform = _render_context.getInstanceTransformPtr(instance_handle);
+
+        transform.* = zm.mul(transform.*, zm.translationV(position.vec));
     }
 };
 
@@ -526,7 +520,6 @@ const Storage = ecez.CreateStorage(.{
     fake_components[2],
     fake_components[3],
     fake_components[4],
-    fake_components[5],
 }, .{
     PersistentState,
     RenderContext,
@@ -540,7 +533,6 @@ const Scheduler = ecez.CreateScheduler(Storage, .{
         ecez.DependOn(TransformSystems.applyScale, .{TransformSystems.reset}),
         ecez.DependOn(TransformSystems.applyRotation, .{TransformSystems.applyScale}),
         ecez.DependOn(TransformSystems.applyPosition, .{TransformSystems.applyRotation}),
-        ecez.DependOn(TransformSystems.propagateToRenderer, .{TransformSystems.applyPosition}),
     }, .{}),
 });
 
@@ -1346,8 +1338,6 @@ pub fn createNewVisbleObject(
     if (config.scale) |scale| {
         try self.storage.setComponent(new_entity, scale);
     }
-    // new visible object must have a transform component to be visible in the scene
-    try self.storage.setComponent(new_entity, Editor.Transform{ .mat = undefined });
 
     // Make sure editor updates renderer after we have set some render state programatically.
     // This is highly sub-optimal and should not be done in any hot loop

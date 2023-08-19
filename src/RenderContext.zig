@@ -1747,7 +1747,7 @@ pub fn destroyInstanceHandle(self: *RenderContext, instance_handle: InstanceHand
     self.indirect_commands.items[instance_handle.mesh_handle].instance_count -= 1;
 }
 
-inline fn instanceLookup(self: *RenderContext, instance_handle: InstanceHandle) *DrawInstance {
+inline fn instanceLookup(self: RenderContext, instance_handle: InstanceHandle) *DrawInstance {
     var mesh_instance_lookups = self.instance_handle_map.getPtr(instance_handle.mesh_handle).?;
     const lookup = mesh_instance_lookups.items[instance_handle.lookup_index];
     return &self.instance_data.items[lookup.opaque_instance];
@@ -1761,6 +1761,11 @@ pub inline fn setInstanceTransform(self: *RenderContext, instance_handle: Instan
 pub inline fn getInstanceTransform(self: RenderContext, instance_handle: InstanceHandle) zm.Mat {
     var draw_instance = self.instanceLookup(instance_handle);
     return draw_instance.transform;
+}
+
+pub inline fn getInstanceTransformPtr(self: *RenderContext, instance_handle: InstanceHandle) *zm.Mat {
+    var draw_instance = self.instanceLookup(instance_handle);
+    return &draw_instance.transform;
 }
 
 /// Free all instances so that the render can be reused for new scenes
