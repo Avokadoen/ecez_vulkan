@@ -119,6 +119,43 @@ const biggest_component_size = blk: {
 
 fn overrideWidgetGenerator(comptime Component: type) ?type {
     return switch (Component) {
+        Transform => struct {
+            pub fn widget(editor: *Editor, transform: *Transform) bool {
+                _ = editor;
+
+                zgui.text("Transform (readonly): ", .{});
+                {
+                    zgui.beginDisabled(.{ .disabled = true });
+                    defer zgui.endDisabled();
+
+                    var row_0: [4]f32 = transform.mat[0];
+                    _ = zgui.inputFloat4("##transform_row_0", .{
+                        .v = &row_0,
+                        .flags = .{ .read_only = true },
+                    });
+
+                    var row_1: [4]f32 = transform.mat[1];
+                    _ = zgui.inputFloat4("##transform_row_1", .{
+                        .v = &row_1,
+                        .flags = .{ .read_only = true },
+                    });
+
+                    var row_2: [4]f32 = transform.mat[2];
+                    _ = zgui.inputFloat4("##transform_row_2", .{
+                        .v = &row_2,
+                        .flags = .{ .read_only = true },
+                    });
+
+                    var row_3: [4]f32 = transform.mat[3];
+                    _ = zgui.inputFloat4("##transform_row_3", .{
+                        .v = &row_3,
+                        .flags = .{ .read_only = true },
+                    });
+                }
+
+                return false;
+            }
+        },
         InstanceHandle => struct {
             pub fn widget(editor: *Editor, instance_handle: *InstanceHandle) bool {
                 const persistent_state = editor.getPersitentState();
