@@ -13,15 +13,13 @@ const RenderContext = @import("RenderContext.zig");
 const MeshHandle = RenderContext.MeshHandle;
 const MeshInstancehInitializeContex = RenderContext.MeshInstancehInitializeContex;
 
+const EditorIcons = @import("EditorIcons.zig");
+
 // TODO: controllable scene camera (Icon to toggle camera control)
 // TODO: Object list and inspector should have a preferences option in the header to adjust width of the window
 // TODO: should be able to change mesh of selected object
 // TODO: move transform stuff out
 // TODO: configure hiding components fropm component list + widgets
-// TODO: ability to override generated component widgets
-//       TODO: instance component needs overriding
-//       TODO: ObjectMetadata has to be hidden
-//       TODO: custom widget for adding a new component
 
 pub const InstanceHandle = RenderContext.InstanceHandle;
 pub const Position = struct {
@@ -270,7 +268,8 @@ fn specializedRemoveHandle(comptime Component: type) ?type {
 }
 
 // TODO: Doing these things for all enitites in the scene is extremely inefficient
-//       since the scene editor is "static". This should only be done for the object
+//       since the scene editor is "static". This should only be done for the objects
+//       that move
 const TransformSystems = struct {
     /// Reset the transform
     pub fn reset(instance_handle: InstanceHandle, render_context: *ecez.SharedState(RenderContext)) void {
@@ -556,7 +555,7 @@ not_allowed: glfw.Cursor,
 storage: Storage,
 scheduler: Scheduler,
 
-icon: c_uint = 1,
+icons: EditorIcons,
 
 pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers: []const MeshInstancehInitializeContex) !Editor {
     var render_context = try RenderContext.init(allocator, window, mesh_instance_initalizers, .{
@@ -653,6 +652,7 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
         .not_allowed = not_allowed,
         .storage = storage,
         .scheduler = scheduler,
+        .icons = EditorIcons.init(render_context.imgui_pipeline.texture_indices),
     };
 }
 
@@ -732,51 +732,69 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
         zgui.io.setDeltaTime(delta_time);
 
-        // var b = true;
-        // _ = zgui.showDemoWindow(&b);
+        var b = true;
+        _ = zgui.showDemoWindow(&b);
 
         // define editor header
         const header_height = blk1: {
-            if (zgui.beginMainMenuBar() == false) {
-                break :blk1 0;
+            {
+                zgui.pushStyleVar2f(.{ .idx = .frame_padding, .v = [2]f32{ -1, 8 } });
+                defer zgui.popStyleVar(.{});
+
+                if (zgui.beginMainMenuBar() == false) {
+                    break :blk1 0;
+                }
             }
             defer zgui.endMainMenuBar();
 
-            if (zgui.beginMenu("File", true)) {
-                defer zgui.endMenu();
-
-                if (zgui.menuItem("Export", .{})) {
-                    var persistent_state = self.getPersitentState();
-                    persistent_state.export_file_modal_popen = true;
-                }
-
-                if (zgui.menuItem("Import", .{})) {
+            // file operations
+            {
+                if (self.icons.button(.folder_file_load, "folder_load_button##00", "load scene from file", 18, 18, .{})) {
                     var persistent_state = self.getPersitentState();
                     persistent_state.import_file_modal_popen = true;
                 }
-
-                if (zgui.menuItem("Load new model", .{})) {
+                zgui.sameLine(.{});
+                if (self.icons.button(.folder_file_save, "folder_save_button##00", "save current scene to file", 18, 18, .{})) {
+                    var persistent_state = self.getPersitentState();
+                    persistent_state.export_file_modal_popen = true;
+                }
+                zgui.sameLine(.{});
+                if (self.icons.button(.@"3d_model_load", "model_load_button##00", "load new 3d model", 18, 18, .{})) {
                     std.debug.print("load new model", .{}); // TODO: load new model
                 }
+                zgui.sameLine(.{});
             }
 
-            if (zgui.beginMenu("Window", true)) {
-                defer zgui.endMenu();
+            zgui.separator();
+            zgui.sameLine(.{});
 
-                // TODO: array that defines each window, loop them here to make them toggleable
-                if (zgui.menuItem("Object list", .{})) {
+            // window toggles
+            {
+                if (self.icons.button(.object_list, "object_list_button##00", "toggle object list window", 18, 18, .{})) {
                     std.debug.print("object list", .{}); // TODO: toggle object list window
                 }
-
-                if (zgui.menuItem("Debug log", .{})) {
+                zgui.sameLine(.{});
+                if (self.icons.button(.object_inspector, "object_inspector_button##00", "toggle object inspector window", 18, 18, .{})) {
+                    std.debug.print("object inspector", .{}); // TODO: toggle object inspector window
+                }
+                zgui.sameLine(.{});
+                if (self.icons.button(.debug_log, "debug_log_button##00", "toggle debug log window", 18, 18, .{})) {
                     std.debug.print("debug log", .{}); // TODO: toggle debug log window
                 }
+                zgui.sameLine(.{});
             }
 
-            if (zgui.beginMenu("Objects", true)) {
-                defer zgui.endMenu();
+            zgui.separator();
+            zgui.sameLine(.{});
 
-                try self.createNewEntityMenu();
+            // scene related
+            {
+                if (self.icons.button(.new_object, "new_object_button##00", "spawn new entity in the scene", 18, 18, .{})) {
+                    try self.createNewEntityMenu();
+                }
+                if (self.icons.button(.camera, "camera_control_button##00", "control camera with key and mouse", 18, 18, .{})) {
+                    std.debug.print("control camera", .{}); // TODO: control camera callbacks, revert to scene controls with esc or while holding alt mod
+                }
             }
 
             break :blk1 zgui.getWindowHeight();
@@ -864,11 +882,6 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 .no_collapse = true,
             } });
             defer zgui.end();
-
-            zgui.image(@ptrCast(&self.icon), .{ .w = 18, .h = 18, .uv1 = [_]f32{
-                0.0625,
-                0.0625,
-            } });
 
             {
                 // TODO: only have this if none of the selectables are hovered

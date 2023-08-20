@@ -32,7 +32,9 @@ pub const UiPushConstant = extern struct {
     translate: [2]f32,
 };
 
-// TODO: move out of ImguiPipeline
+// TODO: move these out of ImguiPipeline
+pub const uv_stride: f32 = 0.0625;
+pub const atlas_dimension: f32 = 288.0;
 pub const TextureIndices = struct {
     font: c_uint = 0,
     icon: c_uint = 1,
@@ -110,7 +112,11 @@ pub fn init(
         var icon_image = try zigimg.Image.fromFilePath(allocator, icon_path);
         defer icon_image.deinit();
 
+        // current icon atlas assumptions, specifically this pipeline and EditorIcons rely on these assumptions
         std.debug.assert(icon_image.pixelFormat() == .grayscale8);
+        std.debug.assert(icon_image.width == @as(usize, @intFromFloat(atlas_dimension)));
+        std.debug.assert(icon_image.height == @as(usize, @intFromFloat(atlas_dimension)));
+
         icon_image_resources = try ImageResource.init(
             vkd,
             device,
