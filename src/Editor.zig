@@ -14,6 +14,7 @@ const MeshHandle = RenderContext.MeshHandle;
 const MeshInstancehInitializeContex = RenderContext.MeshInstancehInitializeContex;
 
 const EditorIcons = @import("EditorIcons.zig");
+const Icons = EditorIcons.Icon;
 
 // TODO: controllable scene camera (Icon to toggle camera control)
 // TODO: Object list and inspector should have a preferences option in the header to adjust width of the window
@@ -507,8 +508,12 @@ const PersistentState = struct {
     import_file_modal_popen: bool,
     export_import_file_name: [128]u8,
 
+    object_list_active: bool = true,
     object_list: ObjectList,
+
+    object_inspector_active: bool = true,
     object_inspector: ObjectInspector,
+
     add_component_modal: AddComponentModal,
 };
 
@@ -770,15 +775,19 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
             // window toggles
             {
-                if (self.icons.button(.object_list, "object_list_button##00", "toggle object list window", 18, 18, .{})) {
-                    std.debug.print("object list", .{}); // TODO: toggle object list window
+                var persistent_state = self.getPersitentState();
+
+                const object_list_icon = if (persistent_state.object_list_active) Icons.object_list_on else Icons.object_list_off;
+                if (self.icons.button(object_list_icon, "object_list_button##00", "toggle object list window", 18, 18, .{})) {
+                    persistent_state.object_list_active = !persistent_state.object_list_active;
                 }
                 zgui.sameLine(.{});
-                if (self.icons.button(.object_inspector, "object_inspector_button##00", "toggle object inspector window", 18, 18, .{})) {
-                    std.debug.print("object inspector", .{}); // TODO: toggle object inspector window
+                const object_inspector_icon = if (persistent_state.object_inspector_active) Icons.object_inspector_on else Icons.object_inspector_off;
+                if (self.icons.button(object_inspector_icon, "object_inspector_button##00", "toggle object inspector window", 18, 18, .{})) {
+                    persistent_state.object_inspector_active = !persistent_state.object_inspector_active;
                 }
                 zgui.sameLine(.{});
-                if (self.icons.button(.debug_log, "debug_log_button##00", "toggle debug log window", 18, 18, .{})) {
+                if (self.icons.button(.debug_log_off, "debug_log_button##00", "toggle debug log window", 18, 18, .{})) {
                     std.debug.print("debug log", .{}); // TODO: toggle debug log window
                 }
                 zgui.sameLine(.{});
@@ -792,7 +801,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 if (self.icons.button(.new_object, "new_object_button##00", "spawn new entity in the scene", 18, 18, .{})) {
                     try self.createNewEntityMenu();
                 }
-                if (self.icons.button(.camera, "camera_control_button##00", "control camera with key and mouse", 18, 18, .{})) {
+                if (self.icons.button(.camera_off, "camera_control_button##00", "control camera with key and mouse", 18, 18, .{})) {
                     std.debug.print("control camera", .{}); // TODO: control camera callbacks, revert to scene controls with esc or while holding alt mod
                 }
             }
@@ -867,20 +876,28 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
         }
 
         // define Object List
-        {
+        object_list_blk: {
+            var persistent_state = self.getPersitentState();
+            if (persistent_state.object_list_active == false) {
+                break :object_list_blk;
+            }
+
             const width = @as(f32, @floatFromInt(frame_size.width)) / 6;
 
             zgui.setNextWindowSize(.{ .w = width, .h = @as(f32, @floatFromInt(frame_size.height)), .cond = .always });
             zgui.setNextWindowPos(.{ .x = 0, .y = header_height, .cond = .always });
 
-            _ = zgui.begin("Object List", .{ .popen = null, .flags = .{
+            if (zgui.begin("Object List", .{ .popen = null, .flags = .{
                 .menu_bar = false,
                 .no_move = true,
                 .no_resize = false,
                 .no_scrollbar = false,
                 .no_scroll_with_mouse = false,
                 .no_collapse = true,
-            } });
+            } }) == false) {
+                break :object_list_blk;
+            }
+
             defer zgui.end();
 
             {
@@ -901,8 +918,6 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 );
 
                 var list_item_iter = ObjectListQuery.submit(&self.storage);
-
-                var persistent_state = self.getPersitentState();
                 while (list_item_iter.next()) |list_item| {
                     const selected_entity_id = blk: {
                         // selected entity is either our persistent user selction, or an invalid/unlikely InstanceHandle.
@@ -964,22 +979,28 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
         }
 
         // define Object Inspector
-        {
+        object_inspector_blk: {
+            var persistent_state = self.getPersitentState();
+            if (persistent_state.object_inspector_active == false) {
+                break :object_inspector_blk;
+            }
+
             const width = @as(f32, @floatFromInt(frame_size.width)) / 6;
 
             zgui.setNextWindowSize(.{ .w = width, .h = @as(f32, @floatFromInt(frame_size.height)), .cond = .always });
             zgui.setNextWindowPos(.{ .x = @as(f32, @floatFromInt(frame_size.width)) - width, .y = header_height, .cond = .always });
-            _ = zgui.begin("Object Inspector", .{ .popen = null, .flags = .{
+            if (zgui.begin("Object Inspector", .{ .popen = null, .flags = .{
                 .menu_bar = false,
                 .no_move = true,
                 .no_resize = false,
                 .no_scrollbar = false,
                 .no_scroll_with_mouse = false,
                 .no_collapse = true,
-            } });
+            } }) == false) {
+                break :object_inspector_blk;
+            }
             defer zgui.end();
 
-            var persistent_state = self.getPersitentState();
             if (persistent_state.selected_entity) |selected_entity| {
                 zgui.text("Name: ", .{});
                 zgui.sameLine(.{});
