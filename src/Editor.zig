@@ -61,11 +61,11 @@ pub const ObjectMetadata = struct {
         std.debug.assert(id_len < buffer_len);
 
         // move the hash to its new postion
-        // we could use mem.rotate here for better efficiency, but KISS
-        const hash_start_pos = name.len;
+        // we could use mem.rotate to perf
+        const hash_start_pos = self.id_len - hash_len;
         var tmp_hash_buffer: [hash_len]u8 = undefined;
-        @memcpy(&tmp_hash_buffer, self.id_buffer[hash_start_pos .. hash_start_pos + id_len]);
-        @memcpy(self.id_buffer[name.len .. name.len + hash_len], &tmp_hash_buffer);
+        @memcpy(tmp_hash_buffer[0..hash_len], self.id_buffer[hash_start_pos .. hash_start_pos + hash_len]);
+        @memcpy(self.id_buffer[name.len .. name.len + hash_len], tmp_hash_buffer[0..hash_len]);
 
         // copy new name over
         @memcpy(self.id_buffer[0..name.len], name);
