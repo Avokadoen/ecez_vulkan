@@ -32,6 +32,12 @@ const application_ext_layers = @import("application_ext_layers.zig");
 pub const is_debug_build = builtin.mode == .Debug;
 pub const max_frames_in_flight = 2;
 
+const UserPointer = extern struct {
+    type: u32 = 0,
+    ptr: *RenderContext,
+    next: ?*UserPointer,
+};
+
 const RenderContext = @This();
 
 // TODO: reduce debug assert, replace with errors
@@ -85,9 +91,21 @@ const PushConstant = struct {
     }
 };
 
-const Camera = struct {
+pub const Camera = struct {
     view: zm.Mat,
     projection: zm.Mat,
+
+    pub fn calcView(orientation: zm.Quat, pos: zm.Vec) zm.Mat {
+        return zm.mul(zm.quatToMat(orientation), zm.translationV(pos));
+    }
+
+    pub fn calcProjection(swapchain_extent: vk.Extent2D, fov_degree: f32) zm.Mat {
+        const fovy = std.math.degreesToRadians(f32, fov_degree);
+        const aspect = @as(f32, @floatFromInt(swapchain_extent.width)) / @as(f32, @floatFromInt(swapchain_extent.height));
+        const near = 0.01;
+        const far = 300;
+        return zm.perspectiveFovRh(fovy, aspect, near, far);
+    }
 };
 
 const DrawInstance = struct {
@@ -265,9 +283,11 @@ update_rate: UpdateRate,
 last_update: UpdateRate,
 missing_updated_frames: u32 = max_frames_in_flight,
 
-// TODO: only members if imgui enabled
+// TODO: only members if build imgui enabled
 // TODO: should not take memory if imgui_enabled == false
 imgui_pipeline: ImguiPipeline,
+
+user_pointer: UserPointer,
 
 pub fn init(
     allocator: Allocator,
@@ -513,12 +533,10 @@ pub fn init(
         break :blk desc_set;
     };
 
-    const camera = calculateCamera(
-        swapchain_extent,
-        45,
-        zm.qidentity(),
-        zm.f32x4(0, 0, -4, 1),
-    );
+    const camera = Camera{
+        .view = Camera.calcView(zm.qidentity(), zm.f32x4(0, 0, -4, 1)),
+        .projection = Camera.calcProjection(swapchain_extent, 45),
+    };
 
     const pipeline_layout = blk: {
         const push_constant_range = vk.PushConstantRange{
@@ -1121,6 +1139,8 @@ pub fn init(
         .update_rate = config.update_rate,
         .last_update = config.update_rate,
         .imgui_pipeline = imgui_pipeline,
+        // assigned by handleFramebufferResize
+        .user_pointer = undefined,
     };
 }
 
@@ -1216,29 +1236,7 @@ pub fn recreatePresentResources(self: *RenderContext, window: glfw.Window) !void
         self.depth_image_view,
     );
 
-    self.updateCamera(
-        45,
-        zm.qidentity(),
-        zm.f32x4(0, 0, -4, 1),
-    );
-}
-
-pub fn updateCamera(self: *RenderContext, fov_degree: f32, orientation: zm.Quat, pos: zm.Vec) void {
-    self.camera = calculateCamera(
-        self.swapchain_extent,
-        fov_degree,
-        orientation,
-        pos,
-    );
-}
-
-inline fn calculateCamera(swapchain_extent: vk.Extent2D, fov_degree: f32, orientation: zm.Quat, pos: zm.Vec) Camera {
-    const fovy = std.math.degreesToRadians(f32, fov_degree);
-    const aspect = @as(f32, @floatFromInt(swapchain_extent.width)) / @as(f32, @floatFromInt(swapchain_extent.height));
-    return Camera{
-        .view = zm.mul(zm.quatToMat(orientation), zm.translationV(pos)),
-        .projection = zm.perspectiveFovRh(fovy, aspect, 0.01, 300),
-    };
+    self.camera.projection = Camera.calcProjection(self.swapchain_extent, 45);
 }
 
 pub fn deinit(self: *RenderContext, allocator: Allocator) void {
@@ -1783,17 +1781,35 @@ pub fn clearInstancesRetainingCapacity(self: *RenderContext) void {
     }
 }
 
-pub fn handleFramebufferResize(self: *RenderContext, window: glfw.Window) void {
+/// Ensure render context handle resizing.
+pub fn handleFramebufferResize(self: *RenderContext, window: glfw.Window, set_window_user_pointer: bool) void {
     const callback = struct {
         pub fn func(_window: glfw.Window, width: u32, height: u32) void {
             _ = width;
             _ = height;
 
-            const ctx_self = _window.getUserPointer(RenderContext) orelse return;
-            ctx_self.recreatePresentResources(_window) catch {};
+            // TODO: very unsafe, find a better solution to this
+            const render_context_ptr = search_user_ptr_blk: {
+                var user_ptr = _window.getUserPointer(UserPointer) orelse return;
+                while (user_ptr.type != 0) {
+                    user_ptr = user_ptr.next orelse return;
+                }
+
+                break :search_user_ptr_blk user_ptr.ptr;
+            };
+
+            render_context_ptr.recreatePresentResources(_window) catch {};
         }
     }.func;
-    window.setUserPointer(self);
+
+    self.user_pointer = UserPointer{
+        .ptr = self,
+        .next = null,
+    };
+    if (set_window_user_pointer) {
+        window.setUserPointer(&self.user_pointer);
+    }
+
     window.setFramebufferSizeCallback(callback);
 }
 

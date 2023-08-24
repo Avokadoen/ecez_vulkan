@@ -68,9 +68,6 @@ pub fn main() !void {
         .position = Editor.Position{ .vec = zm.f32x4(1, 0, 0, 0) },
     });
 
-    // register input callbacks for the editor
-    editor.setEditorInput(window);
-
     var then = std.time.microTimestamp();
     // Wait for the user to close the window.
     while (!window.shouldClose()) {

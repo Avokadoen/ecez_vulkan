@@ -22,6 +22,12 @@ const Icons = EditorIcons.Icon;
 // TODO: move transform stuff out
 // TODO: configure hiding components fropm component list + widgets
 
+const UserPointer = extern struct {
+    type: u32 = 1,
+    ptr: *Editor,
+    next: ?*UserPointer,
+};
+
 pub const InstanceHandle = RenderContext.InstanceHandle;
 pub const Position = struct {
     vec: zm.Vec,
@@ -515,6 +521,16 @@ const PersistentState = struct {
     object_inspector: ObjectInspector,
 
     add_component_modal: AddComponentModal,
+
+    camera_control_active: bool = false,
+};
+
+const CameraState = struct {
+    movement_speed: zm.Vec,
+    movement_vector: zm.Vec,
+    position: zm.Vec,
+    angular_momentum: zm.Quat,
+    orientation: zm.Quat,
 };
 
 const Storage = ecez.CreateStorage(.{
@@ -527,6 +543,7 @@ const Storage = ecez.CreateStorage(.{
 }, .{
     PersistentState,
     RenderContext,
+    CameraState,
 });
 
 // TODO: convert on_import to simple queries inline
@@ -561,6 +578,7 @@ storage: Storage,
 scheduler: Scheduler,
 
 icons: EditorIcons,
+user_pointer: UserPointer,
 
 pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers: []const MeshInstancehInitializeContex) !Editor {
     var render_context = try RenderContext.init(allocator, window, mesh_instance_initalizers, .{
@@ -589,6 +607,14 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
     persistent_state.export_import_file_name["test.ezby".len] = 0;
 
     try persistent_state.mesh_names.ensureTotalCapacity(mesh_instance_initalizers.len);
+
+    const camera_state = CameraState{
+        .movement_speed = @splat(20),
+        .movement_vector = zm.f32x4(0, 0, 0, 0),
+        .position = zm.f32x4(0, 0, -4, 0),
+        .angular_momentum = zm.qidentity(),
+        .orientation = zm.qidentity(),
+    };
 
     errdefer {
         const mesh_name_value = persistent_state.mesh_names.values();
@@ -641,8 +667,11 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
     errdefer not_allowed.destroy();
 
     // initialize our ecs api
-    var storage = try Storage.init(allocator, .{ persistent_state, render_context });
+    var storage = try Storage.init(allocator, .{ persistent_state, render_context, camera_state });
     const scheduler = Scheduler.init();
+
+    // register input callbacks for the editor
+    setEditorInput(window);
 
     return Editor{
         .allocator = allocator,
@@ -658,6 +687,8 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
         .storage = storage,
         .scheduler = scheduler,
         .icons = EditorIcons.init(render_context.imgui_pipeline.texture_indices),
+        // assigned by setCameraInput
+        .user_pointer = undefined,
     };
 }
 
@@ -711,6 +742,23 @@ pub fn importFromFile(self: *Editor, file_name: []const u8) !void {
 }
 
 pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
+    {
+        // TODO: move to a "update" ecez system if we get simular logic
+        var camera_state = self.getCameraState();
+
+        const is_movement_vector_set = @reduce(.Min, camera_state.movement_vector) != 0 or @reduce(.Max, camera_state.movement_vector) != 0;
+        if (is_movement_vector_set) {
+            // TODO: rotate movement_vector with camera orientation
+            const delta_time_vec = @as(zm.Vec, @splat(delta_time));
+            const actionable_movement = zm.normalize3(camera_state.movement_vector) * camera_state.movement_speed;
+            camera_state.position += actionable_movement * delta_time_vec;
+        }
+
+        // apply update render camera with editor camera
+        var render_context = self.getRenderContext();
+        render_context.camera.view = RenderContext.Camera.calcView(camera_state.orientation, camera_state.position);
+    }
+
     const frame_size = window.getFramebufferSize();
     zgui.io.setDisplaySize(@as(f32, @floatFromInt(frame_size.width)), @as(f32, @floatFromInt(frame_size.height)));
     zgui.io.setDisplayFramebufferScale(1.0, 1.0);
@@ -798,11 +846,20 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
             // scene related
             {
+                var persistent_state = self.getPersitentState();
+
                 if (self.icons.button(.new_object, "new_object_button##00", "spawn new entity in the scene", 18, 18, .{})) {
                     try self.createNewEntityMenu();
                 }
-                if (self.icons.button(.camera_off, "camera_control_button##00", "control camera with key and mouse", 18, 18, .{})) {
-                    std.debug.print("control camera", .{}); // TODO: control camera callbacks, revert to scene controls with esc or while holding alt mod
+                const camera_icon = if (persistent_state.camera_control_active) Icons.camera_on else Icons.camera_off;
+                if (self.icons.button(camera_icon, "camera_control_button##00", "control camera with key and mouse (esc to exit)", 18, 18, .{})) {
+                    if (persistent_state.camera_control_active == false) {
+                        persistent_state.camera_control_active = true;
+                        setCameraInput(window);
+                    } else {
+                        persistent_state.camera_control_active = false;
+                        setEditorInput(window);
+                    }
                 }
             }
 
@@ -1234,73 +1291,153 @@ pub fn deinit(self: *Editor) void {
 
 pub fn handleFramebufferResize(self: *Editor, window: glfw.Window) void {
     var render_context = self.getRenderContext();
-    render_context.handleFramebufferResize(window);
+    render_context.handleFramebufferResize(window, false);
+
+    self.user_pointer = UserPointer{
+        .ptr = self,
+        .next = @ptrCast(&render_context.user_pointer),
+    };
+
+    window.setUserPointer(&self.user_pointer);
 }
 
 /// register input so only editor handles glfw input
-pub fn setEditorInput(self: Editor, window: glfw.Window) void {
-    _ = self;
-    _ = window.setKeyCallback(keyCallback);
-    _ = window.setCharCallback(charCallback);
-    _ = window.setMouseButtonCallback(mouseButtonCallback);
-    _ = window.setCursorPosCallback(cursorPosCallback);
-    _ = window.setScrollCallback(scrollCallback);
+pub fn setEditorInput(window: glfw.Window) void {
+    const EditorCallbacks = struct {
+        pub fn key(_window: glfw.Window, input_key: glfw.Key, scancode: i32, action: glfw.Action, mods: glfw.Mods) void {
+            _ = _window;
+            _ = scancode;
+
+            // apply modifiers
+            zgui.io.addKeyEvent(zgui.Key.mod_shift, mods.shift);
+            zgui.io.addKeyEvent(zgui.Key.mod_ctrl, mods.control);
+            zgui.io.addKeyEvent(zgui.Key.mod_alt, mods.alt);
+            zgui.io.addKeyEvent(zgui.Key.mod_super, mods.super);
+            // zgui.addKeyEvent(zgui.Key.mod_caps_lock, mod.caps_lock);
+            // zgui.addKeyEvent(zgui.Key.mod_num_lock, mod.num_lock);
+
+            zgui.io.addKeyEvent(mapGlfwKeyToImgui(input_key), action == .press);
+        }
+
+        pub fn char(_window: glfw.Window, codepoint: u21) void {
+            _ = _window;
+
+            var buffer: [8]u8 = undefined;
+            const len = std.unicode.utf8Encode(codepoint, buffer[0..]) catch return;
+            const cstr = buffer[0 .. len + 1];
+            cstr[len] = 0; // null terminator
+            zgui.io.addInputCharactersUTF8(@as([*:0]const u8, @ptrCast(cstr.ptr)));
+        }
+
+        pub fn mouseButton(_window: glfw.Window, button: glfw.MouseButton, action: glfw.Action, mods: glfw.Mods) void {
+            _ = _window;
+
+            if (switch (button) {
+                .left => zgui.MouseButton.left,
+                .right => zgui.MouseButton.right,
+                .middle => zgui.MouseButton.middle,
+                .four, .five, .six, .seven, .eight => null,
+            }) |zgui_button| {
+                // apply modifiers
+                zgui.io.addKeyEvent(zgui.Key.mod_shift, mods.shift);
+                zgui.io.addKeyEvent(zgui.Key.mod_ctrl, mods.control);
+                zgui.io.addKeyEvent(zgui.Key.mod_alt, mods.alt);
+                zgui.io.addKeyEvent(zgui.Key.mod_super, mods.super);
+
+                zgui.io.addMouseButtonEvent(zgui_button, action == .press);
+            }
+        }
+
+        pub fn cursorPos(_window: glfw.Window, xpos: f64, ypos: f64) void {
+            _ = _window;
+
+            zgui.io.addMousePositionEvent(@as(f32, @floatCast(xpos)), @as(f32, @floatCast(ypos)));
+        }
+
+        pub fn scroll(_window: glfw.Window, xoffset: f64, yoffset: f64) void {
+            _ = _window;
+
+            zgui.io.addMouseWheelEvent(@as(f32, @floatCast(xoffset)), @as(f32, @floatCast(yoffset)));
+        }
+    };
+
+    _ = window.setKeyCallback(EditorCallbacks.key);
+    _ = window.setCharCallback(EditorCallbacks.char);
+    _ = window.setMouseButtonCallback(EditorCallbacks.mouseButton);
+    _ = window.setCursorPosCallback(EditorCallbacks.cursorPos);
+    _ = window.setScrollCallback(EditorCallbacks.scroll);
 }
 
-pub fn keyCallback(window: glfw.Window, key: glfw.Key, scancode: i32, action: glfw.Action, mods: glfw.Mods) void {
-    _ = window;
-    _ = scancode;
+/// register input so camera handles glfw input
+pub fn setCameraInput(window: glfw.Window) void {
+    const CameraCallbacks = struct {
+        pub fn key(_window: glfw.Window, input_key: glfw.Key, scancode: i32, action: glfw.Action, mods: glfw.Mods) void {
+            _ = mods;
+            _ = scancode;
 
-    // apply modifiers
-    zgui.io.addKeyEvent(zgui.Key.mod_shift, mods.shift);
-    zgui.io.addKeyEvent(zgui.Key.mod_ctrl, mods.control);
-    zgui.io.addKeyEvent(zgui.Key.mod_alt, mods.alt);
-    zgui.io.addKeyEvent(zgui.Key.mod_super, mods.super);
-    // zgui.addKeyEvent(zgui.Key.mod_caps_lock, mod.caps_lock);
-    // zgui.addKeyEvent(zgui.Key.mod_num_lock, mod.num_lock);
+            // TODO: very unsafe, find a better solution to this
+            const editor_ptr = search_user_ptr_blk: {
+                var user_ptr = _window.getUserPointer(UserPointer) orelse return;
+                while (user_ptr.type != 1) {
+                    user_ptr = user_ptr.next orelse return;
+                }
 
-    zgui.io.addKeyEvent(mapGlfwKeyToImgui(key), action == .press);
-}
+                break :search_user_ptr_blk user_ptr.ptr;
+            };
 
-pub fn charCallback(window: glfw.Window, codepoint: u21) void {
-    _ = window;
+            const axist_value: f32 = switch (action) {
+                .press => 1,
+                .release => -1,
+                .repeat => return,
+            };
 
-    var buffer: [8]u8 = undefined;
-    const len = std.unicode.utf8Encode(codepoint, buffer[0..]) catch return;
-    const cstr = buffer[0 .. len + 1];
-    cstr[len] = 0; // null terminator
-    zgui.io.addInputCharactersUTF8(@as([*:0]const u8, @ptrCast(cstr.ptr)));
-}
+            var camera_state = editor_ptr.getCameraState();
+            switch (input_key) {
+                .w => camera_state.movement_vector[2] += axist_value,
+                .a => camera_state.movement_vector[0] += axist_value,
+                .s => camera_state.movement_vector[2] -= axist_value,
+                .d => camera_state.movement_vector[0] -= axist_value,
+                // exit camera mode
+                .escape => {
+                    camera_state.movement_vector = @splat(0);
+                    var persistent_state = editor_ptr.getPersitentState();
+                    persistent_state.camera_control_active = false;
+                    setEditorInput(_window);
+                },
+                else => {},
+            }
+        }
 
-pub fn mouseButtonCallback(window: glfw.Window, button: glfw.MouseButton, action: glfw.Action, mods: glfw.Mods) void {
-    _ = window;
+        pub fn char(_window: glfw.Window, codepoint: u21) void {
+            _ = codepoint;
+            _ = _window;
+        }
 
-    if (switch (button) {
-        .left => zgui.MouseButton.left,
-        .right => zgui.MouseButton.right,
-        .middle => zgui.MouseButton.middle,
-        .four, .five, .six, .seven, .eight => null,
-    }) |zgui_button| {
-        // apply modifiers
-        zgui.io.addKeyEvent(zgui.Key.mod_shift, mods.shift);
-        zgui.io.addKeyEvent(zgui.Key.mod_ctrl, mods.control);
-        zgui.io.addKeyEvent(zgui.Key.mod_alt, mods.alt);
-        zgui.io.addKeyEvent(zgui.Key.mod_super, mods.super);
+        pub fn mouseButton(_window: glfw.Window, button: glfw.MouseButton, action: glfw.Action, mods: glfw.Mods) void {
+            _ = mods;
+            _ = action;
+            _ = button;
+            _ = _window;
+        }
 
-        zgui.io.addMouseButtonEvent(zgui_button, action == .press);
-    }
-}
+        pub fn cursorPos(_window: glfw.Window, xpos: f64, ypos: f64) void {
+            _ = ypos;
+            _ = xpos;
+            _ = _window;
+        }
 
-pub fn cursorPosCallback(window: glfw.Window, xpos: f64, ypos: f64) void {
-    _ = window;
+        pub fn scroll(_window: glfw.Window, xoffset: f64, yoffset: f64) void {
+            _ = yoffset;
+            _ = xoffset;
+            _ = _window;
+        }
+    };
 
-    zgui.io.addMousePositionEvent(@as(f32, @floatCast(xpos)), @as(f32, @floatCast(ypos)));
-}
-
-pub fn scrollCallback(window: glfw.Window, xoffset: f64, yoffset: f64) void {
-    _ = window;
-
-    zgui.io.addMouseWheelEvent(@as(f32, @floatCast(xoffset)), @as(f32, @floatCast(yoffset)));
+    _ = window.setKeyCallback(CameraCallbacks.key);
+    _ = window.setCharCallback(CameraCallbacks.char);
+    _ = window.setMouseButtonCallback(CameraCallbacks.mouseButton);
+    _ = window.setCursorPosCallback(CameraCallbacks.cursorPos);
+    _ = window.setScrollCallback(CameraCallbacks.scroll);
 }
 
 pub fn getNthMeshHandle(self: *Editor, nth: usize) MeshHandle {
@@ -1419,6 +1556,10 @@ inline fn getRenderContext(self: *Editor) *RenderContext {
 
 inline fn getPersitentState(self: *Editor) *PersistentState {
     return @ptrCast(self.storage.getSharedStatePtrWithSharedStateType(*ecez.SharedState(PersistentState)));
+}
+
+inline fn getCameraState(self: *Editor) *CameraState {
+    return @ptrCast(self.storage.getSharedStatePtrWithSharedStateType(*ecez.SharedState(CameraState)));
 }
 
 const MarkerType = enum {
