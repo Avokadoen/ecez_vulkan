@@ -96,7 +96,7 @@ pub const Camera = struct {
     projection: zm.Mat,
 
     pub fn calcView(orientation: zm.Quat, pos: zm.Vec) zm.Mat {
-        return zm.mul(zm.quatToMat(orientation), zm.translationV(pos));
+        return zm.mul(zm.translationV(pos), zm.quatToMat(orientation));
     }
 
     pub fn calcProjection(swapchain_extent: vk.Extent2D, fov_degree: f32) zm.Mat {

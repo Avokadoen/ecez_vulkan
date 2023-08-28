@@ -32,8 +32,10 @@ pub fn main() !void {
         @panic("device does not seem to support vulkan");
     }
 
+    const primary_monitor = null; // glfw.Monitor.getPrimary();
+
     // Create our window
-    const window = glfw.Window.create(640, 480, "ecez-vulkan", null, null, .{
+    const window = glfw.Window.create(640, 480, "ecez-vulkan", primary_monitor, null, .{
         .client_api = .no_api,
         .resizable = true,
     }) orelse {
