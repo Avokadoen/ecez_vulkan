@@ -525,11 +525,9 @@ const CameraState = struct {
     position: zm.Vec,
 
     turn_rate: f64,
-    yaw_delta: f64 = 0,
-    pitch_delta: f64 = 0,
+    yaw: f64 = 0,
+    pitch: f64 = 0,
     // roll always 0
-
-    orientation: zm.Quat,
 };
 
 const Storage = ecez.CreateStorage(.{
@@ -612,8 +610,7 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
         .movement_speed = @splat(20),
         .movement_vector = zm.f32x4(0, 0, 0, 0),
         .position = zm.f32x4(0, 0, -4, 0),
-        .turn_rate = 0.0001,
-        .orientation = zm.qidentity(),
+        .turn_rate = 0.0005,
     };
 
     errdefer {
@@ -748,19 +745,13 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
         // TODO: move to a "update" ecez system if we get similar logic
         var camera_state = self.getCameraState();
 
-        if (camera_state.pitch_delta != 0 or camera_state.yaw_delta != 0) {
-            camera_state.orientation = zm.qmul(camera_state.orientation, zm.quatFromRollPitchYaw(
-                @floatCast(camera_state.pitch_delta * camera_state.turn_rate),
-                @floatCast(camera_state.yaw_delta * camera_state.turn_rate),
-                0,
-            ));
-            camera_state.pitch_delta = 0;
-            camera_state.yaw_delta = 0;
-        }
+        const yaw_quat = zm.quatFromAxisAngle(zm.f32x4(0.0, 1.0, 0.0, 0.0), @floatCast(camera_state.yaw));
+        const pitch_quat = zm.quatFromAxisAngle(zm.f32x4(1.0, 0.0, 0.0, 0.0), @floatCast(camera_state.pitch));
+        const orientation = zm.qmul(yaw_quat, pitch_quat);
 
         const is_movement_vector_set = @reduce(.Min, camera_state.movement_vector) != 0 or @reduce(.Max, camera_state.movement_vector) != 0;
         if (is_movement_vector_set) {
-            const movement_dir = zm.normalize3(zm.rotate(zm.conjugate(camera_state.orientation), camera_state.movement_vector));
+            const movement_dir = zm.normalize3(zm.rotate(zm.conjugate(orientation), camera_state.movement_vector));
             const actionable_movement = movement_dir * camera_state.movement_speed;
 
             const delta_time_vec = @as(zm.Vec, @splat(delta_time));
@@ -769,7 +760,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
         // apply update render camera with editor camera
         var render_context = self.getRenderContext();
-        render_context.camera.view = RenderContext.Camera.calcView(camera_state.orientation, camera_state.position);
+        render_context.camera.view = RenderContext.Camera.calcView(orientation, camera_state.position);
     } else {
         // If we are not controlling the camera, then we should update cursor if needed
         // NOTE: getting cursor must be done before calling zgui.newFrame
@@ -1460,10 +1451,9 @@ pub fn setCameraInput(window: glfw.Window) void {
             const x_delta = xpos - input_state.previous_cursor_xpos;
             const y_delta = ypos - input_state.previous_cursor_ypos;
 
-            var camera_state = editor_ptr.getCameraState();
-            // if you mouse in x axis, then you are turning around y axis in-game
-            camera_state.yaw_delta = x_delta;
-            camera_state.pitch_delta = -y_delta;
+            var camera_state: *CameraState = editor_ptr.getCameraState();
+            camera_state.yaw += x_delta * camera_state.turn_rate;
+            camera_state.pitch -= y_delta * camera_state.turn_rate;
         }
 
         pub fn scroll(_window: glfw.Window, xoffset: f64, yoffset: f64) void {
