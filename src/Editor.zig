@@ -194,7 +194,7 @@ fn overrideWidgetGenerator(comptime Component: type) ?type {
                 _ = editor;
 
                 var euler_angles = blk: {
-                    const angles = quaternionToEuler(rotation.quat);
+                    const angles = zm.quatToRollPitchYaw(rotation.quat);
                     break :blk [_]f32{
                         std.math.radiansToDegrees(f32, angles[0]),
                         std.math.radiansToDegrees(f32, angles[1]),
@@ -205,24 +205,13 @@ fn overrideWidgetGenerator(comptime Component: type) ?type {
                 zgui.text("Angles: ", .{});
                 zgui.sameLine(.{});
                 if (zgui.dragFloat3("##euler_angles", .{ .v = &euler_angles })) {
-                    const x_axis = zm.f32x4(1, 0, 0, 0);
                     const x_rad = std.math.degreesToRadians(f32, euler_angles[0]);
-                    const x_rot = zm.quatFromAxisAngle(x_axis, x_rad);
-
-                    const y_axis = zm.f32x4(0, 1, 0, 0);
                     const y_rad = std.math.degreesToRadians(f32, euler_angles[1]);
-                    const y_rot = zm.quatFromAxisAngle(y_axis, y_rad);
-
-                    const z_axis = zm.f32x4(0, 0, 1, 0);
                     const z_rad = std.math.degreesToRadians(f32, euler_angles[2]);
-                    const z_rot = zm.quatFromAxisAngle(z_axis, z_rad);
 
-                    rotation.quat = zm.qmul(zm.qmul(x_rot, y_rot), z_rot);
+                    rotation.quat = zm.quatFromRollPitchYaw(x_rad, y_rad, z_rad);
                     return true;
                 }
-                zgui.sameLine(.{});
-                // TODO: fix rotation in y axis: http://www.euclideanspace.com/maths/geometry/rotations/conversions/quaternionToEuler/
-                marker("The rotation in Y axis is currently bugged ... ", .warning);
 
                 return false;
             }
@@ -1766,33 +1755,4 @@ inline fn mapGlfwKeyToImgui(key: glfw.Key) zgui.Key {
         .right_super => zgui.Key.right_super,
         .menu => zgui.Key.menu,
     };
-}
-
-// source: https://en.wikipedia.org/wiki/Conversion_between_quaternions_and_Euler_angles
-inline fn quaternionToEuler(q: zm.Quat) zm.F32x4 {
-    // double sinr_cosp = 2 * (q.w * q.x + q.y * q.z);
-    const sinr_cosp = 2 * (q[3] * q[0] + q[1] * q[2]);
-    // double cosr_cosp = 1 - 2 * (q.x * q.x + q.y * q.y);
-    const cosr_cosp = 1 - 2 * (q[0] * q[0] + q[1] * q[1]);
-
-    // double sinp = std::sqrt(1 + 2 * (q.w * q.y - q.x * q.z))
-    const sinp = @sqrt(1 + 2 * (q[3] * q[1] - q[0] * q[2]));
-    // double cosp = std::sqrt(1 - 2 * (q.w * q.y - q.x * q.z))
-    const cosp = @sqrt(1 - 2 * (q[3] * q[1] - q[0] * q[2]));
-
-    // double siny_cosp = 2 * (q.w * q.z + q.x * q.y);
-    const siny_cosp = 2 * (q[3] * q[2] + q[0] * q[1]);
-    // double cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z);
-    const cosy_cosp = 1 - 2 * (q[1] * q[1] + q[2] * q[2]);
-
-    // return angles;
-    return zm.f32x4(
-        // angles.roll = std::atan2(sinr_cosp, cosr_cosp);
-        std.math.atan2(f32, sinr_cosp, cosr_cosp), // x rotation
-        // angles.pitch = 2 * std::atan2(sinp, cosp) - M_PI / 2;
-        (-std.math.pi / 2.0) + 2 * std.math.atan2(f32, sinp, cosp), // y rotation
-        // angles.yaw = std::atan2(siny_cosp, cosy_cosp);
-        std.math.atan2(f32, siny_cosp, cosy_cosp), // z rotation
-        0,
-    );
 }
