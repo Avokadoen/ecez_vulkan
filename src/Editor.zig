@@ -9,6 +9,7 @@ const glfw = @import("glfw");
 
 const zm = @import("zmath");
 
+const AssetHandler = @import("AssetHandler.zig");
 const RenderContext = @import("RenderContext.zig");
 const MeshHandle = RenderContext.MeshHandle;
 const MeshInstancehInitializeContex = RenderContext.MeshInstancehInitializeContex;
@@ -126,23 +127,26 @@ fn overrideWidgetGenerator(comptime Component: type) ?type {
                 var render_context = editor.getRenderContext();
 
                 const mesh_handle = instance_handle.*.mesh_handle;
-                const preview_value = ui_state.mesh_names.get(mesh_handle).?;
+                const mesh_name = editor.getRenderContext().getNameFromMeshHandle(mesh_handle).?;
+                const preview_value: *[:0]const u8 = @ptrCast(mesh_name);
 
-                if (zgui.beginCombo("Mesh", .{ .preview_value = preview_value })) {
+                if (zgui.beginCombo("Mesh", .{ .preview_value = preview_value.* })) {
                     defer zgui.endCombo();
 
-                    var mesh_name_iter = ui_state.mesh_names.iterator();
-                    while (mesh_name_iter.next()) |mesh_entry| {
-                        if (zgui.selectable(mesh_entry.value_ptr.*, .{
-                            .selected = mesh_handle == mesh_entry.key_ptr.*,
+                    var mesh_name_iter = editor.getRenderContext().mesh_name_handle_map.iterator();
+                    while (mesh_name_iter.next()) |mesh_name_entry| {
+                        const c_name: *[:0]const u8 = @ptrCast(mesh_name_entry.key_ptr);
+
+                        if (zgui.selectable(c_name.*, .{
+                            .selected = mesh_handle == mesh_name_entry.value_ptr.*,
                         })) {
                             // If we are in the processing of adding a instance handle, then we do not want to
                             // destroy none existing handle in the renderer, only set the in flight handle
                             if (ui_state.add_component_modal.is_active) {
-                                instance_handle.mesh_handle = mesh_entry.key_ptr.*;
-                            } else if (mesh_handle != mesh_entry.key_ptr.*) {
+                                instance_handle.mesh_handle = mesh_name_entry.value_ptr.*;
+                            } else if (mesh_handle != mesh_name_entry.value_ptr.*) {
                                 // TODO: handle errors here and report to user
-                                const new_instance_handle = render_context.getNewInstance(mesh_entry.key_ptr.*) catch unreachable;
+                                const new_instance_handle = render_context.getNewInstance(mesh_name_entry.value_ptr.*) catch unreachable;
                                 editor.storage.setComponent(ui_state.selected_entity.?, new_instance_handle) catch unreachable;
 
                                 // destroy old instance handle
@@ -497,7 +501,6 @@ const UiState = struct {
 
     // common state
     selected_entity: ?ecez.Entity,
-    mesh_names: std.AutoArrayHashMap(MeshHandle, [:0]const u8),
 
     export_file_modal_popen: bool,
     import_file_modal_popen: bool,
@@ -578,15 +581,23 @@ scheduler: Scheduler,
 icons: EditorIcons,
 user_pointer: UserPointer,
 
-pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers: []const MeshInstancehInitializeContex) !Editor {
-    var render_context = try RenderContext.init(allocator, window, mesh_instance_initalizers, .{
-        .update_rate = .manually,
-    });
+pub fn init(
+    allocator: Allocator,
+    window: glfw.Window,
+    asset_handler: AssetHandler,
+    mesh_instance_initalizers: []const MeshInstancehInitializeContex,
+) !Editor {
+    var render_context = try RenderContext.init(
+        allocator,
+        window,
+        asset_handler,
+        mesh_instance_initalizers,
+        .{ .update_rate = .manually },
+    );
     errdefer render_context.deinit(allocator);
 
     var ui_state = UiState{
         .selected_entity = null,
-        .mesh_names = std.AutoArrayHashMap(MeshHandle, [:0]const u8).init(allocator),
         .object_list = .{
             .renaming_buffer = undefined,
             .first_rename_draw = false,
@@ -604,36 +615,12 @@ pub fn init(allocator: Allocator, window: glfw.Window, mesh_instance_initalizers
     std.mem.copy(u8, &ui_state.export_import_file_name, "test.ezby");
     ui_state.export_import_file_name["test.ezby".len] = 0;
 
-    try ui_state.mesh_names.ensureTotalCapacity(mesh_instance_initalizers.len);
-
     const camera_state = CameraState{
         .movement_speed = @splat(20),
         .movement_vector = zm.f32x4(0, 0, 0, 0),
         .position = zm.f32x4(0, 0, -4, 0),
         .turn_rate = 0.0005,
     };
-
-    errdefer {
-        const mesh_name_value = ui_state.mesh_names.values();
-        for (mesh_name_value) |name_str| {
-            allocator.free(name_str);
-        }
-        ui_state.mesh_names.deinit();
-    }
-
-    for (mesh_instance_initalizers, 0..) |mesh_instance_initalizer, nth| {
-        var path_iter = std.mem.splitBackwards(u8, mesh_instance_initalizer.cgltf_path, "/");
-        const file_name = path_iter.first();
-        var mesh_name_iter = std.mem.split(u8, file_name, ".");
-        const only_file_name = mesh_name_iter.first();
-
-        var mesh_name_mem = try allocator.alloc(u8, only_file_name.len + 1);
-        std.mem.copy(u8, mesh_name_mem, only_file_name);
-        mesh_name_mem[only_file_name.len] = 0;
-
-        const mesh_handle = render_context.getNthMeshHandle(nth);
-        ui_state.mesh_names.putAssumeCapacity(mesh_handle, mesh_name_mem[0..only_file_name.len :0]);
-    }
 
     // Color scheme
     const StyleCol = zgui.StyleCol;
@@ -1264,12 +1251,6 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 pub fn deinit(self: *Editor) void {
     self.scheduler.waitIdle();
 
-    const ui_state = self.getUiState();
-    for (ui_state.mesh_names.values()) |mesh_name| {
-        self.allocator.free(mesh_name);
-    }
-    ui_state.mesh_names.deinit();
-
     self.pointing_hand.destroy();
     self.arrow.destroy();
     self.ibeam.destroy();
@@ -1473,8 +1454,8 @@ pub fn setCameraInput(window: glfw.Window) void {
     _ = window.setScrollCallback(CameraCallbacks.scroll);
 }
 
-pub fn getNthMeshHandle(self: *Editor, nth: usize) MeshHandle {
-    return self.getRenderContext().getNthMeshHandle(nth);
+pub fn getMeshHandleFromName(self: *Editor, name: []const u8) ?MeshHandle {
+    return self.getRenderContext().getMeshHandleFromName(name);
 }
 
 pub fn newSceneEntity(self: *Editor, name: []const u8) !ecez.Entity {
@@ -1506,11 +1487,6 @@ pub fn renameEntity(self: *Editor, entity: ecez.Entity, name: []const u8) !void 
     try self.storage.setComponent(entity, metadata);
 }
 
-pub fn getMeshNames(self: *Editor) []const [:0]const u8 {
-    const ui_state = self.getUiState();
-    return ui_state.mesh_names.values();
-}
-
 pub fn signalRenderUpdate(self: *Editor) void {
     var render_context = self.getRenderContext();
     render_context.signalUpdate();
@@ -1532,12 +1508,11 @@ pub const VisibleObjectConfig = struct {
 pub fn createNewVisbleObject(
     self: *Editor,
     object_name: []const u8,
-    nth_mesh: usize,
+    mesh_handle: RenderContext.MeshHandle,
     comptime flush_all_objects: FlushAllObjects,
     config: VisibleObjectConfig,
 ) !void {
     const new_entity = try self.newSceneEntity(object_name);
-    const mesh_handle = self.getNthMeshHandle(nth_mesh);
     try self.assignEntityMeshInstance(new_entity, mesh_handle);
 
     if (config.position) |position| {
@@ -1574,10 +1549,12 @@ inline fn createNewEntityMenu(self: *Editor) !void {
             _ = try self.newSceneEntity("empty entity");
         }
 
-        const mesh_names = self.getMeshNames();
-        for (mesh_names, 0..) |mesh_name, nth_mesh| {
-            if (zgui.menuItem(mesh_name, .{})) {
-                try self.createNewVisbleObject(mesh_name, nth_mesh, .yes, .{});
+        var mesh_name_iter = self.getRenderContext().mesh_name_handle_map.keyIterator();
+        while (mesh_name_iter.next()) |mesh_name_entry| {
+            const c_name: *[:0]const u8 = @ptrCast(mesh_name_entry);
+            if (zgui.menuItem(c_name.*, .{})) {
+                const mesh_handle = self.getMeshHandleFromName(c_name.*).?;
+                try self.createNewVisbleObject(c_name.*, mesh_handle, .yes, .{});
             }
         }
     }

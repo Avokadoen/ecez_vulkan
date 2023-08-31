@@ -7,6 +7,7 @@ const zm = @import("zmath");
 const Editor = @import("Editor.zig");
 
 const RenderContext = @import("RenderContext.zig");
+const AssetHandler = @import("AssetHandler.zig");
 
 pub fn main() !void {
     ztracy.SetThreadName("main thread");
@@ -43,16 +44,46 @@ pub fn main() !void {
     };
     defer window.destroy();
 
-    var editor = try Editor.init(allocator, window, &[_]RenderContext.MeshInstancehInitializeContex{
-        .{
-            .cgltf_path = "models/ScifiHelmet/SciFiHelmet.gltf",
-            .instance_count = 100,
-        },
-        .{
-            .cgltf_path = "models/BoxTextured/BoxTextured.gltf",
-            .instance_count = 100,
-        },
-    });
+    const asset_handler = try AssetHandler.init(allocator);
+    defer asset_handler.deinit(allocator);
+
+    var editor: Editor = editor_init_blk: {
+        var mesh_initializers = std.ArrayList(RenderContext.MeshInstancehInitializeContex).init(allocator);
+        defer {
+            for (mesh_initializers.items) |mesh_initializer| {
+                allocator.free(mesh_initializer.cgltf_path);
+            }
+            mesh_initializers.deinit();
+        }
+
+        {
+            const model_path = try asset_handler.getPath(allocator, "models");
+            defer allocator.free(model_path);
+
+            var model_dir = try std.fs.openIterableDirAbsolute(model_path, .{});
+            defer model_dir.close();
+
+            var model_walker = try model_dir.walk(allocator);
+            defer model_walker.deinit();
+
+            while ((try model_walker.next())) |entry| {
+                if (std.mem.endsWith(u8, entry.basename, ".gltf")) {
+                    const path = try std.fs.path.join(allocator, &[_][]const u8{ "models", entry.path });
+                    try mesh_initializers.append(RenderContext.MeshInstancehInitializeContex{
+                        .cgltf_path = path,
+                        .instance_count = 10_000,
+                    });
+                }
+            }
+        }
+
+        break :editor_init_blk try Editor.init(
+            allocator,
+            window,
+            asset_handler,
+            mesh_initializers.items,
+        );
+    };
     defer editor.deinit();
 
     // handle if user resize window
@@ -60,12 +91,15 @@ pub fn main() !void {
 
     // TODO: make a test scene while file format facilities are not in place
     // load some test stuff while we are missing a file format for scenes
-    try editor.createNewVisbleObject("helmet", 0, Editor.FlushAllObjects.no, .{
+    const box_mesh_handle = editor.getMeshHandleFromName("BoxTextured").?;
+    try editor.createNewVisbleObject("box", box_mesh_handle, Editor.FlushAllObjects.no, .{
         .rotation = Editor.Rotation{ .quat = zm.quatFromNormAxisAngle(zm.f32x4(0, 0, 1, 0), std.math.pi) },
         .position = Editor.Position{ .vec = zm.f32x4(-1, 0, 0, 0) },
         .scale = Editor.Scale{ .vec = zm.f32x4(1, 1, 1, 1) },
     });
-    try editor.createNewVisbleObject("box", 1, Editor.FlushAllObjects.yes, .{
+
+    const helmet_mesh_handle = editor.getMeshHandleFromName("SciFiHelmet").?;
+    try editor.createNewVisbleObject("helmet", helmet_mesh_handle, Editor.FlushAllObjects.yes, .{
         .rotation = Editor.Rotation{ .quat = zm.quatFromNormAxisAngle(zm.f32x4(0, 1, 0, 0), std.math.pi * 0.5) },
         .position = Editor.Position{ .vec = zm.f32x4(1, 0, 0, 0) },
     });

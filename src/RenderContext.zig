@@ -192,8 +192,6 @@ pub const MeshVertex = struct {
 
 const InstanceLookupList = std.ArrayList(InstanceLookup);
 
-asset_handler: AssetHandler,
-
 vkb: BaseDispatch,
 vki: InstanceDispatch,
 vkd: DeviceDispatch,
@@ -242,13 +240,16 @@ vertex_index_buffer: ImmutableBuffer,
 
 camera: Camera,
 
+/// Used to map a model base name to a mesh handle
+mesh_name_handle_map: std.StringHashMap(MeshHandle),
+
 // TODO: rename model_contexts
 /// This is used to supply users with handles for any instance when
 /// they request a new object to render
 instance_contexts: []MeshInstanceContext,
 
-// TODO: code smell: map to array lists :')
-instance_handle_map: std.AutoArrayHashMap(MeshHandle, InstanceLookupList),
+// TODO: code smell: array of array lists :')
+instance_handle_map: std.ArrayList(InstanceLookupList),
 
 instances_desc_set_layout: vk.DescriptorSetLayout,
 instances_desc_set_pool: vk.DescriptorPool,
@@ -289,17 +290,16 @@ imgui_pipeline: ImguiPipeline,
 
 user_pointer: UserPointer,
 
+// TODO: rename allocator to gpa to indicate gpa is recommended
 pub fn init(
     allocator: Allocator,
     window: glfw.Window,
+    asset_handler: AssetHandler,
     mesh_instance_initalizers: []const MeshInstancehInitializeContex,
     config: Config,
 ) !RenderContext {
     zmesh.init(allocator);
     errdefer zmesh.deinit();
-
-    const asset_handler = try AssetHandler.init(allocator);
-    errdefer asset_handler.deinit(allocator);
 
     // bind the glfw instance proc pointer
     const vk_proc = @as(
@@ -1060,30 +1060,46 @@ pub fn init(
     try image_staging_buffer.flushAndCopyToDestination(vkd, device, null);
     try buffer_staging_buffer.flushAndCopyToDestination(vkd, device, null);
 
-    var instance_handle_map = std.AutoArrayHashMap(MeshHandle, InstanceLookupList).init(allocator);
+    var mesh_name_handle_map = std.StringHashMap(MeshHandle).init(allocator);
     errdefer {
-        for (instance_handle_map.values()) |lookup_list| {
+        var key_iter = mesh_name_handle_map.keyIterator();
+        while (key_iter.next()) |mesh_name| {
+            const actual_str: *[:0]const u8 = @ptrCast(mesh_name);
+            allocator.free(actual_str.*);
+        }
+        mesh_name_handle_map.deinit();
+    }
+    try mesh_name_handle_map.ensureTotalCapacity(@intCast(mesh_instance_initalizers.len));
+
+    var instance_handle_map = try std.ArrayList(InstanceLookupList).initCapacity(allocator, mesh_instance_initalizers.len);
+    errdefer {
+        for (instance_handle_map.items) |lookup_list| {
             lookup_list.deinit();
         }
         instance_handle_map.deinit();
     }
-    try instance_handle_map.ensureTotalCapacity(mesh_instance_initalizers.len);
 
     const instance_contexts = try allocator.alloc(MeshInstanceContext, mesh_instance_initalizers.len);
     errdefer allocator.free(instance_contexts);
-    for (mesh_instance_initalizers, 0..) |instancing_init, i| {
+
+    for (mesh_instance_initalizers, 0..) |mesh_init, i| {
         instance_contexts[i] = MeshInstanceContext{
-            .total_instance_count = instancing_init.instance_count,
+            .total_instance_count = mesh_init.instance_count,
         };
 
-        instance_handle_map.putAssumeCapacity(
-            @as(MeshHandle, @intCast(i)),
+        instance_handle_map.appendAssumeCapacity(
             InstanceLookupList.init(allocator),
         );
+
+        // We dupeZ because imgui want c strings, so we need a convenient way of converting out strings
+        const base_name = std.fs.path.basename(mesh_init.cgltf_path);
+        const name_len = base_name.len - ".gltf".len;
+        const mesh_name = try allocator.dupeZ(u8, base_name[0..name_len]);
+        std.debug.print("\n{s}\n", .{mesh_name});
+        mesh_name_handle_map.putAssumeCapacity(mesh_name, @intCast(i));
     }
 
     return RenderContext{
-        .asset_handler = asset_handler,
         .vkb = vkb,
         .vki = vki,
         .vkd = vkd,
@@ -1129,6 +1145,7 @@ pub fn init(
         .instance_image_views = instance_image_views,
         .instances_image_sampler = instances_image_sampler,
         .texture_image_memory = texture_image_memory,
+        .mesh_name_handle_map = mesh_name_handle_map,
         .instance_contexts = instance_contexts,
         .instance_handle_map = instance_handle_map,
         .instance_data = instance_data,
@@ -1240,10 +1257,17 @@ pub fn recreatePresentResources(self: *RenderContext, window: glfw.Window) !void
 }
 
 pub fn deinit(self: *RenderContext, allocator: Allocator) void {
-    for (self.instance_handle_map.values()) |lookup_list| {
+    for (self.instance_handle_map.items) |lookup_list| {
         lookup_list.deinit();
     }
     self.instance_handle_map.deinit();
+
+    var key_iter = self.mesh_name_handle_map.keyIterator();
+    while (key_iter.next()) |mesh_name| {
+        const actual_str: *[:0]const u8 = @ptrCast(mesh_name);
+        allocator.free(actual_str.*);
+    }
+    self.mesh_name_handle_map.deinit();
 
     self.vkd.deviceWaitIdle(self.device) catch {};
 
@@ -1252,7 +1276,6 @@ pub fn deinit(self: *RenderContext, allocator: Allocator) void {
     }
 
     zmesh.deinit();
-    self.asset_handler.deinit(allocator);
 
     allocator.free(self.instance_contexts);
     self.instance_data.deinit();
@@ -1669,9 +1692,20 @@ fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki: Instan
     return selected_device;
 }
 
-pub inline fn getNthMeshHandle(self: RenderContext, nth: usize) MeshHandle {
-    std.debug.assert(nth < self.instance_contexts.len);
-    return @as(MeshHandle, @intCast(nth));
+/// Get a mesh handle based on the mesh basename
+pub inline fn getMeshHandleFromName(self: RenderContext, name: []const u8) ?MeshHandle {
+    return self.mesh_name_handle_map.get(name);
+}
+
+/// Get a name based on a mesh handle
+pub inline fn getNameFromMeshHandle(self: RenderContext, mesh_handle: MeshHandle) ?*[]const u8 {
+    var iter = self.mesh_name_handle_map.iterator();
+    while (iter.next()) |mesh| {
+        if (mesh.value_ptr.* == mesh_handle) {
+            return mesh.key_ptr;
+        }
+    }
+    return null;
 }
 
 pub fn getNewInstance(self: *RenderContext, mesh_handle: MeshHandle) !InstanceHandle {
@@ -1709,7 +1743,7 @@ pub fn getNewInstance(self: *RenderContext, mesh_handle: MeshHandle) !InstanceHa
     //       or when staging buffer is full (check returned error)
     try self.buffer_staging_buffer.flushAndCopyToDestination(self.vkd, self.device, null);
 
-    var mesh_instance_lookups = self.instance_handle_map.getPtr(mesh_handle).?;
+    var mesh_instance_lookups = &self.instance_handle_map.items[@intCast(mesh_handle)];
     const instance_handle = InstanceHandle{
         .mesh_handle = mesh_handle,
         .lookup_index = @as(u48, @intCast(mesh_instance_lookups.items.len)),
@@ -1724,7 +1758,7 @@ pub fn getNewInstance(self: *RenderContext, mesh_handle: MeshHandle) !InstanceHa
 
 /// Destroy the instance handle
 pub fn destroyInstanceHandle(self: *RenderContext, instance_handle: InstanceHandle) void {
-    var mesh_instance_lookups = self.instance_handle_map.getPtr(instance_handle.mesh_handle).?;
+    var mesh_instance_lookups = &self.instance_handle_map.items[@intCast(instance_handle.mesh_handle)];
     const remove_lookup = mesh_instance_lookups.items[instance_handle.lookup_index];
 
     // remove draw instance entry and keep order of remaining data
@@ -1747,7 +1781,7 @@ pub fn destroyInstanceHandle(self: *RenderContext, instance_handle: InstanceHand
 }
 
 inline fn instanceLookup(self: RenderContext, instance_handle: InstanceHandle) *DrawInstance {
-    var mesh_instance_lookups = self.instance_handle_map.getPtr(instance_handle.mesh_handle).?;
+    var mesh_instance_lookups = &self.instance_handle_map.items[@intCast(instance_handle.mesh_handle)];
     const lookup = mesh_instance_lookups.items[instance_handle.lookup_index];
     return &self.instance_data.items[lookup.opaque_instance];
 }
@@ -1771,7 +1805,7 @@ pub inline fn getInstanceTransformPtr(self: *RenderContext, instance_handle: Ins
 /// This will invalidate all current InstanceHandles
 pub fn clearInstancesRetainingCapacity(self: *RenderContext) void {
     // remove all current lookups
-    for (self.instance_handle_map.values()) |*lookup_list| {
+    for (self.instance_handle_map.items) |*lookup_list| {
         lookup_list.clearRetainingCapacity();
     }
 
