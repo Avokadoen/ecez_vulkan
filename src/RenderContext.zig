@@ -1162,7 +1162,7 @@ pub fn init(
 }
 
 pub fn recreatePresentResources(self: *RenderContext, window: glfw.Window) !void {
-    { // destroy resource
+    if (false == self.isMinimized()) { // destroy resource
         try self.vkd.deviceWaitIdle(self.device);
 
         // destroy outdated resources
@@ -1176,6 +1176,11 @@ pub fn recreatePresentResources(self: *RenderContext, window: glfw.Window) !void
 
     try self.swapchain_support_details.reinit(self.vki, self.physical_device, self.surface);
     self.swapchain_extent = try self.swapchain_support_details.chooseExtent(window);
+
+    // if minimized, no point in creating resources
+    if (self.isMinimized()) {
+        return;
+    }
 
     const old_swapchain = self.swapchain;
     self.swapchain = try createSwapchain(
@@ -1357,6 +1362,11 @@ pub inline fn signalUpdate(self: *RenderContext) void {
 }
 
 pub fn drawFrame(self: *RenderContext, window: glfw.Window, delta_time: f32) !void {
+    // if minimized, no point in drawing
+    if (self.isMinimized()) {
+        return;
+    }
+
     // TODO: utilize comptime for this when we introduce the component logic (issue #23)?
     switch (self.update_rate) {
         .always => self.missing_updated_frames = max_frames_in_flight,
@@ -1813,6 +1823,10 @@ pub fn clearInstancesRetainingCapacity(self: *RenderContext) void {
     for (self.indirect_commands.items) |*indirect_command| {
         indirect_command.instance_count = 0;
     }
+}
+
+pub inline fn isMinimized(self: RenderContext) bool {
+    return (self.swapchain_extent.width * self.swapchain_extent.height) == 0;
 }
 
 /// Ensure render context handle resizing.
