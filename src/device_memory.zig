@@ -104,13 +104,13 @@ pub fn transferMemoryToDevice(
 
     const aligned_memory_size = pow2Align(non_coherent_atom_size, @as(vk.DeviceSize, @intCast(raw_data.len)));
 
-    var device_data = blk: {
-        var raw_device_ptr = try vkd.mapMemory(device, memory, 0, aligned_memory_size, .{});
+    const device_data = blk: {
+        const raw_device_ptr = try vkd.mapMemory(device, memory, 0, aligned_memory_size, .{});
         break :blk @as([*]u8, @ptrCast(raw_device_ptr))[0..raw_data.len];
     };
     defer vkd.unmapMemory(device, memory);
 
-    std.mem.copy(u8, device_data, raw_data);
+    @memcpy(device_data, raw_data);
 
     // TODO: defer flush
     const mapped_range = vk.MappedMemoryRange{

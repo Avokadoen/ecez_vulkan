@@ -25,7 +25,7 @@ pub inline fn getPath(self: AssetHandler, allocator: Allocator, file_path: []con
 
 pub inline fn getCPath(self: AssetHandler, allocator: Allocator, file_path: []const u8) ![:0]const u8 {
     const join_path = [_][]const u8{ self.exe_path, prefix, file_path };
-    var absolute_file_path = try std.fs.path.resolve(allocator, &join_path);
+    const absolute_file_path = try std.fs.path.resolve(allocator, &join_path);
     defer allocator.free(absolute_file_path);
 
     return allocator.dupeZ(u8, absolute_file_path);

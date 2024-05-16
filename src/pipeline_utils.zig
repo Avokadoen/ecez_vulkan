@@ -15,7 +15,7 @@ pub fn readFile(allocator: Allocator, absolute_path: []const u8) ![]u8 {
     var reader = file.reader();
     const file_size = (try reader.context.stat()).size;
 
-    var buffer = try allocator.alloc(u8, file_size);
+    const buffer = try allocator.alloc(u8, file_size);
     errdefer allocator.free(buffer);
 
     const read = try reader.readAll(buffer);

@@ -217,6 +217,10 @@ pub const BufferView = extern struct {
     extras: Extras,
     extensions_count: usize,
     extensions: ?[*]Extension,
+
+    pub fn data(bv: BufferView) ?[*]u8 {
+        return cgltf_buffer_view_data(&bv);
+    }
 };
 
 pub const AccessorSparse = extern struct {
@@ -262,6 +266,15 @@ pub const Accessor = extern struct {
 
     pub fn unpackFloats(accessor: Accessor, out: []f32) []f32 {
         const count = cgltf_accessor_unpack_floats(&accessor, out.ptr, out.len);
+        return out[0..count];
+    }
+
+    pub fn unpackIndicesCount(accessor: Accessor) usize {
+        return cgltf_accessor_unpack_indices(&accessor, null, 0);
+    }
+
+    pub fn unpackIndices(accessor: Accessor, out: []u32) []u32 {
+        const count = cgltf_accessor_unpack_indices(&accessor, out.ptr, out.len);
         return out[0..count];
     }
 
@@ -407,6 +420,12 @@ pub const Iridescence = extern struct {
     iridescence_thickness_texture: TextureView,
 };
 
+pub const Anisotropy = extern struct {
+    anisotropy_strength: f32,
+    anisotropy_rotation: f32,
+    anisotropy_texture: TextureView,
+};
+
 pub const Material = extern struct {
     name: ?MutCString,
     has_pbr_metallic_roughness: Bool32,
@@ -419,6 +438,7 @@ pub const Material = extern struct {
     has_sheen: Bool32,
     has_emissive_strength: Bool32,
     has_iridescence: Bool32,
+    has_anisotropy: Bool32,
     pbr_metallic_roughness: PbrMetallicRoughness,
     pbr_specular_glossiness: PbrSpecularGlossiness,
     clearcoat: Clearcoat,
@@ -429,6 +449,7 @@ pub const Material = extern struct {
     volume: Volume,
     emissive_strength: EmissiveStrength,
     iridescence: Iridescence,
+    anisotropy: Anisotropy,
     normal_texture: TextureView,
     occlusion_texture: TextureView,
     emissive_texture: TextureView,
@@ -460,7 +481,6 @@ pub const DracoMeshCompression = extern struct {
 };
 
 pub const MeshGpuInstancing = extern struct {
-    buffer_view: ?*BufferView,
     attributes: ?[*]Attribute,
     attributes_count: usize,
 };
@@ -710,6 +730,15 @@ pub const Data = extern struct {
 
     memory: MemoryOptions,
     file: FileOptions,
+
+    pub fn writeFile(data: Data, path: [*:0]const u8, options: Options) !void {
+        const result = cgltf_write_file(&options, path, &data);
+        try resultToError(result);
+    }
+
+    pub fn writeBuffer(data: Data, buffer: []u8, options: Options) usize {
+        return cgltf_write(&options, buffer.ptr, buffer.len, &data);
+    }
 };
 
 pub const Error = error{
@@ -727,18 +756,20 @@ pub const Error = error{
 pub fn parse(options: Options, data: []const u8) Error!*Data {
     var out_data: ?*Data = null;
     const result = cgltf_parse(&options, data.ptr, data.len, &out_data);
-    return try resultToError(result, out_data);
+    try resultToError(result);
+    return out_data.?;
 }
 
 pub fn parseFile(options: Options, path: [*:0]const u8) Error!*Data {
     var out_data: ?*Data = null;
     const result = cgltf_parse_file(&options, path, &out_data);
-    return try resultToError(result, out_data);
+    try resultToError(result);
+    return out_data.?;
 }
 
 pub fn loadBuffers(options: Options, data: *Data, gltf_path: [*:0]const u8) Error!void {
     const result = cgltf_load_buffers(&options, data, gltf_path);
-    _ = try resultToError(result, data);
+    try resultToError(result);
 }
 
 pub fn free(data: *Data) void {
@@ -784,6 +815,8 @@ extern fn cgltf_validate(data: ?*Data) Result;
 extern fn cgltf_node_transform_local(node: ?*const Node, out_matrix: ?*[16]f32) void;
 extern fn cgltf_node_transform_world(node: ?*const Node, out_matrix: ?*[16]f32) void;
 
+extern fn cgltf_buffer_view_data(view: ?*const BufferView) ?[*]u8;
+
 extern fn cgltf_accessor_read_float(
     accessor: ?*const Accessor,
     index: usize,
@@ -809,6 +842,12 @@ extern fn cgltf_accessor_unpack_floats(
     float_count: usize,
 ) usize;
 
+extern fn cgltf_accessor_unpack_indices(
+    accessor: ?*const Accessor,
+    out: ?[*]u32,
+    index_count: usize,
+) usize;
+
 extern fn cgltf_copy_extras_json(
     data: ?*const Data,
     extras: ?*const Extras,
@@ -816,20 +855,126 @@ extern fn cgltf_copy_extras_json(
     dest_size: ?*usize,
 ) Result;
 
-fn resultToError(result: Result, data: ?*Data) Error!*Data {
-    if (result == .success)
-        return data.?;
+extern fn cgltf_write_file(
+    options: ?*const Options,
+    path: ?[*:0]const u8,
+    data: ?*const Data,
+) Result;
 
-    return switch (result) {
-        .data_too_short => error.DataTooShort,
-        .unknown_format => error.UnknownFormat,
-        .invalid_json => error.InvalidJson,
-        .invalid_gltf => error.InvalidGltf,
-        .invalid_options => error.InvalidOptions,
-        .file_not_found => error.FileNotFound,
-        .io_error => error.IoError,
-        .out_of_memory => error.OutOfMemory,
-        .legacy_gltf => error.LegacyGltf,
-        else => unreachable,
-    };
+extern fn cgltf_write(
+    options: ?*const Options,
+    buffer: ?[*]u8,
+    size: usize,
+    data: ?*const Data,
+) usize;
+
+fn resultToError(result: Result) Error!void {
+    switch (result) {
+        .success => return,
+        .data_too_short => return error.DataTooShort,
+        .unknown_format => return error.UnknownFormat,
+        .invalid_json => return error.InvalidJson,
+        .invalid_gltf => return error.InvalidGltf,
+        .invalid_options => return error.InvalidOptions,
+        .file_not_found => return error.FileNotFound,
+        .io_error => return error.IoError,
+        .out_of_memory => return error.OutOfMemory,
+        .legacy_gltf => return error.LegacyGltf,
+    }
+}
+
+// TESTS ///////////////////////////////////////////////////////////////////////////////////////////
+
+test {
+    std.testing.refAllDeclsRecursive(@This());
+}
+
+test "extern struct layout" {
+    @setEvalBranchQuota(10_000);
+    const c = @cImport(@cInclude("cgltf.h"));
+    inline for (comptime std.meta.declarations(@This())) |decl| {
+        const ZigType = @field(@This(), decl.name);
+        if (@TypeOf(ZigType) != type) {
+            continue;
+        }
+        if (comptime std.meta.activeTag(@typeInfo(ZigType)) == .Struct and
+            @typeInfo(ZigType).Struct.layout == .@"extern")
+        {
+            comptime var c_name_buf: [256]u8 = undefined;
+            const c_name = comptime try cTypeNameFromZigTypeName(&c_name_buf, decl.name);
+            const CType = @field(c, c_name);
+            std.testing.expectEqual(@sizeOf(CType), @sizeOf(ZigType)) catch |err| {
+                std.log.err("@sizeOf({s}) != @sizeOf({s})", .{ decl.name, c_name });
+                return err;
+            };
+            comptime var i: usize = 0;
+            inline for (comptime std.meta.fieldNames(CType)) |c_field_name| {
+                std.testing.expectEqual(
+                    @offsetOf(CType, c_field_name),
+                    @offsetOf(ZigType, std.meta.fieldNames(ZigType)[i]),
+                ) catch |err| {
+                    std.log.err(
+                        "@offsetOf({s}, {s}) != @offsetOf({s}, {s})",
+                        .{ decl.name, std.meta.fieldNames(ZigType)[i], c_name, c_field_name },
+                    );
+                    return err;
+                };
+                i += 1;
+            }
+        }
+    }
+}
+
+test "enum" {
+    @setEvalBranchQuota(10_000);
+    const c = @cImport(@cInclude("cgltf.h"));
+    inline for (comptime std.meta.declarations(@This())) |decl| {
+        const ZigType = @field(@This(), decl.name);
+        if (@TypeOf(ZigType) != type) {
+            continue;
+        }
+        if (comptime std.meta.activeTag(@typeInfo(ZigType)) == .Enum) {
+            comptime var c_name_buf: [256]u8 = undefined;
+            const c_name = comptime try cTypeNameFromZigTypeName(&c_name_buf, decl.name);
+            const CType = @field(c, c_name);
+            std.testing.expectEqual(@sizeOf(CType), @sizeOf(ZigType)) catch |err| {
+                std.log.err("@sizeOf({s}) != @sizeOf({s})", .{ decl.name, c_name });
+                return err;
+            };
+            inline for (comptime std.meta.fieldNames(ZigType)) |field_name| {
+                const c_field_name = comptime buildName: {
+                    var buf: [256]u8 = undefined;
+                    var fbs = std.io.fixedBufferStream(&buf);
+                    try fbs.writer().writeAll(c_name);
+                    try fbs.writer().writeByte('_');
+                    try fbs.writer().writeAll(field_name);
+                    break :buildName fbs.getWritten();
+                };
+                std.testing.expectEqual(
+                    @field(c, c_field_name),
+                    @intFromEnum(@field(ZigType, field_name)),
+                ) catch |err| {
+                    std.log.err(decl.name ++ "." ++ field_name ++ " != " ++ c_field_name, .{});
+                    return err;
+                };
+            }
+        }
+    }
+}
+
+fn cTypeNameFromZigTypeName(
+    comptime buf: []u8,
+    comptime zig_name: []const u8,
+) ![]const u8 {
+    comptime var fbs = std.io.fixedBufferStream(buf);
+    try fbs.writer().writeAll("cgltf");
+    for (zig_name) |char| {
+        if (std.ascii.isUpper(char)) {
+            try fbs.writer().writeByte('_');
+            try fbs.writer().writeByte(std.ascii.toLower(char));
+        } else {
+            try fbs.writer().writeByte(char);
+        }
+    }
+    return fbs.getWritten();
 }

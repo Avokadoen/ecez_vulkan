@@ -60,7 +60,7 @@ pub fn main() !void {
             const model_path = try asset_handler.getPath(allocator, "models");
             defer allocator.free(model_path);
 
-            var model_dir = try std.fs.openIterableDirAbsolute(model_path, .{});
+            var model_dir = try std.fs.openDirAbsolute(model_path, .{ .iterate = true });
             defer model_dir.close();
 
             var model_walker = try model_dir.walk(allocator);

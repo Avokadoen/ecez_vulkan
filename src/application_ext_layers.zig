@@ -34,7 +34,7 @@ pub inline fn getValidationLayers(allocator: Allocator, vkb: BaseDispatch) ![]co
     var layer_count: u32 = undefined;
     _ = try vkb.enumerateInstanceLayerProperties(&layer_count, null);
 
-    var existing_layers = try allocator.alloc(vk.LayerProperties, layer_count);
+    const existing_layers = try allocator.alloc(vk.LayerProperties, layer_count);
     defer allocator.free(existing_layers);
 
     _ = try vkb.enumerateInstanceLayerProperties(&layer_count, existing_layers.ptr);

@@ -67,7 +67,7 @@ pub inline fn init(
     try vkd.bindBufferMemory(device, buffer, memory, 0);
 
     const device_data: []u8 = blk: {
-        var raw_device_ptr = try vkd.mapMemory(device, memory, 0, size, .{});
+        const raw_device_ptr = try vkd.mapMemory(device, memory, 0, size, .{});
         break :blk @as([*]u8, @ptrCast(raw_device_ptr))[0..size];
     };
 
@@ -86,7 +86,7 @@ pub inline fn deinit(self: MutableBuffer, vkd: DeviceDispatch, device: vk.Device
     vkd.destroyBuffer(device, self.buffer, null);
 }
 
-pub inline fn scheduleTransfer(
+pub fn scheduleTransfer(
     self: *MutableBuffer,
     offset: vk.DeviceSize,
     comptime T: type,
@@ -97,8 +97,9 @@ pub inline fn scheduleTransfer(
         return error.OutOfMemory;
     }
 
-    var data_slice = self.device_data[offset..];
-    std.mem.copy(u8, data_slice, raw_data);
+    const to = offset + raw_data.len;
+    const data_slice = self.device_data[offset..to];
+    @memcpy(data_slice, raw_data);
 
     // assign our current flush offset
     self.incoherent_memory_offset = @min(self.incoherent_memory_offset, offset);

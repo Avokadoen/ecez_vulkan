@@ -93,15 +93,13 @@ pub fn init(
     var font_image_resources: ImageResource = undefined;
     var icon_image_resources: ImageResource = undefined;
     {
-        var font_atlas_width: i32 = undefined;
-        var font_atlas_height: i32 = undefined;
-        const font_atlas_pixels = zgui.io.getFontsTextDataAsRgba32(&font_atlas_width, &font_atlas_height);
+        const font_atlas = zgui.io.getFontsTextDataAsRgba32();
 
         font_image_resources = try ImageResource.init(
             vkd,
             device,
-            @intCast(font_atlas_width),
-            @intCast(font_atlas_height),
+            @intCast(font_atlas.width),
+            @intCast(font_atlas.height),
             .r8g8b8a8_unorm,
         );
         errdefer font_image_resources.deinit(vkd, device);
@@ -126,7 +124,7 @@ pub fn init(
         );
         errdefer icon_image_resources.deinit(vkd, device);
 
-        const raw_font_atlas_pixels: [*]const u8 = @ptrCast(font_atlas_pixels);
+        const raw_font_atlas_pixels: [*]const u8 = @ptrCast(font_atlas.pixels);
         const icon_image_pixels = icon_image.pixels.asBytes();
 
         image_memory = try ImageResource.bindImagesToMemory(
@@ -139,7 +137,7 @@ pub fn init(
                 &icon_image_resources,
             },
             &[_][]const u8{
-                raw_font_atlas_pixels[0..@intCast(font_atlas_width * font_atlas_height * @sizeOf(u32))],
+                raw_font_atlas_pixels[0..@intCast(font_atlas.width * font_atlas.height * @sizeOf(u32))],
                 icon_image_pixels,
             },
             image_staging_buffer,
@@ -510,7 +508,7 @@ pub fn draw(self: *ImguiPipeline, vkd: DeviceDispatch, device: vk.Device, comman
     self.recordCommandBuffer(vkd, command_buffer, current_frame);
 }
 
-inline fn updateBuffers(self: *ImguiPipeline, vkd: DeviceDispatch, device: vk.Device, current_frame: usize) !void {
+fn updateBuffers(self: *ImguiPipeline, vkd: DeviceDispatch, device: vk.Device, current_frame: usize) !void {
     // const update_buffers_zone = tracy.ZoneN(@src(), "imgui: vertex & index update");
     // defer update_buffers_zone.End();
 
@@ -538,7 +536,7 @@ inline fn updateBuffers(self: *ImguiPipeline, vkd: DeviceDispatch, device: vk.De
         // update current frame index_offset
         self.index_buffer_offsets[current_frame] = index_offset;
 
-        const command_lists = draw_data.cmd_lists[0..@as(usize, @intCast(draw_data.cmd_lists_count))];
+        const command_lists = draw_data.cmd_lists.items[0..@as(usize, @intCast(draw_data.cmd_lists_count))];
         for (command_lists) |command_list| {
             // transfer vertex data for this command list
             {
@@ -643,7 +641,7 @@ inline fn recordCommandBuffer(self: ImguiPipeline, vkd: DeviceDispatch, command_
         // Render commands
         var vertex_offset: i32 = 0;
         var index_offset: u32 = 0;
-        const command_lists = draw_data.cmd_lists[0..@as(usize, @intCast(draw_data.cmd_lists_count))];
+        const command_lists = draw_data.cmd_lists.items[0..@as(usize, @intCast(draw_data.cmd_lists_count))];
         for (command_lists) |command_list| {
             const command_buffer_length = command_list.getCmdBufferLength();
             const command_buffer_data = command_list.getCmdBufferData();

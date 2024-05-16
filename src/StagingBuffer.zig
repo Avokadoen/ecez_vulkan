@@ -92,7 +92,7 @@ const StagingContext = struct {
         errdefer vkd.destroyFence(device, transfer_fence, null);
 
         const device_data: []u8 = blk: {
-            var raw_device_ptr = try vkd.mapMemory(device, memory, 0, size, .{});
+            const raw_device_ptr = try vkd.mapMemory(device, memory, 0, size, .{});
             break :blk @as([*]u8, @ptrCast(raw_device_ptr))[0..size];
         };
 
@@ -182,8 +182,10 @@ pub const Buffer = struct {
             @as(vk.DeviceSize, @intCast(raw_data.len)),
         );
 
-        var vacant_device_data = self.ctx.device_data[self.ctx.incoherent_memory_bytes..];
-        std.mem.copy(u8, vacant_device_data, raw_data);
+        const dst_from = self.ctx.incoherent_memory_bytes;
+        const dst_to = dst_from + raw_data.len;
+        const vacant_device_data = self.ctx.device_data[dst_from..dst_to];
+        @memcpy(vacant_device_data, raw_data);
 
         self.ctx.mapped_ranges[self.ctx.memory_in_flight] = vk.MappedMemoryRange{
             .memory = self.ctx.memory,
@@ -324,8 +326,11 @@ pub const Image = struct {
         }
 
         const aligned_memory_size = dmem.pow2Align(self.ctx.non_coherent_atom_size, @as(vk.DeviceSize, @intCast(raw_data.len)));
-        var vacant_device_data = self.ctx.device_data[self.ctx.incoherent_memory_bytes..];
-        std.mem.copy(u8, vacant_device_data, raw_data);
+
+        const dst_from = self.ctx.incoherent_memory_bytes;
+        const dst_to = dst_from + raw_data.len;
+        const vacant_device_data = self.ctx.device_data[dst_from..dst_to];
+        @memcpy(vacant_device_data, raw_data);
 
         self.ctx.mapped_ranges[self.ctx.memory_in_flight] = vk.MappedMemoryRange{
             .memory = self.ctx.memory,

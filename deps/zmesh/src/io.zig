@@ -93,6 +93,7 @@ pub fn appendMeshPrimitive(
             assert(buffer_view.buffer.data != null);
 
             assert(accessor.stride == buffer_view.stride or buffer_view.stride == 0);
+            // assert(accessor.stride * accessor.count == buffer_view.size);
 
             const data_addr = @as([*]const u8, @ptrCast(buffer_view.buffer.data)) +
                 accessor.offset + buffer_view.offset;
@@ -122,4 +123,8 @@ pub fn appendMeshPrimitive(
             }
         }
     }
+}
+
+test {
+    std.testing.refAllDeclsRecursive(@This());
 }

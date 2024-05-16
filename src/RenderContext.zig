@@ -407,7 +407,7 @@ pub fn init(
         var image_count: u32 = undefined;
         _ = try vkd.getSwapchainImagesKHR(device, swapchain, &image_count, null);
 
-        var images = try allocator.alloc(vk.Image, image_count);
+        const images = try allocator.alloc(vk.Image, image_count);
         errdefer allocator.free(images);
 
         _ = try vkd.getSwapchainImagesKHR(device, swapchain, &image_count, images.ptr);
@@ -475,7 +475,7 @@ pub fn init(
     );
     errdefer vkd.destroyRenderPass(device, render_pass, null);
 
-    var framebuffers = try allocator.alloc(vk.Framebuffer, swapchain_images.len);
+    const framebuffers = try allocator.alloc(vk.Framebuffer, swapchain_images.len);
     errdefer allocator.free(framebuffers);
 
     try instantiateFramebuffer(
@@ -566,10 +566,10 @@ pub fn init(
 
     // TODO: spawn pools according to how many threads we have
     const command_pools = blk: {
-        var pools = try allocator.alloc(vk.CommandPool, max_frames_in_flight);
+        const pools = try allocator.alloc(vk.CommandPool, max_frames_in_flight);
         errdefer allocator.free(pools);
 
-        var pools_initiated: usize = 0;
+        const pools_initiated: usize = 0;
         errdefer {
             for (0..pools_initiated) |pool_index| {
                 vkd.destroyCommandPool(device, pools[pool_index], null);
@@ -593,7 +593,7 @@ pub fn init(
     }
 
     const command_buffers = blk: {
-        var buffers = try allocator.alloc(vk.CommandBuffer, max_frames_in_flight);
+        const buffers = try allocator.alloc(vk.CommandBuffer, max_frames_in_flight);
         errdefer allocator.free(buffers);
 
         for (buffers, 0..) |*cmd_buffer, i| {
@@ -610,7 +610,7 @@ pub fn init(
 
     // create all sempahores we need which we can slice later
     const all_semaphores = blk: {
-        var semaphores = try allocator.alloc(vk.Semaphore, max_frames_in_flight * 2);
+        const semaphores = try allocator.alloc(vk.Semaphore, max_frames_in_flight * 2);
 
         var initialized_semaphores: usize = 0;
         errdefer {
@@ -637,7 +637,7 @@ pub fn init(
     const render_finished_semaphores = all_semaphores[max_frames_in_flight .. max_frames_in_flight * 2];
 
     const in_flight_fences = blk: {
-        var fences = try allocator.alloc(vk.Fence, max_frames_in_flight);
+        const fences = try allocator.alloc(vk.Fence, max_frames_in_flight);
 
         var initialized_fences: usize = 0;
         errdefer {
@@ -703,7 +703,7 @@ pub fn init(
     errdefer allocator.free(instance_image_views);
 
     // we use the same sampler for all images
-    var instances_image_sampler = try createDefaultSampler(vkd, device, device_properties.limits);
+    const instances_image_sampler = try createDefaultSampler(vkd, device, device_properties.limits);
     errdefer vkd.destroySampler(device, instances_image_sampler, null);
 
     // TODO: use slice instead?
@@ -874,7 +874,8 @@ pub fn init(
 
             // load image on cpu
             model_base_color_images[i] = blk: {
-                const image_uri = std.mem.span(gltf_data.images.?[0].uri.?);
+                const images = gltf_data.images.?;
+                const image_uri = std.mem.span(images[0].uri.?);
                 const join_path = [_][]const u8{ content_path, "..", image_uri };
                 const image_path = try std.fs.path.resolve(allocator, join_path[0..]);
                 defer allocator.free(image_path);
@@ -1095,7 +1096,6 @@ pub fn init(
         const base_name = std.fs.path.basename(mesh_init.cgltf_path);
         const name_len = base_name.len - ".gltf".len;
         const mesh_name = try allocator.dupeZ(u8, base_name[0..name_len]);
-        std.debug.print("\n{s}\n", .{mesh_name});
         mesh_name_handle_map.putAssumeCapacity(mesh_name, @intCast(i));
     }
 
@@ -1620,7 +1620,7 @@ fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki: Instan
             continue :device_search;
         }
 
-        var current_device_properties: vk.PhysicalDeviceProperties = vki.getPhysicalDeviceProperties(current_device);
+        const current_device_properties: vk.PhysicalDeviceProperties = vki.getPhysicalDeviceProperties(current_device);
         // if we have a discrete GPU and other GPU is not discrete then we do not select it
         if (selected_device_properties.device_type == .discrete_gpu and current_device_properties.device_type != .discrete_gpu) {
             continue :device_search;
@@ -1649,7 +1649,7 @@ fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki: Instan
             }
         }
 
-        var current_device_features: vk.PhysicalDeviceFeatures = vki.getPhysicalDeviceFeatures(current_device);
+        const current_device_features: vk.PhysicalDeviceFeatures = vki.getPhysicalDeviceFeatures(current_device);
         // at the time of writing this comment 82.5% support this
         if (current_device_features.multi_draw_indirect != vk.TRUE) {
             continue :device_search;
@@ -1781,7 +1781,7 @@ pub fn destroyInstanceHandle(self: *RenderContext, instance_handle: InstanceHand
 }
 
 inline fn instanceLookup(self: RenderContext, instance_handle: InstanceHandle) *DrawInstance {
-    var mesh_instance_lookups = &self.instance_handle_map.items[@intCast(instance_handle.mesh_handle)];
+    const mesh_instance_lookups = &self.instance_handle_map.items[@intCast(instance_handle.mesh_handle)];
     const lookup = mesh_instance_lookups.items[instance_handle.lookup_index];
     return &self.instance_data.items[lookup.opaque_instance];
 }
@@ -1792,7 +1792,7 @@ pub inline fn setInstanceTransform(self: *RenderContext, instance_handle: Instan
 }
 
 pub inline fn getInstanceTransform(self: RenderContext, instance_handle: InstanceHandle) zm.Mat {
-    var draw_instance = self.instanceLookup(instance_handle);
+    const draw_instance = self.instanceLookup(instance_handle);
     return draw_instance.transform;
 }
 

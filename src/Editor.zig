@@ -100,7 +100,7 @@ const fake_components = [_]type{
 };
 
 const object_metadata_index = blk: {
-    inline for (fake_components, 0..) |Component, component_index| {
+    for (fake_components, 0..) |Component, component_index| {
         if (Component == ObjectMetadata) {
             break :blk component_index;
         }
@@ -108,8 +108,8 @@ const object_metadata_index = blk: {
 };
 
 const biggest_component_size = blk: {
-    comptime var size = 0;
-    inline for (fake_components) |Component| {
+    var size = 0;
+    for (fake_components) |Component| {
         if (Component == ObjectMetadata) continue;
 
         if (@sizeOf(Component) > size) {
@@ -123,17 +123,14 @@ fn overrideWidgetGenerator(comptime Component: type) ?type {
     return switch (Component) {
         InstanceHandle => struct {
             pub fn widget(editor: *Editor, instance_handle: *InstanceHandle) bool {
-                const ui_state = editor.getUiState();
-                var render_context = editor.getRenderContext();
-
                 const mesh_handle = instance_handle.*.mesh_handle;
-                const mesh_name = editor.getRenderContext().getNameFromMeshHandle(mesh_handle).?;
+                const mesh_name = editor.render_context.getNameFromMeshHandle(mesh_handle).?;
                 const preview_value: *[:0]const u8 = @ptrCast(mesh_name);
 
                 if (zgui.beginCombo("Mesh", .{ .preview_value = preview_value.* })) {
                     defer zgui.endCombo();
 
-                    var mesh_name_iter = editor.getRenderContext().mesh_name_handle_map.iterator();
+                    var mesh_name_iter = editor.render_context.mesh_name_handle_map.iterator();
                     while (mesh_name_iter.next()) |mesh_name_entry| {
                         const c_name: *[:0]const u8 = @ptrCast(mesh_name_entry.key_ptr);
 
@@ -142,15 +139,15 @@ fn overrideWidgetGenerator(comptime Component: type) ?type {
                         })) {
                             // If we are in the processing of adding a instance handle, then we do not want to
                             // destroy none existing handle in the renderer, only set the in flight handle
-                            if (ui_state.add_component_modal.is_active) {
+                            if (editor.ui_state.add_component_modal.is_active) {
                                 instance_handle.mesh_handle = mesh_name_entry.value_ptr.*;
                             } else if (mesh_handle != mesh_name_entry.value_ptr.*) {
                                 // TODO: handle errors here and report to user
-                                const new_instance_handle = render_context.getNewInstance(mesh_name_entry.value_ptr.*) catch unreachable;
-                                editor.storage.setComponent(ui_state.selected_entity.?, new_instance_handle) catch unreachable;
+                                const new_instance_handle = editor.render_context.getNewInstance(mesh_name_entry.value_ptr.*) catch unreachable;
+                                editor.storage.setComponent(editor.ui_state.selected_entity.?, new_instance_handle) catch unreachable;
 
                                 // destroy old instance handle
-                                render_context.destroyInstanceHandle(instance_handle.*);
+                                editor.render_context.destroyInstanceHandle(instance_handle.*);
 
                                 instance_handle.* = new_instance_handle;
                                 editor.forceFlush() catch unreachable;
@@ -159,7 +156,7 @@ fn overrideWidgetGenerator(comptime Component: type) ?type {
                     }
                 }
 
-                const transform = render_context.getInstanceTransform(instance_handle.*);
+                const transform = editor.render_context.getInstanceTransform(instance_handle.*);
                 zgui.text("Transform (readonly): ", .{});
                 {
                     zgui.beginDisabled(.{ .disabled = true });
@@ -228,10 +225,8 @@ fn specializedAddHandle(comptime Component: type) ?type {
     return switch (Component) {
         InstanceHandle => struct {
             pub fn add(editor: *Editor, instance_handle: *InstanceHandle) !void {
-                const ui_state = editor.getUiState();
-
                 try editor.assignEntityMeshInstance(
-                    ui_state.selected_entity.?,
+                    editor.ui_state.selected_entity.?,
                     instance_handle.mesh_handle,
                 );
             }
@@ -244,15 +239,14 @@ fn specializedRemoveHandle(comptime Component: type) ?type {
     return switch (Component) {
         InstanceHandle => struct {
             pub fn remove(editor: *Editor) !void {
-                const selected_entity = editor.getUiState().selected_entity.?;
+                const selected_entity = editor.ui_state.selected_entity.?;
                 const instance_handle = blk: {
                     const handle = try editor.storage.getComponent(selected_entity, InstanceHandle);
                     break :blk handle;
                 };
-                var render_context = editor.getRenderContext();
 
                 // destroy old instance handle
-                render_context.destroyInstanceHandle(instance_handle);
+                editor.render_context.destroyInstanceHandle(instance_handle);
 
                 // In the event a remove failed, then the select index is in a inconsistent state
                 // and we do not really have to do anything
@@ -270,37 +264,40 @@ fn specializedRemoveHandle(comptime Component: type) ?type {
 // TODO: Doing these things for all enitites in the scene is extremely inefficient
 //       since the scene editor is "static". This should only be done for the objects
 //       that move
-const TransformSystems = struct {
+const TransformResetSystem = struct {
     /// Reset the transform
-    pub fn reset(instance_handle: InstanceHandle, render_context: *ecez.SharedState(RenderContext)) void {
+    pub fn reset(instance_handle: InstanceHandle, render_context: *RenderContext) void {
         var _render_context = @as(*RenderContext, @ptrCast(render_context));
-        var transform = _render_context.getInstanceTransformPtr(instance_handle);
+        const transform = _render_context.getInstanceTransformPtr(instance_handle);
 
         transform.* = zm.identity();
     }
+};
 
+const TransformApplyScaleSystem = struct {
     /// Apply scale to the transform/
-    pub fn applyScale(scale: Scale, instance_handle: InstanceHandle, render_context: *ecez.SharedState(RenderContext)) void {
-        var _render_context = @as(*RenderContext, @ptrCast(render_context));
-        var transform = _render_context.getInstanceTransformPtr(instance_handle);
+    pub fn applyScale(scale: Scale, instance_handle: InstanceHandle, render_context: *RenderContext) void {
+        var transform = render_context.getInstanceTransformPtr(instance_handle);
 
         transform[0][0] *= scale.vec[0];
         transform[1][1] *= scale.vec[1];
         transform[2][2] *= scale.vec[2];
     }
+};
 
+const TransformApplyRotationSystem = struct {
     /// Apply rotation to the transform/
-    pub fn applyRotation(rotation: Rotation, instance_handle: InstanceHandle, render_context: *ecez.SharedState(RenderContext)) void {
-        var _render_context = @as(*RenderContext, @ptrCast(render_context));
-        var transform = _render_context.getInstanceTransformPtr(instance_handle);
+    pub fn applyRotation(rotation: Rotation, instance_handle: InstanceHandle, render_context: *RenderContext) void {
+        const transform = render_context.getInstanceTransformPtr(instance_handle);
 
         transform.* = zm.mul(transform.*, zm.quatToMat(rotation.quat));
     }
+};
 
+const TransformApplyPositionSystem = struct {
     /// Apply position to the transform
-    pub fn applyPosition(position: Position, instance_handle: InstanceHandle, render_context: *ecez.SharedState(RenderContext)) void {
-        var _render_context = @as(*RenderContext, @ptrCast(render_context));
-        var transform = _render_context.getInstanceTransformPtr(instance_handle);
+    pub fn applyPosition(position: Position, instance_handle: InstanceHandle, render_context: *RenderContext) void {
+        const transform = render_context.getInstanceTransformPtr(instance_handle);
 
         transform.* = zm.mul(transform.*, zm.translationV(position.vec));
     }
@@ -483,13 +480,13 @@ fn fieldWidget(comptime Component: type, comptime T: type, comptime id_mod: usiz
 
 const UiState = struct {
     const ObjectList = struct {
-        renaming_buffer: [128]u8,
+        renaming_buffer: [127:0]u8,
         first_rename_draw: bool,
         renaming_entity: bool,
     };
 
     const ObjectInspector = struct {
-        name_buffer: [128]u8,
+        name_buffer: [127:0]u8,
         selected_component_index: usize,
     };
 
@@ -504,7 +501,7 @@ const UiState = struct {
 
     export_file_modal_popen: bool,
     import_file_modal_popen: bool,
-    export_import_file_name: [128]u8,
+    export_import_file_name: [127:0]u8,
 
     object_list_active: bool = true,
     object_list: ObjectList,
@@ -540,22 +537,17 @@ const Storage = ecez.CreateStorage(.{
     fake_components[2],
     fake_components[3],
     fake_components[4],
-}, .{
-    UiState,
-    RenderContext,
-    CameraState,
-    InputState,
 });
 
 // TODO: convert on_import to simple queries inline
 const Scheduler = ecez.CreateScheduler(Storage, .{
     // event to apply all transformation and update render buffers as needed
     ecez.Event("transform_update", .{
-        TransformSystems.reset,
-        ecez.DependOn(TransformSystems.applyScale, .{TransformSystems.reset}),
-        ecez.DependOn(TransformSystems.applyRotation, .{TransformSystems.applyScale}),
-        ecez.DependOn(TransformSystems.applyPosition, .{TransformSystems.applyRotation}),
-    }, .{}),
+        TransformResetSystem,
+        ecez.DependOn(TransformApplyScaleSystem, .{TransformResetSystem}),
+        ecez.DependOn(TransformApplyRotationSystem, .{TransformApplyScaleSystem}),
+        ecez.DependOn(TransformApplyPositionSystem, .{TransformApplyRotationSystem}),
+    }, RenderContext),
 });
 
 // TODO: editor should not be part of renderer
@@ -578,6 +570,11 @@ not_allowed: glfw.Cursor,
 storage: Storage,
 scheduler: Scheduler,
 
+render_context: RenderContext,
+ui_state: UiState,
+camera_state: CameraState,
+input_state: InputState,
+
 icons: EditorIcons,
 user_pointer: UserPointer,
 
@@ -596,30 +593,27 @@ pub fn init(
     );
     errdefer render_context.deinit(allocator);
 
-    var ui_state = UiState{
-        .selected_entity = null,
-        .object_list = .{
-            .renaming_buffer = undefined,
-            .first_rename_draw = false,
-            .renaming_entity = false,
-        },
-        .object_inspector = .{
-            .name_buffer = undefined,
-            .selected_component_index = fake_components.len,
-        },
-        .export_file_modal_popen = false,
-        .import_file_modal_popen = false,
-        .export_import_file_name = undefined,
-        .add_component_modal = .{},
-    };
-    std.mem.copy(u8, &ui_state.export_import_file_name, "test.ezby");
-    ui_state.export_import_file_name["test.ezby".len] = 0;
+    const ui_state = ui_state_init_blk: {
+        var ui = UiState{
+            .selected_entity = null,
+            .object_list = .{
+                .renaming_buffer = undefined,
+                .first_rename_draw = false,
+                .renaming_entity = false,
+            },
+            .object_inspector = .{
+                .name_buffer = undefined,
+                .selected_component_index = fake_components.len,
+            },
+            .export_file_modal_popen = false,
+            .import_file_modal_popen = false,
+            .export_import_file_name = undefined,
+            .add_component_modal = .{},
+        };
+        @memcpy(ui.export_import_file_name[0.."test.ezby".len], "test.ezby");
+        ui.export_import_file_name["test.ezby".len] = 0;
 
-    const camera_state = CameraState{
-        .movement_speed = @splat(20),
-        .movement_vector = zm.f32x4(0, 0, 0, 0),
-        .position = zm.f32x4(0, 0, -4, 0),
-        .turn_rate = 0.0005,
+        break :ui_state_init_blk ui;
     };
 
     // Color scheme
@@ -651,7 +645,9 @@ pub fn init(
     errdefer not_allowed.destroy();
 
     // initialize our ecs api
-    var storage = try Storage.init(allocator, .{ ui_state, render_context, camera_state, InputState{} });
+    var storage = try Storage.init(allocator);
+    errdefer storage.deinit();
+
     const scheduler = Scheduler.init();
 
     // register input callbacks for the editor
@@ -670,6 +666,15 @@ pub fn init(
         .not_allowed = not_allowed,
         .storage = storage,
         .scheduler = scheduler,
+        .render_context = render_context,
+        .ui_state = ui_state,
+        .camera_state = CameraState{
+            .movement_speed = @splat(20),
+            .movement_vector = zm.f32x4(0, 0, 0, 0),
+            .position = zm.f32x4(0, 0, -4, 0),
+            .turn_rate = 0.0005,
+        },
+        .input_state = InputState{},
         .icons = EditorIcons.init(render_context.imgui_pipeline.texture_indices),
         // assigned by setCameraInput
         .user_pointer = undefined,
@@ -707,8 +712,7 @@ pub fn importFromFile(self: *Editor, file_name: []const u8) !void {
     try ezby.deserialize(Storage, &self.storage, file_bytes);
 
     // restart the render context to make sure all required instances has and appropriate handle
-    var render_context = self.getRenderContext();
-    render_context.clearInstancesRetainingCapacity();
+    self.render_context.clearInstancesRetainingCapacity();
 
     const RenderInstanceHandleQuery = Storage.Query(struct {
         instance_handle: *InstanceHandle,
@@ -718,7 +722,7 @@ pub fn importFromFile(self: *Editor, file_name: []const u8) !void {
 
     // Synchronize the state of instance handles so that they have a valid handle according to the running render context
     while (instance_handle_iter.next()) |item| {
-        item.instance_handle.* = try render_context.getNewInstance(item.instance_handle.mesh_handle);
+        item.instance_handle.* = try self.render_context.getNewInstance(item.instance_handle.mesh_handle);
     }
 
     // propagate all the changes to the GPU
@@ -726,28 +730,22 @@ pub fn importFromFile(self: *Editor, file_name: []const u8) !void {
 }
 
 pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
-    var ui_state = self.getUiState();
-
-    if (ui_state.camera_control_active) {
-        // TODO: move to a "update" ecez system if we get similar logic
-        var camera_state = self.getCameraState();
-
-        const yaw_quat = zm.quatFromAxisAngle(zm.f32x4(0.0, 1.0, 0.0, 0.0), @floatCast(camera_state.yaw));
-        const pitch_quat = zm.quatFromAxisAngle(zm.f32x4(1.0, 0.0, 0.0, 0.0), @floatCast(camera_state.pitch));
+    if (self.ui_state.camera_control_active) {
+        const yaw_quat = zm.quatFromAxisAngle(zm.f32x4(0.0, 1.0, 0.0, 0.0), @floatCast(self.camera_state.yaw));
+        const pitch_quat = zm.quatFromAxisAngle(zm.f32x4(1.0, 0.0, 0.0, 0.0), @floatCast(self.camera_state.pitch));
         const orientation = zm.qmul(yaw_quat, pitch_quat);
 
-        const is_movement_vector_set = @reduce(.Min, camera_state.movement_vector) != 0 or @reduce(.Max, camera_state.movement_vector) != 0;
+        const is_movement_vector_set = @reduce(.Min, self.camera_state.movement_vector) != 0 or @reduce(.Max, self.camera_state.movement_vector) != 0;
         if (is_movement_vector_set) {
-            const movement_dir = zm.normalize3(zm.rotate(zm.conjugate(orientation), camera_state.movement_vector));
-            const actionable_movement = movement_dir * camera_state.movement_speed;
+            const movement_dir = zm.normalize3(zm.rotate(zm.conjugate(orientation), self.camera_state.movement_vector));
+            const actionable_movement = movement_dir * self.camera_state.movement_speed;
 
             const delta_time_vec = @as(zm.Vec, @splat(delta_time));
-            camera_state.position += actionable_movement * delta_time_vec;
+            self.camera_state.position += actionable_movement * delta_time_vec;
         }
 
         // apply update render camera with editor camera
-        var render_context = self.getRenderContext();
-        render_context.camera.view = RenderContext.Camera.calcView(orientation, camera_state.position);
+        self.render_context.camera.view = RenderContext.Camera.calcView(orientation, self.camera_state.position);
     } else {
         // If we are not controlling the camera, then we should update cursor if needed
         // NOTE: getting cursor must be done before calling zgui.newFrame
@@ -795,11 +793,11 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
             // file operations
             {
                 if (self.icons.button(.folder_file_load, "folder_load_button##00", "load scene from file", 18, 18, .{})) {
-                    ui_state.import_file_modal_popen = true;
+                    self.ui_state.import_file_modal_popen = true;
                 }
                 zgui.sameLine(.{});
                 if (self.icons.button(.folder_file_save, "folder_save_button##00", "save current scene to file", 18, 18, .{})) {
-                    ui_state.export_file_modal_popen = true;
+                    self.ui_state.export_file_modal_popen = true;
                 }
                 zgui.sameLine(.{});
                 if (self.icons.button(.@"3d_model_load", "model_load_button##00", "load new 3d model", 18, 18, .{})) {
@@ -813,14 +811,14 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
             // window toggles
             {
-                const object_list_icon = if (ui_state.object_list_active) Icons.object_list_on else Icons.object_list_off;
+                const object_list_icon = if (self.ui_state.object_list_active) Icons.object_list_on else Icons.object_list_off;
                 if (self.icons.button(object_list_icon, "object_list_button##00", "toggle object list window", 18, 18, .{})) {
-                    ui_state.object_list_active = !ui_state.object_list_active;
+                    self.ui_state.object_list_active = !self.ui_state.object_list_active;
                 }
                 zgui.sameLine(.{});
-                const object_inspector_icon = if (ui_state.object_inspector_active) Icons.object_inspector_on else Icons.object_inspector_off;
+                const object_inspector_icon = if (self.ui_state.object_inspector_active) Icons.object_inspector_on else Icons.object_inspector_off;
                 if (self.icons.button(object_inspector_icon, "object_inspector_button##00", "toggle object inspector window", 18, 18, .{})) {
-                    ui_state.object_inspector_active = !ui_state.object_inspector_active;
+                    self.ui_state.object_inspector_active = !self.ui_state.object_inspector_active;
                 }
                 zgui.sameLine(.{});
                 if (self.icons.button(.debug_log_off, "debug_log_button##00", "toggle debug log window", 18, 18, .{})) {
@@ -837,13 +835,13 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 if (self.icons.button(.new_object, "new_object_button##00", "spawn new entity in the scene", 18, 18, .{})) {
                     try self.createNewEntityMenu();
                 }
-                const camera_icon = if (ui_state.camera_control_active) Icons.camera_on else Icons.camera_off;
+                const camera_icon = if (self.ui_state.camera_control_active) Icons.camera_on else Icons.camera_off;
                 if (self.icons.button(camera_icon, "camera_control_button##00", "control camera with key and mouse (esc to exit)", 18, 18, .{})) {
-                    if (ui_state.camera_control_active == false) {
-                        ui_state.camera_control_active = true;
+                    if (self.ui_state.camera_control_active == false) {
+                        self.ui_state.camera_control_active = true;
                         setCameraInput(window);
                     } else {
-                        ui_state.camera_control_active = false;
+                        self.ui_state.camera_control_active = false;
                         setEditorInput(window);
                     }
                 }
@@ -852,9 +850,11 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
             break :blk1 zgui.getWindowHeight();
         };
 
+        const export_import_file_name_len = std.mem.indexOf(u8, &self.ui_state.export_import_file_name, &[_]u8{0}).?;
+
         // export scene to file modal
         {
-            if (ui_state.export_file_modal_popen) {
+            if (self.ui_state.export_file_modal_popen) {
                 zgui.openPopup("Export Modal", .{});
             }
 
@@ -863,7 +863,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
                 zgui.text("File name: ", .{});
                 if (zgui.inputText("##export_file_name", .{
-                    .buf = &ui_state.export_import_file_name,
+                    .buf = &self.ui_state.export_import_file_name,
                     .flags = .{},
                 })) {}
                 zgui.sameLine(.{});
@@ -871,15 +871,14 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
                 zgui.setItemDefaultFocus();
                 if (zgui.button("Export scene", .{})) {
-                    const file_name_len = std.mem.indexOf(u8, &ui_state.export_import_file_name, &[_]u8{0}).?;
                     // TODO: show error as a modal
-                    try self.exportToFile(ui_state.export_import_file_name[0..file_name_len]);
-                    ui_state.export_file_modal_popen = false;
+                    try self.exportToFile(self.ui_state.export_import_file_name[0..export_import_file_name_len]);
+                    self.ui_state.export_file_modal_popen = false;
                     zgui.closeCurrentPopup();
                 }
                 zgui.sameLine(.{});
                 if (zgui.button("Cancel##export_modal", .{ .w = 120, .h = 0 })) {
-                    ui_state.export_file_modal_popen = false;
+                    self.ui_state.export_file_modal_popen = false;
                     zgui.closeCurrentPopup();
                 }
             }
@@ -887,7 +886,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
         // import scene to file modal
         {
-            if (ui_state.import_file_modal_popen) {
+            if (self.ui_state.import_file_modal_popen) {
                 zgui.openPopup("Import Modal", .{});
             }
 
@@ -896,21 +895,20 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
                 zgui.text("File name: ", .{});
                 if (zgui.inputText("##import_file_name", .{
-                    .buf = &ui_state.export_import_file_name,
+                    .buf = &self.ui_state.export_import_file_name,
                     .flags = .{},
                 })) {}
 
                 zgui.setItemDefaultFocus();
                 if (zgui.button("Import scene", .{})) {
-                    const file_name_len = std.mem.indexOf(u8, &ui_state.export_import_file_name, &[_]u8{0}).?;
                     // TODO: show error as a modal
-                    try self.importFromFile(ui_state.export_import_file_name[0..file_name_len]);
-                    ui_state.import_file_modal_popen = false;
+                    try self.importFromFile(self.ui_state.export_import_file_name[0..export_import_file_name_len]);
+                    self.ui_state.import_file_modal_popen = false;
                     zgui.closeCurrentPopup();
                 }
                 zgui.sameLine(.{});
                 if (zgui.button("Cancel##import_modal", .{ .w = 120, .h = 0 })) {
-                    ui_state.import_file_modal_popen = false;
+                    self.ui_state.import_file_modal_popen = false;
                     zgui.closeCurrentPopup();
                 }
             }
@@ -918,7 +916,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
         // define Object List
         object_list_blk: {
-            if (ui_state.object_list_active == false) {
+            if (self.ui_state.object_list_active == false) {
                 break :object_list_blk;
             }
 
@@ -961,7 +959,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 while (list_item_iter.next()) |list_item| {
                     const selected_entity_id = blk: {
                         // selected entity is either our persistent user selction, or an invalid/unlikely InstanceHandle.
-                        if (ui_state.selected_entity) |selected_entity| {
+                        if (self.ui_state.selected_entity) |selected_entity| {
                             break :blk selected_entity.id;
                         } else {
                             const invalid_entity_id: ecez.EntityId = std.math.maxInt(ecez.EntityId);
@@ -970,30 +968,30 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                     };
 
                     // if user is renaming the selectable
-                    if (ui_state.object_list.renaming_entity and list_item.entity.id == selected_entity_id) {
+                    if (self.ui_state.object_list.renaming_entity and list_item.entity.id == selected_entity_id) {
 
                         // make sure the user can start typing as soon as they initiate renaming
-                        if (ui_state.object_list.first_rename_draw) {
+                        if (self.ui_state.object_list.first_rename_draw) {
                             zgui.setKeyboardFocusHere(0);
-                            ui_state.object_list.first_rename_draw = false;
+                            self.ui_state.object_list.first_rename_draw = false;
                         }
 
                         if (zgui.inputText("##object_list_rename", .{
-                            .buf = &ui_state.object_list.renaming_buffer,
+                            .buf = &self.ui_state.object_list.renaming_buffer,
                             .flags = .{ .enter_returns_true = true },
                         })) {
-                            const new_len = std.mem.indexOf(u8, &ui_state.object_list.renaming_buffer, &[_]u8{0}).?;
+                            const new_len = std.mem.indexOf(u8, &self.ui_state.object_list.renaming_buffer, &[_]u8{0}).?;
 
                             if (new_len > 0) {
-                                list_item.metadata.rename(ui_state.object_list.renaming_buffer[0..new_len]);
+                                list_item.metadata.rename(self.ui_state.object_list.renaming_buffer[0..new_len]);
 
                                 // set object name field to current selection
                                 const display_name = list_item.metadata.getDisplayName();
-                                std.mem.copy(u8, &ui_state.object_inspector.name_buffer, display_name);
-                                ui_state.object_inspector.name_buffer[display_name.len] = 0;
+                                @memcpy(self.ui_state.object_inspector.name_buffer[0..display_name.len], display_name);
+                                self.ui_state.object_inspector.name_buffer[display_name.len] = 0;
 
-                                ui_state.object_list.renaming_entity = false;
-                                @memset(&ui_state.object_list.renaming_buffer, 0);
+                                self.ui_state.object_list.renaming_entity = false;
+                                @memset(&self.ui_state.object_list.renaming_buffer, 0);
                             }
                         }
                     } else {
@@ -1003,15 +1001,15 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                         })) {
                             // set object name field to current selection
                             const display_name = list_item.metadata.getDisplayName();
-                            std.mem.copy(u8, &ui_state.object_inspector.name_buffer, display_name);
+                            @memcpy(self.ui_state.object_inspector.name_buffer[0..display_name.len], display_name);
 
                             // Set index to a non existing index. This makes no object selected
-                            ui_state.object_inspector.selected_component_index = fake_components.len;
-                            ui_state.object_inspector.name_buffer[display_name.len] = 0;
+                            self.ui_state.object_inspector.selected_component_index = fake_components.len;
+                            self.ui_state.object_inspector.name_buffer[display_name.len] = 0;
 
-                            ui_state.object_list.first_rename_draw = true;
-                            ui_state.object_list.renaming_entity = zgui.isItemHovered(.{}) and zgui.isMouseDoubleClicked(zgui.MouseButton.left);
-                            ui_state.selected_entity = list_item.entity;
+                            self.ui_state.object_list.first_rename_draw = true;
+                            self.ui_state.object_list.renaming_entity = zgui.isItemHovered(.{}) and zgui.isMouseDoubleClicked(zgui.MouseButton.left);
+                            self.ui_state.selected_entity = list_item.entity;
                         }
                     }
                 }
@@ -1020,7 +1018,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
         // define Object Inspector
         object_inspector_blk: {
-            if (ui_state.object_inspector_active == false) {
+            if (self.ui_state.object_inspector_active == false) {
                 break :object_inspector_blk;
             }
 
@@ -1040,18 +1038,18 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
             }
             defer zgui.end();
 
-            if (ui_state.selected_entity) |selected_entity| {
+            if (self.ui_state.selected_entity) |selected_entity| {
                 zgui.text("Name: ", .{});
                 zgui.sameLine(.{});
                 if (zgui.inputText("##object_inspector_rename", .{
-                    .buf = &ui_state.object_inspector.name_buffer,
+                    .buf = &self.ui_state.object_inspector.name_buffer,
                     .flags = .{ .enter_returns_true = true },
                 })) {
-                    const new_len = std.mem.indexOf(u8, &ui_state.object_inspector.name_buffer, &[_]u8{0}).?;
+                    const new_len = std.mem.indexOf(u8, &self.ui_state.object_inspector.name_buffer, &[_]u8{0}).?;
 
                     if (new_len > 0) {
                         var metadata = try self.storage.getComponent(selected_entity, ObjectMetadata);
-                        metadata.rename(ui_state.object_inspector.name_buffer[0..new_len]);
+                        metadata.rename(self.ui_state.object_inspector.name_buffer[0..new_len]);
                         try self.storage.setComponent(selected_entity, metadata);
                     }
                 }
@@ -1064,8 +1062,8 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
                     inline for (fake_components, 0..) |Component, comp_index| {
                         if (self.storage.hasComponent(selected_entity, Component)) {
-                            if (zgui.selectable(@typeName(Component), .{ .selected = comp_index == ui_state.object_inspector.selected_component_index })) {
-                                ui_state.object_inspector.selected_component_index = comp_index;
+                            if (zgui.selectable(@typeName(Component), .{ .selected = comp_index == self.ui_state.object_inspector.selected_component_index })) {
+                                self.ui_state.object_inspector.selected_component_index = comp_index;
                             }
                         }
                     }
@@ -1074,7 +1072,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 // add component UI
                 {
                     if (zgui.button("Add", .{})) {
-                        ui_state.add_component_modal.is_active = true;
+                        self.ui_state.add_component_modal.is_active = true;
                         zgui.openPopup("Add component", .{});
                     }
 
@@ -1098,16 +1096,16 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
                             if (self.storage.hasComponent(selected_entity, Component) == false) {
                                 // if the component index is not set, then we set it to current component index
-                                if (ui_state.add_component_modal.selected_component_index == fake_components.len) {
-                                    ui_state.add_component_modal.selected_component_index = comp_index;
+                                if (self.ui_state.add_component_modal.selected_component_index == fake_components.len) {
+                                    self.ui_state.add_component_modal.selected_component_index = comp_index;
                                 }
 
                                 if (zgui.selectable(@typeName(Component), .{
-                                    .selected = comp_index == ui_state.add_component_modal.selected_component_index,
+                                    .selected = comp_index == self.ui_state.add_component_modal.selected_component_index,
                                     .flags = .{ .dont_close_popups = true },
                                 })) {
-                                    ui_state.add_component_modal.selected_component_index = comp_index;
-                                    @memset(&ui_state.add_component_modal.component_bytes, 0);
+                                    self.ui_state.add_component_modal.selected_component_index = comp_index;
+                                    @memset(&self.ui_state.add_component_modal.component_bytes, 0);
                                 }
                             }
                         }
@@ -1120,11 +1118,11 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                             inline for (fake_components, 0..) |Component, comp_index| {
                                 if (Component == ObjectMetadata) continue;
 
-                                if (comp_index == ui_state.add_component_modal.selected_component_index) {
+                                if (comp_index == self.ui_state.add_component_modal.selected_component_index) {
                                     zgui.text("{s}:", .{@typeName(Component)});
 
                                     const component_ptr: *Component = blk: {
-                                        const ptr = std.mem.bytesAsValue(Component, ui_state.add_component_modal.component_bytes[0..@sizeOf(Component)]);
+                                        const ptr = std.mem.bytesAsValue(Component, self.ui_state.add_component_modal.component_bytes[0..@sizeOf(Component)]);
                                         break :blk @alignCast(ptr);
                                     };
 
@@ -1146,10 +1144,10 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                             inline for (fake_components, 0..) |Component, comp_index| {
                                 if (Component == ObjectMetadata) continue;
 
-                                if (comp_index == ui_state.add_component_modal.selected_component_index) {
+                                if (comp_index == self.ui_state.add_component_modal.selected_component_index) {
                                     const component = @as(
                                         *Component,
-                                        @ptrCast(@alignCast(&ui_state.add_component_modal.component_bytes)),
+                                        @ptrCast(@alignCast(&self.ui_state.add_component_modal.component_bytes)),
                                     );
 
                                     if (specializedAddHandle(Component)) |add_handle| {
@@ -1162,8 +1160,8 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                                 }
                             }
 
-                            ui_state.add_component_modal.selected_component_index = fake_components.len;
-                            ui_state.add_component_modal.is_active = false;
+                            self.ui_state.add_component_modal.selected_component_index = fake_components.len;
+                            self.ui_state.add_component_modal.is_active = false;
                             zgui.closeCurrentPopup();
                         }
                         zgui.sameLine(.{});
@@ -1172,8 +1170,8 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                         zgui.setItemDefaultFocus();
                         zgui.sameLine(.{});
                         if (zgui.button("Cancel", .{ .w = 120, .h = 0 })) {
-                            ui_state.add_component_modal.selected_component_index = fake_components.len;
-                            ui_state.add_component_modal.is_active = false;
+                            self.ui_state.add_component_modal.selected_component_index = fake_components.len;
+                            self.ui_state.add_component_modal.is_active = false;
                             zgui.closeCurrentPopup();
                         }
                     }
@@ -1181,8 +1179,8 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 zgui.sameLine(.{});
 
                 {
-                    const object_metadata_selected = object_metadata_index == ui_state.object_inspector.selected_component_index;
-                    const nothing_selected = ui_state.object_inspector.selected_component_index == fake_components.len;
+                    const object_metadata_selected = object_metadata_index == self.ui_state.object_inspector.selected_component_index;
+                    const nothing_selected = self.ui_state.object_inspector.selected_component_index == fake_components.len;
                     zgui.beginDisabled(.{
                         .disabled = object_metadata_selected or nothing_selected,
                     });
@@ -1191,7 +1189,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                     if (zgui.button("Remove", .{})) {
                         inline for (fake_components, 0..) |Component, comp_index| {
                             // deleting the metadata of an entity is illegal
-                            if (Component != ObjectMetadata and comp_index == ui_state.object_inspector.selected_component_index) {
+                            if (Component != ObjectMetadata and comp_index == self.ui_state.object_inspector.selected_component_index) {
                                 if (specializedRemoveHandle(Component)) |remove_handle| {
                                     try remove_handle.remove(self);
                                 } else {
@@ -1204,7 +1202,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
                                 // assign selection an invalid index
                                 // TODO: Selection should be persistent when removing current component
-                                ui_state.object_inspector.selected_component_index = fake_components.len;
+                                self.ui_state.object_inspector.selected_component_index = fake_components.len;
                             }
                         }
                     }
@@ -1244,8 +1242,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
         }
     }
 
-    var render_context = self.getRenderContext();
-    try render_context.drawFrame(window, delta_time);
+    try self.render_context.drawFrame(window, delta_time);
 }
 
 pub fn deinit(self: *Editor) void {
@@ -1261,17 +1258,16 @@ pub fn deinit(self: *Editor) void {
     self.resize_nwse.destroy();
     self.not_allowed.destroy();
 
-    self.getRenderContext().deinit(self.allocator);
+    self.render_context.deinit(self.allocator);
     self.storage.deinit();
 }
 
 pub fn handleFramebufferResize(self: *Editor, window: glfw.Window) void {
-    var render_context = self.getRenderContext();
-    render_context.handleFramebufferResize(window, false);
+    self.render_context.handleFramebufferResize(window, false);
 
     self.user_pointer = UserPointer{
         .ptr = self,
-        .next = @ptrCast(&render_context.user_pointer),
+        .next = @ptrCast(&self.render_context.user_pointer),
     };
 
     window.setUserPointer(&self.user_pointer);
@@ -1334,10 +1330,9 @@ pub fn setEditorInput(window: glfw.Window) void {
                 break :search_user_ptr_blk user_ptr.ptr;
             };
 
-            var input_state: *InputState = editor_ptr.getInputState();
             defer {
-                input_state.previous_cursor_xpos = xpos;
-                input_state.previous_cursor_ypos = ypos;
+                editor_ptr.input_state.previous_cursor_xpos = xpos;
+                editor_ptr.input_state.previous_cursor_ypos = ypos;
             }
 
             zgui.io.addMousePositionEvent(@as(f32, @floatCast(xpos)), @as(f32, @floatCast(ypos)));
@@ -1383,17 +1378,15 @@ pub fn setCameraInput(window: glfw.Window) void {
                 .repeat => return,
             };
 
-            var camera_state = editor_ptr.getCameraState();
             switch (input_key) {
-                .w => camera_state.movement_vector[2] += axist_value,
-                .a => camera_state.movement_vector[0] += axist_value,
-                .s => camera_state.movement_vector[2] -= axist_value,
-                .d => camera_state.movement_vector[0] -= axist_value,
+                .w => editor_ptr.camera_state.movement_vector[2] += axist_value,
+                .a => editor_ptr.camera_state.movement_vector[0] += axist_value,
+                .s => editor_ptr.camera_state.movement_vector[2] -= axist_value,
+                .d => editor_ptr.camera_state.movement_vector[0] -= axist_value,
                 // exit camera mode
                 .escape => {
-                    camera_state.movement_vector = @splat(0);
-                    var ui_state = editor_ptr.getUiState();
-                    ui_state.camera_control_active = false;
+                    editor_ptr.camera_state.movement_vector = @splat(0);
+                    editor_ptr.ui_state.camera_control_active = false;
                     setEditorInput(_window);
                 },
                 else => {},
@@ -1423,18 +1416,16 @@ pub fn setCameraInput(window: glfw.Window) void {
                 break :search_user_ptr_blk user_ptr.ptr;
             };
 
-            var input_state: *InputState = editor_ptr.getInputState();
             defer {
-                input_state.previous_cursor_xpos = xpos;
-                input_state.previous_cursor_ypos = ypos;
+                editor_ptr.input_state.previous_cursor_xpos = xpos;
+                editor_ptr.input_state.previous_cursor_ypos = ypos;
             }
 
-            const x_delta = xpos - input_state.previous_cursor_xpos;
-            const y_delta = ypos - input_state.previous_cursor_ypos;
+            const x_delta = xpos - editor_ptr.input_state.previous_cursor_xpos;
+            const y_delta = ypos - editor_ptr.input_state.previous_cursor_ypos;
 
-            var camera_state: *CameraState = editor_ptr.getCameraState();
-            camera_state.yaw += x_delta * camera_state.turn_rate;
-            camera_state.pitch -= y_delta * camera_state.turn_rate;
+            editor_ptr.camera_state.yaw += x_delta * editor_ptr.camera_state.turn_rate;
+            editor_ptr.camera_state.pitch -= y_delta * editor_ptr.camera_state.turn_rate;
         }
 
         pub fn scroll(_window: glfw.Window, xoffset: f64, yoffset: f64) void {
@@ -1455,12 +1446,12 @@ pub fn setCameraInput(window: glfw.Window) void {
 }
 
 pub fn getMeshHandleFromName(self: *Editor, name: []const u8) ?MeshHandle {
-    return self.getRenderContext().getMeshHandleFromName(name);
+    return self.render_context.getMeshHandleFromName(name);
 }
 
 pub fn newSceneEntity(self: *Editor, name: []const u8) !ecez.Entity {
     const entity = try self.storage.createEntity(.{});
-    var metadata = ObjectMetadata.init(name, entity);
+    const metadata = ObjectMetadata.init(name, entity);
     try self.storage.setComponent(entity, metadata);
 
     return entity;
@@ -1472,8 +1463,7 @@ pub fn assignEntityMeshInstance(self: *Editor, entity: ecez.Entity, mesh_handle:
         return error.EntityAlreadyHasInstance;
     }
 
-    var render_context = self.getRenderContext();
-    const new_instance = render_context.getNewInstance(mesh_handle) catch |err| {
+    const new_instance = self.render_context.getNewInstance(mesh_handle) catch |err| {
         // if this fails we will end in an inconsistent state!
         std.debug.panic("attemped to get new instance {d} failed with error {any}", .{ mesh_handle, err });
     };
@@ -1488,8 +1478,7 @@ pub fn renameEntity(self: *Editor, entity: ecez.Entity, name: []const u8) !void 
 }
 
 pub fn signalRenderUpdate(self: *Editor) void {
-    var render_context = self.getRenderContext();
-    render_context.signalUpdate();
+    self.render_context.signalUpdate();
 }
 
 /// Wether createNewVisbleObject should update all transforms and submit all scene object
@@ -1533,7 +1522,7 @@ pub fn createNewVisbleObject(
 }
 
 fn forceFlush(self: *Editor) !void {
-    self.scheduler.dispatchEvent(&self.storage, .transform_update, .{}, .{});
+    self.scheduler.dispatchEvent(&self.storage, .transform_update, &self.render_context, .{});
     self.scheduler.waitEvent(.transform_update);
     self.signalRenderUpdate();
 }
@@ -1549,7 +1538,7 @@ inline fn createNewEntityMenu(self: *Editor) !void {
             _ = try self.newSceneEntity("empty entity");
         }
 
-        var mesh_name_iter = self.getRenderContext().mesh_name_handle_map.keyIterator();
+        var mesh_name_iter = self.render_context.mesh_name_handle_map.keyIterator();
         while (mesh_name_iter.next()) |mesh_name_entry| {
             const c_name: *[:0]const u8 = @ptrCast(mesh_name_entry);
             if (zgui.menuItem(c_name.*, .{})) {
@@ -1558,22 +1547,6 @@ inline fn createNewEntityMenu(self: *Editor) !void {
             }
         }
     }
-}
-
-inline fn getRenderContext(self: *Editor) *RenderContext {
-    return @ptrCast(self.storage.getSharedStatePtrWithSharedStateType(*ecez.SharedState(RenderContext)));
-}
-
-inline fn getUiState(self: *Editor) *UiState {
-    return @ptrCast(self.storage.getSharedStatePtrWithSharedStateType(*ecez.SharedState(UiState)));
-}
-
-inline fn getCameraState(self: *Editor) *CameraState {
-    return @ptrCast(self.storage.getSharedStatePtrWithSharedStateType(*ecez.SharedState(CameraState)));
-}
-
-inline fn getInputState(self: *Editor) *InputState {
-    return @ptrCast(self.storage.getSharedStatePtrWithSharedStateType(*ecez.SharedState(InputState)));
 }
 
 const MarkerType = enum {
