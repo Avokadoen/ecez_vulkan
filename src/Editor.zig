@@ -39,15 +39,14 @@ pub const Rotation = struct {
 pub const Scale = struct {
     vec: zm.Vec,
 };
-// TODO: rename "EntityMetadata"
-pub const ObjectMetadata = struct {
+pub const EntityMetadata = struct {
     const buffer_len = 127;
     const hash_len = "##".len + @sizeOf(ecez.Entity);
 
     id_len: u8,
     id_buffer: [buffer_len]u8,
 
-    fn init(name: []const u8, entity: ecez.Entity) ObjectMetadata {
+    fn init(name: []const u8, entity: ecez.Entity) EntityMetadata {
         const id_len = name.len + hash_len;
         std.debug.assert(id_len < buffer_len);
 
@@ -58,13 +57,13 @@ pub const ObjectMetadata = struct {
         @memcpy(id_buffer[name.len .. name.len + hash_fluff.len], hash_fluff);
         id_buffer[id_len] = 0;
 
-        return ObjectMetadata{
+        return EntityMetadata{
             .id_len = @intCast(id_len),
             .id_buffer = id_buffer,
         };
     }
 
-    fn rename(self: *ObjectMetadata, name: []const u8) void {
+    fn rename(self: *EntityMetadata, name: []const u8) void {
         const id_len = name.len + hash_len;
         std.debug.assert(id_len < buffer_len);
 
@@ -81,18 +80,18 @@ pub const ObjectMetadata = struct {
         self.id_len = @intCast(id_len);
     }
 
-    pub inline fn getId(self: ObjectMetadata) [:0]const u8 {
+    pub inline fn getId(self: EntityMetadata) [:0]const u8 {
         return self.id_buffer[0..self.id_len :0];
     }
 
-    pub inline fn getDisplayName(self: ObjectMetadata) []const u8 {
+    pub inline fn getDisplayName(self: EntityMetadata) []const u8 {
         // name - "##xyzw"
         return self.id_buffer[0 .. self.id_len - hash_len];
     }
 };
 
 const fake_components = [_]type{
-    ObjectMetadata,
+    EntityMetadata,
     Position,
     Rotation,
     Scale,
@@ -101,7 +100,7 @@ const fake_components = [_]type{
 
 const object_metadata_index = blk: {
     for (fake_components, 0..) |Component, component_index| {
-        if (Component == ObjectMetadata) {
+        if (Component == EntityMetadata) {
             break :blk component_index;
         }
     }
@@ -110,7 +109,7 @@ const object_metadata_index = blk: {
 const biggest_component_size = blk: {
     var size = 0;
     for (fake_components) |Component| {
-        if (Component == ObjectMetadata) continue;
+        if (Component == EntityMetadata) continue;
 
         if (@sizeOf(Component) > size) {
             size = @sizeOf(Component);
@@ -950,7 +949,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 const ObjectListQuery = Storage.Query(
                     struct {
                         entity: ecez.Entity,
-                        metadata: *ObjectMetadata,
+                        metadata: *EntityMetadata,
                     },
                     .{},
                 );
@@ -1048,7 +1047,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                     const new_len = std.mem.indexOf(u8, &self.ui_state.object_inspector.name_buffer, &[_]u8{0}).?;
 
                     if (new_len > 0) {
-                        var metadata = try self.storage.getComponent(selected_entity, ObjectMetadata);
+                        var metadata = try self.storage.getComponent(selected_entity, EntityMetadata);
                         metadata.rename(self.ui_state.object_inspector.name_buffer[0..new_len]);
                         try self.storage.setComponent(selected_entity, metadata);
                     }
@@ -1091,8 +1090,8 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
                         // List of components that you can add
                         inline for (fake_components, 0..) |Component, comp_index| {
-                            // you can never add a ObjectMetadata
-                            if (Component == ObjectMetadata) continue;
+                            // you can never add a EntityMetadata
+                            if (Component == EntityMetadata) continue;
 
                             if (self.storage.hasComponent(selected_entity, Component) == false) {
                                 // if the component index is not set, then we set it to current component index
@@ -1116,7 +1115,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
                             // List of components that you can add
                             inline for (fake_components, 0..) |Component, comp_index| {
-                                if (Component == ObjectMetadata) continue;
+                                if (Component == EntityMetadata) continue;
 
                                 if (comp_index == self.ui_state.add_component_modal.selected_component_index) {
                                     zgui.text("{s}:", .{@typeName(Component)});
@@ -1142,7 +1141,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                         if (zgui.button("Add component", .{ .w = 120, .h = 0 })) {
                             // Add component to entity
                             inline for (fake_components, 0..) |Component, comp_index| {
-                                if (Component == ObjectMetadata) continue;
+                                if (Component == EntityMetadata) continue;
 
                                 if (comp_index == self.ui_state.add_component_modal.selected_component_index) {
                                     const component = @as(
@@ -1189,7 +1188,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                     if (zgui.button("Remove", .{})) {
                         inline for (fake_components, 0..) |Component, comp_index| {
                             // deleting the metadata of an entity is illegal
-                            if (Component != ObjectMetadata and comp_index == self.ui_state.object_inspector.selected_component_index) {
+                            if (Component != EntityMetadata and comp_index == self.ui_state.object_inspector.selected_component_index) {
                                 if (specializedRemoveHandle(Component)) |remove_handle| {
                                     try remove_handle.remove(self);
                                 } else {
@@ -1211,7 +1210,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 zgui.separator();
                 zgui.text("Component widgets:", .{});
                 comp_iter: inline for (fake_components) |Component| {
-                    if (Component == ObjectMetadata) {
+                    if (Component == EntityMetadata) {
                         continue :comp_iter;
                     }
 
@@ -1451,7 +1450,7 @@ pub fn getMeshHandleFromName(self: *Editor, name: []const u8) ?MeshHandle {
 
 pub fn newSceneEntity(self: *Editor, name: []const u8) !ecez.Entity {
     const entity = try self.storage.createEntity(.{});
-    const metadata = ObjectMetadata.init(name, entity);
+    const metadata = EntityMetadata.init(name, entity);
     try self.storage.setComponent(entity, metadata);
 
     return entity;
@@ -1472,7 +1471,7 @@ pub fn assignEntityMeshInstance(self: *Editor, entity: ecez.Entity, mesh_handle:
 }
 
 pub fn renameEntity(self: *Editor, entity: ecez.Entity, name: []const u8) !void {
-    var metadata = try self.storage.getComponent(entity, ObjectMetadata);
+    var metadata = try self.storage.getComponent(entity, EntityMetadata);
     metadata.rename(name);
     try self.storage.setComponent(entity, metadata);
 }

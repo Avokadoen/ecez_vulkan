@@ -1787,6 +1787,7 @@ pub fn destroyInstanceHandle(self: *RenderContext, instance_handle: InstanceHand
     }
 
     // update the draw command to draw one less object
+    std.debug.assert(self.indirect_commands.items[instance_handle.mesh_handle].instance_count >= 1);
     self.indirect_commands.items[instance_handle.mesh_handle].instance_count -= 1;
 }
 
