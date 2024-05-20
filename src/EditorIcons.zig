@@ -25,6 +25,7 @@ pub const Icon = enum(u32) {
     debug_play,
 };
 
+pub const icon_size = 18;
 texture_indices: *ImguiPipeline.TextureIndices,
 
 pub fn init(texture_indices: *ImguiPipeline.TextureIndices) EditorIcons {
@@ -47,7 +48,6 @@ pub fn button(
     height: f32,
     config: ButtonConfig,
 ) bool {
-    const icon_size = 18;
     const icon_stride = ImguiPipeline.atlas_dimension / icon_size;
 
     const icon_value: f32 = @floatFromInt(@intFromEnum(icon));

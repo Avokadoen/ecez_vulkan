@@ -853,15 +853,15 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
             // file operations
             {
-                if (self.icons.button(.folder_file_load, "folder_load_button##00", "load scene from file", 18, 18, .{})) {
+                if (self.icons.button(.folder_file_load, "folder_load_button##00", "load scene from file", EditorIcons.icon_size, EditorIcons.icon_size, .{})) {
                     self.ui_state.import_editor_file_modal_popen = true;
                 }
                 zgui.sameLine(.{});
-                if (self.icons.button(.folder_file_save, "folder_save_button##00", "save current scene to file", 18, 18, .{})) {
+                if (self.icons.button(.folder_file_save, "folder_save_button##00", "save current scene to file", EditorIcons.icon_size, EditorIcons.icon_size, .{})) {
                     self.ui_state.export_editor_file_modal_popen = true;
                 }
                 zgui.sameLine(.{});
-                if (self.icons.button(.@"3d_model_load", "model_load_button##00", "load new 3d model", 18, 18, .{})) {
+                if (self.icons.button(.@"3d_model_load", "model_load_button##00", "load new 3d model", EditorIcons.icon_size, EditorIcons.icon_size, .{})) {
                     std.debug.print("load new model", .{}); // TODO: load new model
                 }
                 zgui.sameLine(.{});
@@ -873,16 +873,16 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
             // window toggles
             {
                 const object_list_icon = if (self.ui_state.object_list_active) Icons.object_list_on else Icons.object_list_off;
-                if (self.icons.button(object_list_icon, "object_list_button##00", "toggle object list window", 18, 18, .{})) {
+                if (self.icons.button(object_list_icon, "object_list_button##00", "toggle object list window", EditorIcons.icon_size, EditorIcons.icon_size, .{})) {
                     self.ui_state.object_list_active = !self.ui_state.object_list_active;
                 }
                 zgui.sameLine(.{});
                 const object_inspector_icon = if (self.ui_state.object_inspector_active) Icons.object_inspector_on else Icons.object_inspector_off;
-                if (self.icons.button(object_inspector_icon, "object_inspector_button##00", "toggle object inspector window", 18, 18, .{})) {
+                if (self.icons.button(object_inspector_icon, "object_inspector_button##00", "toggle object inspector window", EditorIcons.icon_size, EditorIcons.icon_size, .{})) {
                     self.ui_state.object_inspector_active = !self.ui_state.object_inspector_active;
                 }
                 zgui.sameLine(.{});
-                if (self.icons.button(.debug_log_off, "debug_log_button##00", "toggle debug log window", 18, 18, .{})) {
+                if (self.icons.button(.debug_log_off, "debug_log_button##00", "toggle debug log window", EditorIcons.icon_size, EditorIcons.icon_size, .{})) {
                     std.debug.print("debug log", .{}); // TODO: toggle debug log window
                 }
                 zgui.sameLine(.{});
@@ -893,11 +893,11 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
             // scene related
             {
-                if (self.icons.button(.new_object, "new_object_button##00", "spawn new entity in the scene", 18, 18, .{})) {
+                if (self.icons.button(.new_object, "new_object_button##00", "spawn new entity in the scene", EditorIcons.icon_size, EditorIcons.icon_size, .{})) {
                     try self.createNewEntityMenu();
                 }
                 const camera_icon = if (self.ui_state.camera_control_active) Icons.camera_on else Icons.camera_off;
-                if (self.icons.button(camera_icon, "camera_control_button##00", "control camera with key and mouse (esc to exit)", 18, 18, .{})) {
+                if (self.icons.button(camera_icon, "camera_control_button##00", "control camera with key and mouse (esc to exit)", EditorIcons.icon_size, EditorIcons.icon_size, .{})) {
                     if (self.ui_state.camera_control_active == false) {
                         self.ui_state.camera_control_active = true;
                         setCameraInput(window);
@@ -917,16 +917,16 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 const available_x = (zgui.getContentRegionAvail()[0] * 0.5) + zgui.getCursorPosX();
                 zgui.setCursorPos([2]f32{ available_x - game_button_size, 0 });
 
-                if (self.icons.button(.folder_file_save, "game_scene_save##00", "export scene as a game scene", 18, 18, .{})) {
+                if (self.icons.button(.folder_file_save, "game_scene_save##00", "export scene as a game scene", EditorIcons.icon_size, EditorIcons.icon_size, .{})) {
                     self.ui_state.export_game_file_modal_popen = true;
                     self.ui_state.setExportImportFileName("scene.game.ezby");
                 }
 
-                if (self.icons.button(.play, "play_game_scene##00", "builds release game exe, game scene and runs", 18, 18, .{})) {
+                if (self.icons.button(.play, "play_game_scene##00", "builds release game exe, game scene and runs", EditorIcons.icon_size, EditorIcons.icon_size, .{})) {
                     std.debug.print("unimplemented", .{});
                 }
 
-                if (self.icons.button(.debug_play, "debug_play_game_scene##00", "builds debug game exe, game scene and runs", 18, 18, .{})) {
+                if (self.icons.button(.debug_play, "debug_play_game_scene##00", "builds debug game exe, game scene and runs", EditorIcons.icon_size, EditorIcons.icon_size, .{})) {
                     std.debug.print("unimplemented", .{});
                 }
             }
