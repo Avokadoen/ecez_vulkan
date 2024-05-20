@@ -90,16 +90,35 @@ pub const EntityMetadata = struct {
     }
 };
 
-const fake_components = [_]type{
+const editor_component = [_]type{
     EntityMetadata,
+};
+
+const game_components = [_]type{
     Position,
     Rotation,
     Scale,
     InstanceHandle,
 };
 
+const all_components = editor_component ++ game_components;
+
+fn ComponentTypeArrayToTupleType(comptime components: []const type) type {
+    const Tuple = std.meta.Tuple(&[_]type{type} ** components.len);
+    return Tuple;
+}
+
+fn componentTypeArrayToTuple(comptime components: []const type) ComponentTypeArrayToTupleType(components) {
+    const Tuple = ComponentTypeArrayToTupleType(components);
+    comptime var tuple: Tuple = undefined;
+    inline for (components, 0..) |Component, comp_index| {
+        tuple[comp_index] = Component;
+    }
+    return tuple;
+}
+
 const object_metadata_index = blk: {
-    for (fake_components, 0..) |Component, component_index| {
+    for (all_components, 0..) |Component, component_index| {
         if (Component == EntityMetadata) {
             break :blk component_index;
         }
@@ -108,9 +127,7 @@ const object_metadata_index = blk: {
 
 const biggest_component_size = blk: {
     var size = 0;
-    for (fake_components) |Component| {
-        if (Component == EntityMetadata) continue;
-
+    for (game_components) |Component| {
         if (@sizeOf(Component) > size) {
             size = @sizeOf(Component);
         }
@@ -490,7 +507,7 @@ const UiState = struct {
     };
 
     const AddComponentModal = struct {
-        selected_component_index: usize = fake_components.len,
+        selected_component_index: usize = all_components.len,
         component_bytes: [biggest_component_size]u8 = undefined,
         is_active: bool = false,
     };
@@ -498,8 +515,9 @@ const UiState = struct {
     // common state
     selected_entity: ?ecez.Entity,
 
-    export_file_modal_popen: bool,
-    import_file_modal_popen: bool,
+    export_editor_file_modal_popen: bool,
+    import_editor_file_modal_popen: bool,
+    export_game_file_modal_popen: bool,
     export_import_file_name: [127:0]u8,
 
     object_list_active: bool = true,
@@ -511,6 +529,11 @@ const UiState = struct {
     add_component_modal: AddComponentModal,
 
     camera_control_active: bool = false,
+
+    pub fn setExportImportFileName(ui: *UiState, file_name: []const u8) void {
+        @memcpy(ui.export_import_file_name[0..file_name.len], file_name);
+        ui.export_import_file_name[file_name.len] = 0;
+    }
 };
 
 const InputState = struct {
@@ -529,17 +552,11 @@ const CameraState = struct {
     // roll always 0
 };
 
-const Storage = ecez.CreateStorage(.{
-    // TODO: generate this!
-    fake_components[0],
-    fake_components[1],
-    fake_components[2],
-    fake_components[3],
-    fake_components[4],
-});
+const GameStorage = ecez.CreateStorage(componentTypeArrayToTuple(&game_components));
+const EditorStorage = ecez.CreateStorage(componentTypeArrayToTuple(&all_components));
 
 // TODO: convert on_import to simple queries inline
-const Scheduler = ecez.CreateScheduler(Storage, .{
+const Scheduler = ecez.CreateScheduler(EditorStorage, .{
     // event to apply all transformation and update render buffers as needed
     ecez.Event("transform_update", .{
         TransformResetSystem,
@@ -566,7 +583,7 @@ resize_nesw: glfw.Cursor,
 resize_nwse: glfw.Cursor,
 not_allowed: glfw.Cursor,
 
-storage: Storage,
+storage: EditorStorage,
 scheduler: Scheduler,
 
 render_context: RenderContext,
@@ -602,15 +619,16 @@ pub fn init(
             },
             .object_inspector = .{
                 .name_buffer = undefined,
-                .selected_component_index = fake_components.len,
+                .selected_component_index = all_components.len,
             },
-            .export_file_modal_popen = false,
-            .import_file_modal_popen = false,
+            .export_editor_file_modal_popen = false,
+            .import_editor_file_modal_popen = false,
+            .export_game_file_modal_popen = false,
             .export_import_file_name = undefined,
             .add_component_modal = .{},
         };
-        @memcpy(ui.export_import_file_name[0.."test.ezby".len], "test.ezby");
-        ui.export_import_file_name["test.ezby".len] = 0;
+
+        ui.setExportImportFileName("test.ezby");
 
         break :ui_state_init_blk ui;
     };
@@ -644,7 +662,7 @@ pub fn init(
     errdefer not_allowed.destroy();
 
     // initialize our ecs api
-    var storage = try Storage.init(allocator);
+    var storage = try EditorStorage.init(allocator);
     errdefer storage.deinit();
 
     const scheduler = Scheduler.init();
@@ -680,8 +698,8 @@ pub fn init(
     };
 }
 
-pub fn exportToFile(self: *Editor, file_name: []const u8) !void {
-    const ezby_stream = try ezby.serialize(Storage, self.allocator, self.storage, .{});
+pub fn exportEditorSceneToFile(self: *Editor, file_name: []const u8) !void {
+    const ezby_stream = try ezby.serialize(EditorStorage, self.allocator, self.storage, .{});
     defer self.allocator.free(ezby_stream);
 
     // TODO: this is an horrible idea since we don't know if the write will be sucessfull
@@ -694,7 +712,47 @@ pub fn exportToFile(self: *Editor, file_name: []const u8) !void {
     try std.fs.cwd().writeFile(file_name, ezby_stream);
 }
 
-pub fn importFromFile(self: *Editor, file_name: []const u8) !void {
+pub fn exportGameSceneToFile(self: *Editor, file_name: []const u8) !void {
+    // Serialize current state
+    const ezby_stream = try ezby.serialize(EditorStorage, self.allocator, self.storage, .{});
+    // On function exit, restore previous state
+    defer {
+        // TODO: make sure this can't fail, or progress can be lost
+        // Alternative: serialzie, deserialzie a temp local storage
+        self.deserializeAndSyncState(ezby_stream) catch |err| std.debug.panic("failed to restore scene stated: {s}", .{@errorName(err)});
+        self.allocator.free(ezby_stream);
+    }
+
+    // Query all entities with EnttiyMetadat (should be all entities)
+    var enity_metadata_query = EditorStorage.Query(
+        struct {
+            entity: ecez.Entity,
+            metadata: EntityMetadata,
+        },
+        .{},
+    ).submit(&self.storage);
+    while (enity_metadata_query.next()) |result| {
+        // Queue removal of EntityMetadata
+        try self.storage.queueRemoveComponent(result.entity, EntityMetadata);
+    }
+
+    // Submit edit queue
+    try self.storage.flushStorageQueue();
+
+    const game_stream = try ezby.serialize(EditorStorage, self.allocator, self.storage, .{});
+    defer self.allocator.free(game_stream);
+
+    // TODO: this is an horrible idea since we don't know if the write will be sucessfull
+    // delete file if it exist already
+    std.fs.cwd().deleteFile(file_name) catch |err| switch (err) {
+        error.FileNotFound => {}, // ok
+        else => return err,
+    };
+
+    try std.fs.cwd().writeFile(file_name, game_stream);
+}
+
+pub fn importEditorSceneFromFile(self: *Editor, file_name: []const u8) !void {
     var scene_file = try std.fs.cwd().openFile(file_name, .{});
     defer scene_file.close();
 
@@ -707,13 +765,17 @@ pub fn importFromFile(self: *Editor, file_name: []const u8) !void {
     const read_bytes_count = try scene_file.read(file_bytes);
     std.debug.assert(read_bytes_count == file_bytes.len);
 
+    try self.deserializeAndSyncState(file_bytes);
+}
+
+fn deserializeAndSyncState(self: *Editor, bytes: []const u8) !void {
     // deserialize bytes into the ecs storage
-    try ezby.deserialize(Storage, &self.storage, file_bytes);
+    try ezby.deserialize(EditorStorage, &self.storage, bytes);
 
     // restart the render context to make sure all required instances has and appropriate handle
     self.render_context.clearInstancesRetainingCapacity();
 
-    const RenderInstanceHandleQuery = Storage.Query(struct {
+    const RenderInstanceHandleQuery = EditorStorage.Query(struct {
         instance_handle: *InstanceHandle,
     }, .{});
 
@@ -792,11 +854,11 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
             // file operations
             {
                 if (self.icons.button(.folder_file_load, "folder_load_button##00", "load scene from file", 18, 18, .{})) {
-                    self.ui_state.import_file_modal_popen = true;
+                    self.ui_state.import_editor_file_modal_popen = true;
                 }
                 zgui.sameLine(.{});
                 if (self.icons.button(.folder_file_save, "folder_save_button##00", "save current scene to file", 18, 18, .{})) {
-                    self.ui_state.export_file_modal_popen = true;
+                    self.ui_state.export_editor_file_modal_popen = true;
                 }
                 zgui.sameLine(.{});
                 if (self.icons.button(.@"3d_model_load", "model_load_button##00", "load new 3d model", 18, 18, .{})) {
@@ -846,14 +908,37 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 }
             }
 
+            zgui.separator();
+            zgui.sameLine(.{});
+
+            // game related
+            {
+                const game_button_size = 18 * 3;
+                const available_x = (zgui.getContentRegionAvail()[0] * 0.5) + zgui.getCursorPosX();
+                zgui.setCursorPos([2]f32{ available_x - game_button_size, 0 });
+
+                if (self.icons.button(.folder_file_save, "game_scene_save##00", "export scene as a game scene", 18, 18, .{})) {
+                    self.ui_state.export_game_file_modal_popen = true;
+                    self.ui_state.setExportImportFileName("scene.game.ezby");
+                }
+
+                if (self.icons.button(.play, "play_game_scene##00", "builds release game exe, game scene and runs", 18, 18, .{})) {
+                    std.debug.print("unimplemented", .{});
+                }
+
+                if (self.icons.button(.debug_play, "debug_play_game_scene##00", "builds debug game exe, game scene and runs", 18, 18, .{})) {
+                    std.debug.print("unimplemented", .{});
+                }
+            }
+
             break :blk1 zgui.getWindowHeight();
         };
 
         const export_import_file_name_len = std.mem.indexOf(u8, &self.ui_state.export_import_file_name, &[_]u8{0}).?;
 
-        // export scene to file modal
+        // export editor scene to file modal
         {
-            if (self.ui_state.export_file_modal_popen) {
+            if (self.ui_state.export_editor_file_modal_popen) {
                 zgui.openPopup("Export Modal", .{});
             }
 
@@ -866,26 +951,28 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                     .flags = .{},
                 })) {}
                 zgui.sameLine(.{});
+
+                // TODO: make it required, validate in code
                 marker("File name should have the extension '.ezby',\nbut it is not required", .hint);
 
                 zgui.setItemDefaultFocus();
                 if (zgui.button("Export scene", .{})) {
                     // TODO: show error as a modal
-                    try self.exportToFile(self.ui_state.export_import_file_name[0..export_import_file_name_len]);
-                    self.ui_state.export_file_modal_popen = false;
+                    try self.exportEditorSceneToFile(self.ui_state.export_import_file_name[0..export_import_file_name_len]);
+                    self.ui_state.export_editor_file_modal_popen = false;
                     zgui.closeCurrentPopup();
                 }
                 zgui.sameLine(.{});
                 if (zgui.button("Cancel##export_modal", .{ .w = 120, .h = 0 })) {
-                    self.ui_state.export_file_modal_popen = false;
+                    self.ui_state.export_editor_file_modal_popen = false;
                     zgui.closeCurrentPopup();
                 }
             }
         }
 
-        // import scene to file modal
+        // import editor scene to file modal
         {
-            if (self.ui_state.import_file_modal_popen) {
+            if (self.ui_state.import_editor_file_modal_popen) {
                 zgui.openPopup("Import Modal", .{});
             }
 
@@ -901,13 +988,47 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 zgui.setItemDefaultFocus();
                 if (zgui.button("Import scene", .{})) {
                     // TODO: show error as a modal
-                    try self.importFromFile(self.ui_state.export_import_file_name[0..export_import_file_name_len]);
-                    self.ui_state.import_file_modal_popen = false;
+                    try self.importEditorSceneFromFile(self.ui_state.export_import_file_name[0..export_import_file_name_len]);
+                    self.ui_state.import_editor_file_modal_popen = false;
                     zgui.closeCurrentPopup();
                 }
                 zgui.sameLine(.{});
                 if (zgui.button("Cancel##import_modal", .{ .w = 120, .h = 0 })) {
-                    self.ui_state.import_file_modal_popen = false;
+                    self.ui_state.import_editor_file_modal_popen = false;
+                    zgui.closeCurrentPopup();
+                }
+            }
+        }
+
+        // export editor scene as game scene to file modal
+        {
+            if (self.ui_state.export_game_file_modal_popen) {
+                zgui.openPopup("Export Modal##game", .{});
+            }
+
+            if (zgui.beginPopupModal("Export Modal##game", .{ .flags = .{ .always_auto_resize = true } })) {
+                defer zgui.endPopup();
+
+                zgui.text("File name: ", .{});
+                if (zgui.inputText("##export_game_file_name", .{
+                    .buf = &self.ui_state.export_import_file_name,
+                    .flags = .{},
+                })) {}
+                zgui.sameLine(.{});
+
+                // TODO: make it required, validate in code
+                marker("File name should have the extension '.game.ezby',\nbut it is not required", .hint);
+
+                zgui.setItemDefaultFocus();
+                if (zgui.button("Export game scene", .{})) {
+                    // TODO: show error as a modal
+                    try self.exportGameSceneToFile(self.ui_state.export_import_file_name[0..export_import_file_name_len]);
+                    self.ui_state.export_game_file_modal_popen = false;
+                    zgui.closeCurrentPopup();
+                }
+                zgui.sameLine(.{});
+                if (zgui.button("Cancel##export_modal", .{ .w = 120, .h = 0 })) {
+                    self.ui_state.export_game_file_modal_popen = false;
                     zgui.closeCurrentPopup();
                 }
             }
@@ -946,7 +1067,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                     try self.createNewEntityMenu();
                 }
 
-                const ObjectListQuery = Storage.Query(
+                const ObjectListQuery = EditorStorage.Query(
                     struct {
                         entity: ecez.Entity,
                         metadata: *EntityMetadata,
@@ -1003,7 +1124,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                             @memcpy(self.ui_state.object_inspector.name_buffer[0..display_name.len], display_name);
 
                             // Set index to a non existing index. This makes no object selected
-                            self.ui_state.object_inspector.selected_component_index = fake_components.len;
+                            self.ui_state.object_inspector.selected_component_index = all_components.len;
                             self.ui_state.object_inspector.name_buffer[display_name.len] = 0;
 
                             self.ui_state.object_list.first_rename_draw = true;
@@ -1059,7 +1180,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 if (zgui.beginListBox("##component list", .{ .w = -std.math.floatMin(f32), .h = 0 })) {
                     defer zgui.endListBox();
 
-                    inline for (fake_components, 0..) |Component, comp_index| {
+                    inline for (all_components, 0..) |Component, comp_index| {
                         if (self.storage.hasComponent(selected_entity, Component)) {
                             if (zgui.selectable(@typeName(Component), .{ .selected = comp_index == self.ui_state.object_inspector.selected_component_index })) {
                                 self.ui_state.object_inspector.selected_component_index = comp_index;
@@ -1089,13 +1210,13 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                         defer zgui.endPopup();
 
                         // List of components that you can add
-                        inline for (fake_components, 0..) |Component, comp_index| {
+                        inline for (all_components, 0..) |Component, comp_index| {
                             // you can never add a EntityMetadata
                             if (Component == EntityMetadata) continue;
 
                             if (self.storage.hasComponent(selected_entity, Component) == false) {
                                 // if the component index is not set, then we set it to current component index
-                                if (self.ui_state.add_component_modal.selected_component_index == fake_components.len) {
+                                if (self.ui_state.add_component_modal.selected_component_index == all_components.len) {
                                     self.ui_state.add_component_modal.selected_component_index = comp_index;
                                 }
 
@@ -1114,7 +1235,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                             zgui.separator();
 
                             // List of components that you can add
-                            inline for (fake_components, 0..) |Component, comp_index| {
+                            inline for (all_components, 0..) |Component, comp_index| {
                                 if (Component == EntityMetadata) continue;
 
                                 if (comp_index == self.ui_state.add_component_modal.selected_component_index) {
@@ -1140,7 +1261,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
                         if (zgui.button("Add component", .{ .w = 120, .h = 0 })) {
                             // Add component to entity
-                            inline for (fake_components, 0..) |Component, comp_index| {
+                            inline for (all_components, 0..) |Component, comp_index| {
                                 if (Component == EntityMetadata) continue;
 
                                 if (comp_index == self.ui_state.add_component_modal.selected_component_index) {
@@ -1159,7 +1280,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                                 }
                             }
 
-                            self.ui_state.add_component_modal.selected_component_index = fake_components.len;
+                            self.ui_state.add_component_modal.selected_component_index = all_components.len;
                             self.ui_state.add_component_modal.is_active = false;
                             zgui.closeCurrentPopup();
                         }
@@ -1169,7 +1290,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                         zgui.setItemDefaultFocus();
                         zgui.sameLine(.{});
                         if (zgui.button("Cancel", .{ .w = 120, .h = 0 })) {
-                            self.ui_state.add_component_modal.selected_component_index = fake_components.len;
+                            self.ui_state.add_component_modal.selected_component_index = all_components.len;
                             self.ui_state.add_component_modal.is_active = false;
                             zgui.closeCurrentPopup();
                         }
@@ -1179,14 +1300,14 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
                 {
                     const object_metadata_selected = object_metadata_index == self.ui_state.object_inspector.selected_component_index;
-                    const nothing_selected = self.ui_state.object_inspector.selected_component_index == fake_components.len;
+                    const nothing_selected = self.ui_state.object_inspector.selected_component_index == all_components.len;
                     zgui.beginDisabled(.{
                         .disabled = object_metadata_selected or nothing_selected,
                     });
                     defer zgui.endDisabled();
 
                     if (zgui.button("Remove", .{})) {
-                        inline for (fake_components, 0..) |Component, comp_index| {
+                        inline for (all_components, 0..) |Component, comp_index| {
                             // deleting the metadata of an entity is illegal
                             if (Component != EntityMetadata and comp_index == self.ui_state.object_inspector.selected_component_index) {
                                 if (specializedRemoveHandle(Component)) |remove_handle| {
@@ -1201,7 +1322,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
                                 // assign selection an invalid index
                                 // TODO: Selection should be persistent when removing current component
-                                self.ui_state.object_inspector.selected_component_index = fake_components.len;
+                                self.ui_state.object_inspector.selected_component_index = all_components.len;
                             }
                         }
                     }
@@ -1209,7 +1330,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
                 zgui.separator();
                 zgui.text("Component widgets:", .{});
-                comp_iter: inline for (fake_components) |Component| {
+                comp_iter: inline for (all_components) |Component| {
                     if (Component == EntityMetadata) {
                         continue :comp_iter;
                     }

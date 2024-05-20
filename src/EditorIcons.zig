@@ -47,9 +47,12 @@ pub fn button(
     height: f32,
     config: ButtonConfig,
 ) bool {
+    const icon_size = 18;
+    const icon_stride = ImguiPipeline.atlas_dimension / icon_size;
+
     const icon_value: f32 = @floatFromInt(@intFromEnum(icon));
-    const x = @mod(icon_value, ImguiPipeline.atlas_dimension);
-    const y = @divFloor(icon_value, ImguiPipeline.atlas_dimension);
+    const x = @mod(icon_value, icon_stride);
+    const y = @divFloor(icon_value, icon_stride);
 
     const uv1: [2]f32 = .{
         (x + 1) * ImguiPipeline.uv_stride,
