@@ -47,6 +47,7 @@ pub fn build(b: *Build) void {
             const tracy_dep = b.dependency("ztracy", .{});
 
             exe.root_module.addImport("ztracy", tracy_dep.module("root"));
+            exe.linkLibrary(tracy_dep.artifact("tracy"));
         }
     }
 
