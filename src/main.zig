@@ -9,6 +9,8 @@ const Editor = @import("Editor.zig");
 const RenderContext = @import("RenderContext.zig");
 const AssetHandler = @import("AssetHandler.zig");
 
+const config_options = @import("config_options");
+
 pub fn main() !void {
     ztracy.SetThreadName("main thread");
 
@@ -47,6 +49,13 @@ pub fn main() !void {
     const asset_handler = try AssetHandler.init(allocator);
     defer asset_handler.deinit(allocator);
 
+    switch (config_options.editor_or_game) {
+        .editor => try editorMain(allocator, asset_handler, window),
+        .game => try gameMain(allocator, asset_handler, window),
+    }
+}
+
+fn editorMain(allocator: std.mem.Allocator, asset_handler: AssetHandler, window: glfw.Window) !void {
     var editor: Editor = editor_init_blk: {
         var mesh_initializers = std.ArrayList(RenderContext.MeshInstancehInitializeContex).init(allocator);
         defer {
@@ -117,4 +126,12 @@ pub fn main() !void {
 
         try editor.newFrame(window, delta_time);
     }
+}
+
+fn gameMain(allocator: std.mem.Allocator, asset_handler: AssetHandler, window: glfw.Window) !void {
+    _ = allocator;
+    _ = asset_handler;
+    _ = window;
+
+    return error.Unimplemented;
 }

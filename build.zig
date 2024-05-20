@@ -8,16 +8,31 @@ const ArrayList = std.ArrayList;
 const vkgen = @import("vulkan_zig");
 const ShaderCompileStep = vkgen.ShaderCompileStep;
 
+const BuildProduct = enum {
+    editor,
+    game,
+};
+
 pub fn build(b: *Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const build_product = b.option(BuildProduct, "editor_or_game", "Whether the build is a game executable, or the scene editor") orelse .editor;
+    const config_options = build_options_blk: {
+        const opts = b.addOptions();
+        opts.addOption(BuildProduct, "editor_or_game", build_product);
+
+        break :build_options_blk opts;
+    };
+
     const exe = b.addExecutable(.{
-        .name = "ecez-vulkan",
+        .name = if (build_product == .editor) "editor" else "game",
         .root_source_file = .{ .path = "src/main.zig" },
         .target = target,
         .optimize = optimize,
     });
+
+    exe.root_module.addOptions("config_options", config_options);
 
     // link ecez and ztracy
     {
