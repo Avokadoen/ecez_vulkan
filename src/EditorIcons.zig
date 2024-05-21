@@ -1,6 +1,8 @@
 const std = @import("std");
 
 const zgui = @import("zgui");
+const tracy = @import("ztracy");
+
 const ImguiPipeline = @import("ImguiPipeline.zig");
 
 const EditorIcons = @This();
@@ -29,6 +31,9 @@ pub const icon_size = 18;
 texture_indices: *ImguiPipeline.TextureIndices,
 
 pub fn init(texture_indices: *ImguiPipeline.TextureIndices) EditorIcons {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     return EditorIcons{
         .texture_indices = texture_indices,
     };
@@ -48,6 +53,9 @@ pub fn button(
     height: f32,
     config: ButtonConfig,
 ) bool {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     const icon_stride = ImguiPipeline.atlas_dimension / icon_size;
 
     const icon_value: f32 = @floatFromInt(@intFromEnum(icon));

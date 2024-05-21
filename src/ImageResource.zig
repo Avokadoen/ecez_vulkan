@@ -1,3 +1,5 @@
+const tracy = @import("ztracy");
+
 const vk = @import("vulkan");
 
 const vk_dispatch = @import("vk_dispatch.zig");
@@ -26,6 +28,9 @@ pub fn init(
     height: u32,
     format: vk.Format,
 ) !ImageResource {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     const image = blk: {
         const image_info = vk.ImageCreateInfo{
             .flags = .{},
@@ -89,6 +94,9 @@ pub fn init(
 }
 
 pub fn deinit(self: ImageResource, vkd: DeviceDispatch, device: vk.Device) void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     vkd.destroySampler(device, self.sampler, null);
     if (self.view) |view| {
         vkd.destroyImageView(device, view, null);
@@ -105,6 +113,9 @@ pub fn bindImagesToMemory(
     image_pixels: []const []const u8,
     image_staging_buffer: *StagingBuffer.Image,
 ) !vk.DeviceMemory {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     // TODO: use same image buffer as main pipeline
 
     const image_memory = try image_memory_alloc_blk: {

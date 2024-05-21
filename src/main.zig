@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const ztracy = @import("ztracy");
+const tracy = @import("ztracy");
 const glfw = @import("glfw");
 const zm = @import("zmath");
 
@@ -12,7 +12,10 @@ const AssetHandler = @import("AssetHandler.zig");
 const config_options = @import("config_options");
 
 pub fn main() !void {
-    ztracy.SetThreadName("main thread");
+    tracy.SetThreadName("main thread");
+
+    const main_zone = tracy.ZoneN(@src(), "main");
+    defer main_zone.End();
 
     // create a gpa with default configuration
     var alloc = if (RenderContext.is_debug_build) std.heap.GeneralPurposeAllocator(.{}){} else std.heap.c_allocator;
@@ -116,7 +119,7 @@ fn editorMain(allocator: std.mem.Allocator, asset_handler: AssetHandler, window:
     var then = std.time.microTimestamp();
     // Wait for the user to close the window.
     while (!window.shouldClose()) {
-        defer ztracy.FrameMark();
+        tracy.FrameMark();
 
         glfw.pollEvents();
 

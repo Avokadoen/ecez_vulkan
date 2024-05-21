@@ -1,6 +1,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const tracy = @import("ztracy");
+
 const vk = @import("vulkan");
 const vk_dispatch = @import("vk_dispatch.zig");
 const BaseDispatch = vk_dispatch.BaseDispatch;
@@ -9,6 +11,9 @@ const DeviceDispatch = vk_dispatch.DeviceDispatch;
 
 /// caller must deinit returned memory
 pub fn readFile(allocator: Allocator, absolute_path: []const u8) ![]u8 {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     const file = try std.fs.openFileAbsolute(absolute_path, .{ .mode = .read_only });
     defer file.close();
 
@@ -25,6 +30,9 @@ pub fn readFile(allocator: Allocator, absolute_path: []const u8) ![]u8 {
 }
 
 pub inline fn createShaderModule(vkd: DeviceDispatch, device: vk.Device, shader_code: []const u8) !vk.ShaderModule {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     std.debug.assert(@mod(shader_code.len, 4) == 0);
     const create_info = vk.ShaderModuleCreateInfo{
         .flags = .{},

@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const tracy = @import("ztracy");
+
 const vk = @import("vulkan");
 
 const vk_dispatch = @import("vk_dispatch.zig");
@@ -30,6 +32,9 @@ pub inline fn init(
     buffer_usage: vk.BufferUsageFlags,
     config: Config,
 ) !ImmutableBuffer {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     std.debug.assert(config.size != 0);
 
     const size = dmem.pow2Align(non_coherent_atom_size, config.size);
@@ -63,6 +68,9 @@ pub inline fn init(
 }
 
 pub inline fn deinit(self: ImmutableBuffer, vkd: DeviceDispatch, device: vk.Device) void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     vkd.freeMemory(device, self.memory, null);
     vkd.destroyBuffer(device, self.buffer, null);
 }

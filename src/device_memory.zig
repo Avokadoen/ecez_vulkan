@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const tracy = @import("ztracy");
+
 const vk = @import("vulkan");
 
 const vk_dispatch = @import("vk_dispatch.zig");
@@ -17,6 +19,9 @@ pub inline fn createBuffer(
     size: vk.DeviceSize,
     usage: vk.BufferUsageFlags,
 ) !vk.Buffer {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     const buffer_info = vk.BufferCreateInfo{
         .flags = .{},
         .size = pow2Align(non_coherent_atom_size, size),
@@ -37,6 +42,9 @@ pub inline fn createDeviceMemory(
     buffer: vk.Buffer,
     property_flags: vk.MemoryPropertyFlags,
 ) !vk.DeviceMemory {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     const memory_requirements = vkd.getBufferMemoryRequirements(device, buffer);
     // TODO: better memory ..
     const memory_type_index = try findMemoryTypeIndex(
@@ -60,6 +68,9 @@ pub inline fn createDeviceImageMemory(
     device: vk.Device,
     images: []const vk.Image,
 ) !vk.DeviceMemory {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     var allocation_size: vk.DeviceSize = 0;
     var memory_type_bits: u32 = 0;
     for (images) |image| {
@@ -77,6 +88,9 @@ pub inline fn createDeviceImageMemory(
 }
 
 pub inline fn findMemoryTypeIndex(vki: InstanceDispatch, physical_device: vk.PhysicalDevice, type_filter: u32, property_flags: vk.MemoryPropertyFlags) !u32 {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     const properties = vki.getPhysicalDeviceMemoryProperties(physical_device);
     for (properties.memory_types[0..properties.memory_type_count], 0..) |memory_type, i| {
         std.debug.assert(i < 32);
@@ -100,6 +114,9 @@ pub fn transferMemoryToDevice(
     comptime T: type,
     data: []const T,
 ) !void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     const raw_data = std.mem.sliceAsBytes(data);
 
     const aligned_memory_size = pow2Align(non_coherent_atom_size, @as(vk.DeviceSize, @intCast(raw_data.len)));

@@ -4,6 +4,7 @@ const Allocator = std.mem.Allocator;
 const vk = @import("vulkan");
 const zgui = @import("zgui");
 const zigimg = @import("zigimg");
+const tracy = @import("ztracy");
 
 const AssetHandler = @import("AssetHandler.zig");
 
@@ -76,6 +77,9 @@ pub fn init(
     image_staging_buffer: *StagingBuffer.Image,
     asset_handler: AssetHandler,
 ) !ImguiPipeline {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     // initialize imgui
     zgui.init(allocator);
     errdefer zgui.deinit();
@@ -476,6 +480,9 @@ pub fn init(
 }
 
 pub fn deinit(self: ImguiPipeline, allocator: Allocator, vkd: DeviceDispatch, device: vk.Device) void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     allocator.destroy(self.texture_indices);
     allocator.free(self.buffer_offsets);
     self.vertex_index_buffer.deinit(vkd, device);
@@ -493,6 +500,9 @@ pub fn deinit(self: ImguiPipeline, allocator: Allocator, vkd: DeviceDispatch, de
 }
 
 pub inline fn updateDisplay(self: ImguiPipeline, swapchain_extent: vk.Extent2D) void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     _ = self;
 
     // update gui state
@@ -501,6 +511,9 @@ pub inline fn updateDisplay(self: ImguiPipeline, swapchain_extent: vk.Extent2D) 
 }
 
 pub fn draw(self: *ImguiPipeline, vkd: DeviceDispatch, device: vk.Device, command_buffer: vk.CommandBuffer, current_frame: usize) !void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     // update vertex & index buffer
     try self.updateBuffers(vkd, device, current_frame);
 
@@ -509,8 +522,8 @@ pub fn draw(self: *ImguiPipeline, vkd: DeviceDispatch, device: vk.Device, comman
 }
 
 fn updateBuffers(self: *ImguiPipeline, vkd: DeviceDispatch, device: vk.Device, current_frame: usize) !void {
-    // const update_buffers_zone = tracy.ZoneN(@src(), "imgui: vertex & index update");
-    // defer update_buffers_zone.End();
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
 
     const draw_data = zgui.getDrawData();
     if (draw_data.valid == false) {
@@ -571,8 +584,8 @@ fn updateBuffers(self: *ImguiPipeline, vkd: DeviceDispatch, device: vk.Device, c
 }
 
 inline fn recordCommandBuffer(self: ImguiPipeline, vkd: DeviceDispatch, command_buffer: vk.CommandBuffer, current_frame: usize) void {
-    // const record_zone = tracy.ZoneN(@src(), "imgui record vk commands");
-    // defer record_zone.End();
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
 
     // always increment subpass counter
     vkd.cmdNextSubpass(command_buffer, .@"inline");

@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const tracy = @import("ztracy");
 const vk = @import("vulkan");
 
 const application_ext_layers = @import("application_ext_layers.zig");
@@ -27,6 +28,9 @@ transfer: ?FamilyEntry,
 transfer_queue_count: u32,
 
 pub fn init(vki: InstanceDispatch, physical_device: vk.PhysicalDevice, surface: vk.SurfaceKHR) !QueueFamilyIndices {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     var queues: QueueFamilyIndices = QueueFamilyIndices{
         .graphics = null,
         .graphics_queue_count = 0,
@@ -107,6 +111,9 @@ pub inline fn isComplete(self: QueueFamilyIndices) bool {
 }
 
 inline fn checkDeviceExtensionSupport(vki: InstanceDispatch, physical_device: vk.PhysicalDevice) !bool {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     var available_extensions: [1024]vk.ExtensionProperties = undefined;
 
     const extension_count: u32 = blk: {

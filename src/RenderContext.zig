@@ -1,13 +1,12 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const builtin = @import("builtin");
-
 const vk = @import("vulkan");
 const glfw = @import("glfw");
 const zm = @import("zmath");
 const zigimg = @import("zigimg");
 const zmesh = @import("zmesh");
+const tracy = @import("ztracy");
 
 const vk_dispatch = @import("vk_dispatch.zig");
 const BaseDispatch = vk_dispatch.BaseDispatch;
@@ -29,7 +28,7 @@ const sync = @import("sync.zig");
 const dmem = @import("device_memory.zig");
 const application_ext_layers = @import("application_ext_layers.zig");
 
-pub const is_debug_build = builtin.mode == .Debug;
+pub const is_debug_build = @import("builtin").mode == .Debug;
 pub const max_frames_in_flight = 2;
 
 const UserPointer = extern struct {
@@ -96,10 +95,16 @@ pub const Camera = struct {
     projection: zm.Mat,
 
     pub fn calcView(orientation: zm.Quat, pos: zm.Vec) zm.Mat {
+        const zone = tracy.ZoneN(@src(), @src().fn_name);
+        defer zone.End();
+
         return zm.mul(zm.translationV(pos), zm.quatToMat(orientation));
     }
 
     pub fn calcProjection(swapchain_extent: vk.Extent2D, fov_degree: f32) zm.Mat {
+        const zone = tracy.ZoneN(@src(), @src().fn_name);
+        defer zone.End();
+
         const fovy = std.math.degreesToRadians(f32, fov_degree);
         const aspect = @as(f32, @floatFromInt(swapchain_extent.width)) / @as(f32, @floatFromInt(swapchain_extent.height));
         const near = 0.01;
@@ -115,6 +120,9 @@ const DrawInstance = struct {
     transform: zm.Mat,
 
     pub fn getBindingDescription() vk.VertexInputBindingDescription {
+        const zone = tracy.ZoneN(@src(), @src().fn_name);
+        defer zone.End();
+
         return vk.VertexInputBindingDescription{
             .binding = binding,
             .stride = @sizeOf(DrawInstance),
@@ -123,6 +131,9 @@ const DrawInstance = struct {
     }
 
     pub fn getAttributeDescriptions() [5]vk.VertexInputAttributeDescription {
+        const zone = tracy.ZoneN(@src(), @src().fn_name);
+        defer zone.End();
+
         return [_]vk.VertexInputAttributeDescription{
             .{
                 .location = 2,
@@ -165,6 +176,9 @@ pub const MeshVertex = struct {
     text_coord: [2]f32,
 
     pub fn getBindingDescription() vk.VertexInputBindingDescription {
+        const zone = tracy.ZoneN(@src(), @src().fn_name);
+        defer zone.End();
+
         return vk.VertexInputBindingDescription{
             .binding = binding,
             .stride = @sizeOf(MeshVertex),
@@ -173,6 +187,9 @@ pub const MeshVertex = struct {
     }
 
     pub fn getAttributeDescriptions() [2]vk.VertexInputAttributeDescription {
+        const zone = tracy.ZoneN(@src(), @src().fn_name);
+        defer zone.End();
+
         return [_]vk.VertexInputAttributeDescription{
             .{
                 .location = 0,
@@ -298,6 +315,9 @@ pub fn init(
     mesh_instance_initalizers: []const MeshInstancehInitializeContex,
     config: Config,
 ) !RenderContext {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     zmesh.init(allocator);
     errdefer zmesh.deinit();
 
@@ -1162,6 +1182,9 @@ pub fn init(
 }
 
 pub fn recreatePresentResources(self: *RenderContext, window: glfw.Window) !void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     if (false == self.isMinimized()) { // destroy resource
         try self.vkd.deviceWaitIdle(self.device);
 
@@ -1262,6 +1285,9 @@ pub fn recreatePresentResources(self: *RenderContext, window: glfw.Window) !void
 }
 
 pub fn deinit(self: *RenderContext, allocator: Allocator) void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     for (self.instance_handle_map.items) |lookup_list| {
         lookup_list.deinit();
     }
@@ -1362,6 +1388,9 @@ pub inline fn signalUpdate(self: *RenderContext) void {
 }
 
 pub fn drawFrame(self: *RenderContext, window: glfw.Window, delta_time: f32) !void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     // if minimized, no point in drawing
     if (self.isMinimized()) {
         return;
@@ -1592,6 +1621,9 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window, delta_time: f32) !vo
 
 // TODO: verify that it's sane to panic instead of error return
 fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki: InstanceDispatch, surface: vk.SurfaceKHR) !vk.PhysicalDevice {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     var device_count: u32 = undefined;
     _ = try vki.enumeratePhysicalDevices(instance, &device_count, null);
 
@@ -1704,11 +1736,17 @@ fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki: Instan
 
 /// Get a mesh handle based on the mesh basename
 pub inline fn getMeshHandleFromName(self: RenderContext, name: []const u8) ?MeshHandle {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     return self.mesh_name_handle_map.get(name);
 }
 
 /// Get a name based on a mesh handle
 pub inline fn getNameFromMeshHandle(self: RenderContext, mesh_handle: MeshHandle) ?*[]const u8 {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     var iter = self.mesh_name_handle_map.iterator();
     while (iter.next()) |mesh| {
         if (mesh.value_ptr.* == mesh_handle) {
@@ -1719,6 +1757,9 @@ pub inline fn getNameFromMeshHandle(self: RenderContext, mesh_handle: MeshHandle
 }
 
 pub fn getNewInstance(self: *RenderContext, mesh_handle: MeshHandle) !InstanceHandle {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     const instance_context = self.instance_contexts[mesh_handle];
     const active_instance_count = self.indirect_commands.items[mesh_handle].instance_count;
     if (active_instance_count >= instance_context.total_instance_count) {
@@ -1768,6 +1809,9 @@ pub fn getNewInstance(self: *RenderContext, mesh_handle: MeshHandle) !InstanceHa
 
 /// Destroy the instance handle
 pub fn destroyInstanceHandle(self: *RenderContext, instance_handle: InstanceHandle) void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     var mesh_instance_lookups = &self.instance_handle_map.items[@intCast(instance_handle.mesh_handle)];
     const remove_lookup = mesh_instance_lookups.items[instance_handle.lookup_index];
 
@@ -1792,22 +1836,34 @@ pub fn destroyInstanceHandle(self: *RenderContext, instance_handle: InstanceHand
 }
 
 inline fn instanceLookup(self: RenderContext, instance_handle: InstanceHandle) *DrawInstance {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     const mesh_instance_lookups = &self.instance_handle_map.items[@intCast(instance_handle.mesh_handle)];
     const lookup = mesh_instance_lookups.items[instance_handle.lookup_index];
     return &self.instance_data.items[lookup.opaque_instance];
 }
 
 pub inline fn setInstanceTransform(self: *RenderContext, instance_handle: InstanceHandle, transform: zm.Mat) void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     var draw_instance = self.instanceLookup(instance_handle);
     draw_instance.transform = transform;
 }
 
 pub inline fn getInstanceTransform(self: RenderContext, instance_handle: InstanceHandle) zm.Mat {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     const draw_instance = self.instanceLookup(instance_handle);
     return draw_instance.transform;
 }
 
 pub inline fn getInstanceTransformPtr(self: *RenderContext, instance_handle: InstanceHandle) *zm.Mat {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     var draw_instance = self.instanceLookup(instance_handle);
     return &draw_instance.transform;
 }
@@ -1815,6 +1871,9 @@ pub inline fn getInstanceTransformPtr(self: *RenderContext, instance_handle: Ins
 /// Free all instances so that the render can be reused for new scenes
 /// This will invalidate all current InstanceHandles
 pub fn clearInstancesRetainingCapacity(self: *RenderContext) void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     // remove all current lookups
     for (self.instance_handle_map.items) |*lookup_list| {
         lookup_list.clearRetainingCapacity();
@@ -1832,6 +1891,9 @@ pub inline fn isMinimized(self: RenderContext) bool {
 
 /// Ensure render context handle resizing.
 pub fn handleFramebufferResize(self: *RenderContext, window: glfw.Window, set_window_user_pointer: bool) void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     const callback = struct {
         pub fn func(_window: glfw.Window, width: u32, height: u32) void {
             _ = width;
@@ -1876,6 +1938,9 @@ pub const SwapchainSupportDetails = struct {
     present_modes: []vk.PresentModeKHR,
 
     pub fn init(allocator: Allocator, vki: InstanceDispatch, physical_device: vk.PhysicalDevice, surface: vk.SurfaceKHR) !SwapchainSupportDetails {
+        const zone = tracy.ZoneN(@src(), @src().fn_name);
+        defer zone.End();
+
         const capabilities = try vki.getPhysicalDeviceSurfaceCapabilitiesKHR(physical_device, surface);
 
         const formats = blk: {
@@ -1955,6 +2020,9 @@ pub const SwapchainSupportDetails = struct {
     }
 
     pub fn deinit(self: SwapchainSupportDetails, allocator: Allocator) void {
+        const zone = tracy.ZoneN(@src(), @src().fn_name);
+        defer zone.End();
+
         allocator.free(self.formats);
         allocator.free(self.present_modes);
     }
@@ -1964,6 +2032,9 @@ pub const SwapchainSupportDetails = struct {
     }
 
     pub inline fn chooseExtent(self: SwapchainSupportDetails, window: glfw.Window) !vk.Extent2D {
+        const zone = tracy.ZoneN(@src(), @src().fn_name);
+        defer zone.End();
+
         if (self.capabilities.current_extent.width != std.math.maxInt(u32)) {
             return self.capabilities.current_extent;
         }
@@ -1998,6 +2069,9 @@ inline fn createSwapchain(
     window: glfw.Window,
     old_swapchain: ?vk.SwapchainKHR,
 ) !vk.SwapchainKHR {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     const surface_format = swapchain_support_details.formats[swapchain_support_details.preferred_format_index];
     const present_mode = swapchain_support_details.preferred_present_mode;
     const extent = try swapchain_support_details.chooseExtent(window);
@@ -2039,6 +2113,9 @@ inline fn createLogicalDevice(
     queue_families: QueueFamilyIndices,
     validation_layers: []const [*:0]const u8,
 ) InstanceDispatch.CreateDeviceError!vk.Device {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     const one_index = queue_families.graphicsIndex() == queue_families.transferIndex();
     const queue_priorities = [_]f32{1};
     const queue_create_info = [_]vk.DeviceQueueCreateInfo{
@@ -2112,6 +2189,9 @@ fn messageCallback(
     p_callback_data: ?*const vk.DebugUtilsMessengerCallbackDataEXT,
     p_user_data: ?*anyopaque,
 ) callconv(vk.vulkan_call_conv) vk.Bool32 {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     _ = p_user_data;
     _ = message_types;
 
@@ -2134,6 +2214,9 @@ fn messageCallback(
 }
 
 inline fn createRenderPass(vkd: DeviceDispatch, device: vk.Device, swapchain_format: vk.Format, depth_format: vk.Format) !vk.RenderPass {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     const common_color_attachment_ref = vk.AttachmentReference{
         .attachment = 0,
         .layout = .color_attachment_optimal,
@@ -2246,6 +2329,9 @@ fn createGraphicsPipeline(
     render_pass: vk.RenderPass,
     pipeline_layout: vk.PipelineLayout,
 ) !vk.Pipeline {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     const shaders = @import("shaders");
 
     const vert_bytes = shaders.mesh_vert_spv;
@@ -2456,6 +2542,9 @@ inline fn instantiateFramebuffer(
     swapchain_image_views: []vk.ImageView,
     depth_image_view: vk.ImageView,
 ) !void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     var created_framebuffers: usize = 0;
     errdefer {
         var i: usize = 0;
@@ -2483,6 +2572,9 @@ inline fn instantiateFramebuffer(
 }
 
 fn createDescriptorSetLayout(vkd: DeviceDispatch, device: vk.Device, texture_count: u32) !vk.DescriptorSetLayout {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     const texture_layout_binding = vk.DescriptorSetLayoutBinding{
         .binding = 0,
         .descriptor_type = .combined_image_sampler,
@@ -2513,6 +2605,9 @@ fn createDescriptorSetLayout(vkd: DeviceDispatch, device: vk.Device, texture_cou
 // TODO: BasicImage.zig
 // TODO: function take a zigimg.Image and produce some vk resources
 inline fn createImage(vkd: DeviceDispatch, device: vk.Device, format: vk.Format, usage: vk.ImageUsageFlags, image_extent: vk.Extent2D) !vk.Image {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     const image_info = vk.ImageCreateInfo{
         .flags = .{},
         .image_type = .@"2d",
@@ -2537,6 +2632,9 @@ inline fn createImage(vkd: DeviceDispatch, device: vk.Device, format: vk.Format,
 
 // TODO: BasicImage.zig
 inline fn createDefaultImageView(vkd: DeviceDispatch, device: vk.Device, image: vk.Image, format: vk.Format, aspect_flags: vk.ImageAspectFlags) !vk.ImageView {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     const image_view_info = vk.ImageViewCreateInfo{
         .flags = .{},
         .image = image,
@@ -2560,6 +2658,9 @@ inline fn createDefaultImageView(vkd: DeviceDispatch, device: vk.Device, image: 
 }
 
 inline fn createDefaultSampler(vkd: DeviceDispatch, device: vk.Device, device_limits: vk.PhysicalDeviceLimits) !vk.Sampler {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     const sampler_info = vk.SamplerCreateInfo{
         .flags = .{},
         .mag_filter = .linear,
@@ -2588,6 +2689,9 @@ inline fn findSupportedFormat(
     features: vk.FormatFeatureFlags,
     comptime tiling: vk.ImageTiling,
 ) !vk.Format {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     const field = comptime switch (tiling) {
         .linear => "linear_tiling_features",
         .optimal => "optimal_tiling_features",
@@ -2605,6 +2709,9 @@ inline fn findSupportedFormat(
 }
 
 inline fn findDepthFormat(vki: InstanceDispatch, physical_device: vk.PhysicalDevice) !vk.Format {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     return findSupportedFormat(
         vki,
         physical_device,

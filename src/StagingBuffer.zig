@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const tracy = @import("ztracy");
 const vk = @import("vulkan");
 
 const vk_dispatch = @import("vk_dispatch.zig");
@@ -49,6 +50,9 @@ const StagingContext = struct {
         transfer_queue: vk.Queue,
         config: Config,
     ) !StagingContext {
+        const zone = tracy.ZoneN(@src(), @src().fn_name);
+        defer zone.End();
+
         std.debug.assert(config.size != 0);
 
         const size = dmem.pow2Align(non_coherent_atom_size, config.size);
@@ -140,6 +144,9 @@ pub const Buffer = struct {
         transfer_queue: vk.Queue,
         config: Config,
     ) !Buffer {
+        const zone = tracy.ZoneN(@src(), @src().fn_name);
+        defer zone.End();
+
         return Buffer{
             .ctx = try StagingContext.init(
                 vki,
@@ -155,6 +162,9 @@ pub const Buffer = struct {
     }
 
     pub fn deinit(self: Buffer, vkd: DeviceDispatch, device: vk.Device) void {
+        const zone = tracy.ZoneN(@src(), @src().fn_name);
+        defer zone.End();
+
         self.ctx.deinit(vkd, device);
     }
 
@@ -165,6 +175,9 @@ pub const Buffer = struct {
         comptime T: type,
         data: []const T,
     ) !vk.DeviceSize {
+        const zone = tracy.ZoneN(@src(), @src().fn_name);
+        defer zone.End();
+
         if (self.ctx.memory_in_flight >= max_transfers_scheduled) {
             return error.OutOfTransferSlots;
         }
@@ -209,6 +222,9 @@ pub const Buffer = struct {
         device: vk.Device,
         transfers_complete_semaphores: ?[]vk.Semaphore,
     ) !void {
+        const zone = tracy.ZoneN(@src(), @src().fn_name);
+        defer zone.End();
+
         // TODO: propert errdefers in function
 
         if (self.ctx.memory_in_flight == 0) return;
@@ -288,6 +304,9 @@ pub const Image = struct {
         transfer_queue: vk.Queue,
         config: Config,
     ) !Image {
+        const zone = tracy.ZoneN(@src(), @src().fn_name);
+        defer zone.End();
+
         return Image{
             .ctx = try StagingContext.init(
                 vki,
@@ -303,6 +322,9 @@ pub const Image = struct {
     }
 
     pub fn deinit(self: Image, vkd: DeviceDispatch, device: vk.Device) void {
+        const zone = tracy.ZoneN(@src(), @src().fn_name);
+        defer zone.End();
+
         self.ctx.deinit(vkd, device);
     }
 
@@ -313,6 +335,9 @@ pub const Image = struct {
         comptime T: type,
         data: []const T,
     ) !void {
+        const zone = tracy.ZoneN(@src(), @src().fn_name);
+        defer zone.End();
+
         if (self.ctx.memory_in_flight >= max_transfers_scheduled) {
             return error.OutOfTransferSlots;
         }
@@ -352,6 +377,9 @@ pub const Image = struct {
         image: vk.Image,
         transition: ImageTransition,
     ) !void {
+        const zone = tracy.ZoneN(@src(), @src().fn_name);
+        defer zone.End();
+
         if (self.transitions_before_transfer_in_flight >= max_transfers_scheduled / 2) {
             return error.OutOfTransitionBeforeTransferSlots;
         }
@@ -369,6 +397,9 @@ pub const Image = struct {
         image: vk.Image,
         transition: ImageTransition,
     ) !void {
+        const zone = tracy.ZoneN(@src(), @src().fn_name);
+        defer zone.End();
+
         if (self.transitions_after_transfer_in_flight >= max_transfers_scheduled / 2) {
             return error.OutOfTransitionAfterTransferSlots;
         }
@@ -387,6 +418,9 @@ pub const Image = struct {
         device: vk.Device,
         transfers_complete_semaphores: ?[]vk.Semaphore,
     ) !void {
+        const zone = tracy.ZoneN(@src(), @src().fn_name);
+        defer zone.End();
+
         // TODO: propert errdefers in function
 
         if (self.ctx.memory_in_flight == 0 and
@@ -488,6 +522,9 @@ pub const Image = struct {
         old_layout: vk.ImageLayout,
         new_layout: vk.ImageLayout,
     ) !void {
+        const zone = tracy.ZoneN(@src(), @src().fn_name);
+        defer zone.End();
+
         const aspect_mask: vk.ImageAspectFlags = blk: {
             if (new_layout == .depth_stencil_attachment_optimal) {
                 break :blk .{

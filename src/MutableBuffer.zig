@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const tracy = @import("ztracy");
+
 const vk = @import("vulkan");
 
 const vk_dispatch = @import("vk_dispatch.zig");
@@ -42,6 +44,9 @@ pub inline fn init(
     buffer_usage: vk.BufferUsageFlags,
     config: Config,
 ) !MutableBuffer {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     std.debug.assert(config.size != 0);
 
     const size = dmem.pow2Align(non_coherent_atom_size, config.size);
@@ -81,6 +86,9 @@ pub inline fn init(
 }
 
 pub inline fn deinit(self: MutableBuffer, vkd: DeviceDispatch, device: vk.Device) void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     vkd.unmapMemory(device, self.memory);
     vkd.freeMemory(device, self.memory, null);
     vkd.destroyBuffer(device, self.buffer, null);
@@ -92,6 +100,9 @@ pub fn scheduleTransfer(
     comptime T: type,
     data: []const T,
 ) !void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     const raw_data = std.mem.sliceAsBytes(data);
     if (offset + raw_data.len > self.size) {
         return error.OutOfMemory;
@@ -112,6 +123,9 @@ pub fn scheduleTransfer(
 }
 
 pub inline fn flush(self: *MutableBuffer, vkd: DeviceDispatch, device: vk.Device) !void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     if (self.incoherent_memory_offset == 0) {
         return;
     }

@@ -44,10 +44,14 @@ pub fn build(b: *Build) void {
             const ecez = b.dependency("ecez", .{ .enable_tracy = enable_tracy });
             exe.root_module.addImport("ecez", ecez.module("ecez"));
 
-            const tracy_dep = b.dependency("ztracy", .{});
+            const ztracy_dep = b.dependency("ztracy", .{
+                .enable_ztracy = enable_tracy,
+            });
 
-            exe.root_module.addImport("ztracy", tracy_dep.module("root"));
-            exe.linkLibrary(tracy_dep.artifact("tracy"));
+            exe.root_module.addImport("ztracy", ztracy_dep.module("root"));
+
+            if (enable_tracy)
+                exe.linkLibrary(ztracy_dep.artifact("tracy"));
         }
     }
 

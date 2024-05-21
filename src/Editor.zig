@@ -6,6 +6,7 @@ const ezby = ecez.ezby;
 
 const zgui = @import("zgui");
 const glfw = @import("glfw");
+const tracy = @import("ztracy");
 
 const zm = @import("zmath");
 
@@ -47,6 +48,9 @@ pub const EntityMetadata = struct {
     id_buffer: [buffer_len]u8,
 
     fn init(name: []const u8, entity: ecez.Entity) EntityMetadata {
+        const zone = tracy.ZoneN(@src(), @src().fn_name);
+        defer zone.End();
+
         const id_len = name.len + hash_len;
         std.debug.assert(id_len < buffer_len);
 
@@ -64,6 +68,9 @@ pub const EntityMetadata = struct {
     }
 
     fn rename(self: *EntityMetadata, name: []const u8) void {
+        const zone = tracy.ZoneN(@src(), @src().fn_name);
+        defer zone.End();
+
         const id_len = name.len + hash_len;
         std.debug.assert(id_len < buffer_len);
 
@@ -139,6 +146,9 @@ fn overrideWidgetGenerator(comptime Component: type) ?type {
     return switch (Component) {
         InstanceHandle => struct {
             pub fn widget(editor: *Editor, instance_handle: *InstanceHandle) bool {
+                const zone = tracy.ZoneN(@src(), @src().fn_name);
+                defer zone.End();
+
                 const mesh_handle = instance_handle.*.mesh_handle;
                 const mesh_name = editor.render_context.getNameFromMeshHandle(mesh_handle).?;
                 const preview_value: *[:0]const u8 = @ptrCast(mesh_name);
@@ -208,6 +218,8 @@ fn overrideWidgetGenerator(comptime Component: type) ?type {
         },
         Rotation => struct {
             pub fn widget(editor: *Editor, rotation: *Rotation) bool {
+                const zone = tracy.ZoneN(@src(), @src().fn_name);
+                defer zone.End();
                 _ = editor;
 
                 var euler_angles = blk: {
@@ -255,6 +267,9 @@ fn specializedRemoveHandle(comptime Component: type) ?type {
     return switch (Component) {
         InstanceHandle => struct {
             pub fn remove(editor: *Editor) !void {
+                const zone = tracy.ZoneN(@src(), @src().fn_name);
+                defer zone.End();
+
                 const selected_entity = editor.ui_state.selected_entity.?;
                 const instance_handle = blk: {
                     const handle = try editor.storage.getComponent(selected_entity, InstanceHandle);
@@ -283,6 +298,8 @@ fn specializedRemoveHandle(comptime Component: type) ?type {
 const TransformResetSystem = struct {
     /// Reset the transform
     pub fn reset(instance_handle: InstanceHandle, render_context: *RenderContext) void {
+        const zone = tracy.ZoneN(@src(), @src().fn_name);
+        defer zone.End();
         var _render_context = @as(*RenderContext, @ptrCast(render_context));
         const transform = _render_context.getInstanceTransformPtr(instance_handle);
 
@@ -293,6 +310,8 @@ const TransformResetSystem = struct {
 const TransformApplyScaleSystem = struct {
     /// Apply scale to the transform/
     pub fn applyScale(scale: Scale, instance_handle: InstanceHandle, render_context: *RenderContext) void {
+        const zone = tracy.ZoneN(@src(), @src().fn_name);
+        defer zone.End();
         var transform = render_context.getInstanceTransformPtr(instance_handle);
 
         transform[0][0] *= scale.vec[0];
@@ -304,6 +323,8 @@ const TransformApplyScaleSystem = struct {
 const TransformApplyRotationSystem = struct {
     /// Apply rotation to the transform/
     pub fn applyRotation(rotation: Rotation, instance_handle: InstanceHandle, render_context: *RenderContext) void {
+        const zone = tracy.ZoneN(@src(), @src().fn_name);
+        defer zone.End();
         const transform = render_context.getInstanceTransformPtr(instance_handle);
 
         transform.* = zm.mul(transform.*, zm.quatToMat(rotation.quat));
@@ -313,6 +334,8 @@ const TransformApplyRotationSystem = struct {
 const TransformApplyPositionSystem = struct {
     /// Apply position to the transform
     pub fn applyPosition(position: Position, instance_handle: InstanceHandle, render_context: *RenderContext) void {
+        const zone = tracy.ZoneN(@src(), @src().fn_name);
+        defer zone.End();
         const transform = render_context.getInstanceTransformPtr(instance_handle);
 
         transform.* = zm.mul(transform.*, zm.translationV(position.vec));
@@ -320,6 +343,8 @@ const TransformApplyPositionSystem = struct {
 };
 
 fn componentWidget(comptime T: type, component: *T) bool {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
     var component_changed = false;
 
     const component_info = switch (@typeInfo(T)) {
@@ -337,6 +362,9 @@ fn componentWidget(comptime T: type, component: *T) bool {
 }
 
 fn fieldWidget(comptime Component: type, comptime T: type, comptime id_mod: usize, field: *T) bool {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     var input_id_buf: [2 + @typeName(Component).len + @typeName(T).len + 16]u8 = undefined;
     const id = std.fmt.bufPrint(&input_id_buf, "##{s}{s}{d}", .{ @typeName(Component), @typeName(T), id_mod }) catch unreachable;
     input_id_buf[id.len] = 0;
@@ -600,6 +628,9 @@ pub fn init(
     asset_handler: AssetHandler,
     mesh_instance_initalizers: []const MeshInstancehInitializeContex,
 ) !Editor {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     var render_context = try RenderContext.init(
         allocator,
         window,
@@ -699,6 +730,9 @@ pub fn init(
 }
 
 pub fn exportEditorSceneToFile(self: *Editor, file_name: []const u8) !void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     const ezby_stream = try ezby.serialize(EditorStorage, self.allocator, self.storage, .{});
     defer self.allocator.free(ezby_stream);
 
@@ -713,6 +747,9 @@ pub fn exportEditorSceneToFile(self: *Editor, file_name: []const u8) !void {
 }
 
 pub fn exportGameSceneToFile(self: *Editor, file_name: []const u8) !void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     // Serialize current state
     const ezby_stream = try ezby.serialize(EditorStorage, self.allocator, self.storage, .{});
     // On function exit, restore previous state
@@ -753,6 +790,9 @@ pub fn exportGameSceneToFile(self: *Editor, file_name: []const u8) !void {
 }
 
 pub fn importEditorSceneFromFile(self: *Editor, file_name: []const u8) !void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     var scene_file = try std.fs.cwd().openFile(file_name, .{});
     defer scene_file.close();
 
@@ -769,6 +809,9 @@ pub fn importEditorSceneFromFile(self: *Editor, file_name: []const u8) !void {
 }
 
 fn deserializeAndSyncState(self: *Editor, bytes: []const u8) !void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     // deserialize bytes into the ecs storage
     try ezby.deserialize(EditorStorage, &self.storage, bytes);
 
@@ -791,6 +834,9 @@ fn deserializeAndSyncState(self: *Editor, bytes: []const u8) !void {
 }
 
 pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     if (self.ui_state.camera_control_active) {
         const yaw_quat = zm.quatFromAxisAngle(zm.f32x4(0.0, 1.0, 0.0, 0.0), @floatCast(self.camera_state.yaw));
         const pitch_quat = zm.quatFromAxisAngle(zm.f32x4(1.0, 0.0, 0.0, 0.0), @floatCast(self.camera_state.pitch));
@@ -1366,6 +1412,9 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 }
 
 pub fn deinit(self: *Editor) void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     self.scheduler.waitIdle();
 
     self.pointing_hand.destroy();
@@ -1383,6 +1432,9 @@ pub fn deinit(self: *Editor) void {
 }
 
 pub fn handleFramebufferResize(self: *Editor, window: glfw.Window) void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     self.render_context.handleFramebufferResize(window, false);
 
     self.user_pointer = UserPointer{
@@ -1395,6 +1447,9 @@ pub fn handleFramebufferResize(self: *Editor, window: glfw.Window) void {
 
 /// register input so only editor handles glfw input
 pub fn setEditorInput(window: glfw.Window) void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     const EditorCallbacks = struct {
         pub fn key(_window: glfw.Window, input_key: glfw.Key, scancode: i32, action: glfw.Action, mods: glfw.Mods) void {
             _ = _window;
@@ -1477,6 +1532,9 @@ pub fn setEditorInput(window: glfw.Window) void {
 
 /// register input so camera handles glfw input
 pub fn setCameraInput(window: glfw.Window) void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     const CameraCallbacks = struct {
         pub fn key(_window: glfw.Window, input_key: glfw.Key, scancode: i32, action: glfw.Action, mods: glfw.Mods) void {
             _ = mods;
@@ -1566,10 +1624,16 @@ pub fn setCameraInput(window: glfw.Window) void {
 }
 
 pub fn getMeshHandleFromName(self: *Editor, name: []const u8) ?MeshHandle {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     return self.render_context.getMeshHandleFromName(name);
 }
 
 pub fn newSceneEntity(self: *Editor, name: []const u8) !ecez.Entity {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     const entity = try self.storage.createEntity(.{});
     const metadata = EntityMetadata.init(name, entity);
     try self.storage.setComponent(entity, metadata);
@@ -1579,6 +1643,9 @@ pub fn newSceneEntity(self: *Editor, name: []const u8) !ecez.Entity {
 
 /// This function retrieves a instance handle from the renderer and assigns it to the argument entity
 pub fn assignEntityMeshInstance(self: *Editor, entity: ecez.Entity, mesh_handle: MeshHandle) !void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     if (self.storage.hasComponent(entity, InstanceHandle)) {
         return error.EntityAlreadyHasInstance;
     }
@@ -1592,12 +1659,18 @@ pub fn assignEntityMeshInstance(self: *Editor, entity: ecez.Entity, mesh_handle:
 }
 
 pub fn renameEntity(self: *Editor, entity: ecez.Entity, name: []const u8) !void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     var metadata = try self.storage.getComponent(entity, EntityMetadata);
     metadata.rename(name);
     try self.storage.setComponent(entity, metadata);
 }
 
 pub fn signalRenderUpdate(self: *Editor) void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     self.render_context.signalUpdate();
 }
 
@@ -1621,6 +1694,9 @@ pub fn createNewVisbleObject(
     comptime flush_all_objects: FlushAllObjects,
     config: VisibleObjectConfig,
 ) !void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     const new_entity = try self.newSceneEntity(object_name);
     try self.assignEntityMeshInstance(new_entity, mesh_handle);
 
@@ -1642,6 +1718,9 @@ pub fn createNewVisbleObject(
 }
 
 fn forceFlush(self: *Editor) !void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     self.scheduler.dispatchEvent(&self.storage, .transform_update, &self.render_context, .{});
     self.scheduler.waitEvent(.transform_update);
     self.signalRenderUpdate();
@@ -1651,6 +1730,9 @@ fn forceFlush(self: *Editor) !void {
 /// The new entity can either be a empty entity (only contain editor metadata)
 /// or be a visible object in the scene by selecting the desired mesh for the new entity
 inline fn createNewEntityMenu(self: *Editor) !void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     if (zgui.beginMenu("Create new", true)) {
         defer zgui.endMenu();
 
@@ -1674,6 +1756,9 @@ const MarkerType = enum {
     hint,
 };
 inline fn marker(message: []const u8, marker_type: MarkerType) void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     const marker_txt = switch (marker_type) {
         .warning => "(!)",
         .hint => "(?)",
@@ -1691,6 +1776,9 @@ inline fn marker(message: []const u8, marker_type: MarkerType) void {
 }
 
 inline fn mapGlfwKeyToImgui(key: glfw.Key) zgui.Key {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
     return switch (key) {
         .unknown => zgui.Key.none,
         .space => zgui.Key.space,
