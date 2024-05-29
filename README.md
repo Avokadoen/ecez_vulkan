@@ -11,3 +11,5 @@ It also features:
  - custom imgui backend 
 
  ![scene editor](/assets/images/scene_editor_160524.png)
+
+Tested on zig 0.12.0-dev.3180+83e578a18
