@@ -14,9 +14,6 @@ const config_options = @import("config_options");
 pub fn main() !void {
     tracy.SetThreadName("main thread");
 
-    const main_zone = tracy.ZoneN(@src(), "main");
-    defer main_zone.End();
-
     // create a gpa with default configuration
     var alloc = if (RenderContext.is_debug_build) std.heap.GeneralPurposeAllocator(.{}){} else std.heap.c_allocator;
     defer {

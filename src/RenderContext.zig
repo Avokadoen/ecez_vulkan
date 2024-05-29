@@ -1397,28 +1397,36 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window, delta_time: f32) !vo
     }
 
     // TODO: utilize comptime for this when we introduce the component logic (issue #23)?
-    switch (self.update_rate) {
-        .always => self.missing_updated_frames = max_frames_in_flight,
-        .every_nth_frame => |frame| {
-            if (self.last_update.every_nth_frame >= frame) {
-                self.last_update.every_nth_frame = 0;
-                self.missing_updated_frames = max_frames_in_flight;
-            } else {
-                self.last_update.every_nth_frame += 1;
-            }
-        },
-        .time_seconds => |ms| {
-            if (self.last_update.time_seconds >= ms) {
-                self.last_update.time_seconds = 0;
-                self.missing_updated_frames = max_frames_in_flight;
-            } else {
-                self.last_update.time_seconds += delta_time;
-            }
-        },
-        .manually => {},
+    {
+        const update_rate_zone = tracy.ZoneN(@src(), @src().fn_name ++ " update rate zone");
+        defer update_rate_zone.End();
+
+        switch (self.update_rate) {
+            .always => self.missing_updated_frames = max_frames_in_flight,
+            .every_nth_frame => |frame| {
+                if (self.last_update.every_nth_frame >= frame) {
+                    self.last_update.every_nth_frame = 0;
+                    self.missing_updated_frames = max_frames_in_flight;
+                } else {
+                    self.last_update.every_nth_frame += 1;
+                }
+            },
+            .time_seconds => |ms| {
+                if (self.last_update.time_seconds >= ms) {
+                    self.last_update.time_seconds = 0;
+                    self.missing_updated_frames = max_frames_in_flight;
+                } else {
+                    self.last_update.time_seconds += delta_time;
+                }
+            },
+            .manually => {},
+        }
     }
 
     if (self.missing_updated_frames > 0) {
+        const update_frame_zone = tracy.ZoneN(@src(), @src().fn_name ++ " update frame zone");
+        defer update_frame_zone.End();
+
         self.missing_updated_frames -= 1;
         // start by updating any pending gpu state
         const instance_data_size = dmem.pow2Align(
@@ -1432,15 +1440,26 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window, delta_time: f32) !vo
         );
     }
 
-    _ = try self.vkd.waitForFences(self.device, 1, @as([*]const vk.Fence, @ptrCast(&self.in_flight_fences[self.current_frame])), vk.TRUE, std.math.maxInt(u64));
+    {
+        const in_flight_zone = tracy.ZoneN(@src(), @src().fn_name ++ " wait inflight fence");
+        defer in_flight_zone.End();
+
+        _ = try self.vkd.waitForFences(self.device, 1, @as([*]const vk.Fence, @ptrCast(&self.in_flight_fences[self.current_frame])), vk.TRUE, std.math.maxInt(u64));
+    }
 
     if (enable_imgui) {
+        const imgui_flush_zone = tracy.ZoneN(@src(), @src().fn_name ++ " imgui flush");
+        defer imgui_flush_zone.End();
+
         // flush instance data changes to GPU before rendering
         try self.instance_data_buffer.flush(self.vkd, self.device);
         self.imgui_pipeline.updateDisplay(self.swapchain_extent);
     }
 
     var image_index: u32 = blk: {
+        const acquire_next_zone = tracy.ZoneN(@src(), @src().fn_name ++ " acquire next");
+        defer acquire_next_zone.End();
+
         const result = self.vkd.acquireNextImageKHR(self.device, self.swapchain, std.math.maxInt(u64), self.image_available_semaphores[self.current_frame], .null_handle) catch |err| {
             switch (err) {
                 error.OutOfDateKHR => {
@@ -1454,10 +1473,12 @@ pub fn drawFrame(self: *RenderContext, window: glfw.Window, delta_time: f32) !vo
     };
 
     try self.vkd.resetFences(self.device, 1, @as([*]const vk.Fence, @ptrCast(&self.in_flight_fences[self.current_frame])));
-
     try self.vkd.resetCommandPool(self.device, self.command_pools[self.current_frame], .{});
 
     {
+        const begin_cmd_zone = tracy.ZoneN(@src(), @src().fn_name ++ " begin command buffer");
+        defer begin_cmd_zone.End();
+
         const command_buffer = self.command_buffers[self.current_frame];
 
         const begin_info = vk.CommandBufferBeginInfo{

@@ -838,6 +838,9 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
     defer zone.End();
 
     if (self.ui_state.camera_control_active) {
+        const camera_zone = tracy.ZoneN(@src(), @src().fn_name ++ " camera control");
+        defer camera_zone.End();
+
         const yaw_quat = zm.quatFromAxisAngle(zm.f32x4(0.0, 1.0, 0.0, 0.0), @floatCast(self.camera_state.yaw));
         const pitch_quat = zm.quatFromAxisAngle(zm.f32x4(1.0, 0.0, 0.0, 0.0), @floatCast(self.camera_state.pitch));
         const orientation = zm.qmul(yaw_quat, pitch_quat);
@@ -887,6 +890,9 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
         // define editor header
         const header_height = blk1: {
+            const header_zone = tracy.ZoneN(@src(), @src().fn_name ++ " header height");
+            defer header_zone.End();
+
             {
                 zgui.pushStyleVar2f(.{ .idx = .frame_padding, .v = [2]f32{ -1, 8 } });
                 defer zgui.popStyleVar(.{});
@@ -1082,6 +1088,9 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
         // define Object List
         object_list_blk: {
+            const camera_zone = tracy.ZoneN(@src(), @src().fn_name ++ " object list");
+            defer camera_zone.End();
+
             if (self.ui_state.object_list_active == false) {
                 break :object_list_blk;
             }
@@ -1184,6 +1193,9 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
         // define Object Inspector
         object_inspector_blk: {
+            const camera_zone = tracy.ZoneN(@src(), @src().fn_name ++ " object inspector");
+            defer camera_zone.End();
+
             if (self.ui_state.object_inspector_active == false) {
                 break :object_inspector_blk;
             }
