@@ -696,7 +696,7 @@ pub fn init(
     var storage = try EditorStorage.init(allocator);
     errdefer storage.deinit();
 
-    const scheduler = Scheduler.init();
+    const scheduler = try Scheduler.init(allocator, .{});
 
     // register input callbacks for the editor
     setEditorInput(window);

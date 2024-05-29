@@ -3,8 +3,8 @@
     .version = "0.0.0",
     .dependencies = .{
         .ecez = .{
-            .url = "https://github.com/avokadoen/ecez/archive/8e79023de8622a60010b915bdffca5b42d013864.tar.gz",
-            .hash = "1220a9111c51b0d78fcbdc3180281ff0ca967c51a51252bdd56577a342b1cf4430f4",
+            .url = "https://github.com/avokadoen/ecez/archive/0203f332f70943a27e897488c610be1d313daa59.tar.gz",
+            .hash = "12207154c2bfc906617ce7fa00610a7d9968d83f38bd4276d296b497022bae0c882f",
         },
 
         // zig-gamedev deps
