@@ -168,12 +168,12 @@ fn overrideWidgetGenerator(comptime Component: type) ?type {
                             if (editor.ui_state.add_component_modal.is_active) {
                                 instance_handle.mesh_handle = mesh_name_entry.value_ptr.*;
                             } else if (mesh_handle != mesh_name_entry.value_ptr.*) {
+                                // destroy old instance handle
+                                editor.render_context.destroyInstanceHandle(instance_handle.*);
+
                                 // TODO: handle errors here and report to user
                                 const new_instance_handle = editor.render_context.getNewInstance(mesh_name_entry.value_ptr.*) catch unreachable;
                                 editor.storage.setComponent(editor.ui_state.selected_entity.?, new_instance_handle) catch unreachable;
-
-                                // destroy old instance handle
-                                editor.render_context.destroyInstanceHandle(instance_handle.*);
 
                                 instance_handle.* = new_instance_handle;
                                 editor.forceFlush() catch unreachable;
