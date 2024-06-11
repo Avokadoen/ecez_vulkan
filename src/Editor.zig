@@ -18,6 +18,9 @@ const MeshInstancehInitializeContex = RenderContext.MeshInstancehInitializeConte
 const EditorIcons = @import("EditorIcons.zig");
 const Icons = EditorIcons.Icon;
 
+const undo_redo_stack = @import("undo_redo_stack.zig");
+const UndoRedoStack = undo_redo_stack.CreateType(&all_components);
+
 // TODO: controllable scene camera (Icon to toggle camera control)
 // TODO: Object list and inspector should have a preferences option in the header to adjust width of the window
 // TODO: should be able to change mesh of selected object
@@ -253,6 +256,7 @@ fn specializedAddHandle(comptime Component: type) ?type {
     return switch (Component) {
         InstanceHandle => struct {
             pub fn add(editor: *Editor, instance_handle: *InstanceHandle) !void {
+                // TODO: move add/remove handle into decls on struct, handle in the undo/redo stack as well
                 try editor.assignEntityMeshInstance(
                     editor.ui_state.selected_entity.?,
                     instance_handle.mesh_handle,
@@ -278,6 +282,14 @@ fn specializedRemoveHandle(comptime Component: type) ?type {
 
                 // destroy old instance handle
                 editor.render_context.destroyInstanceHandle(instance_handle);
+
+                // TODO: move add/remove handle into decls on struct, handle in the undo/redo stack as well
+                // undo_blk: {
+                //     const prev_component = editor.storage.getComponent(selected_entity, Component) catch {
+                //         break :undo_blk;
+                //     };
+                //     editor.undo_stack.pushSetComponent(selected_entity, prev_component);
+                // }
 
                 // In the event a remove failed, then the select index is in a inconsistent state
                 // and we do not really have to do anything
@@ -622,6 +634,8 @@ input_state: InputState,
 icons: EditorIcons,
 user_pointer: UserPointer,
 
+undo_stack: UndoRedoStack,
+
 pub fn init(
     allocator: Allocator,
     window: glfw.Window,
@@ -701,6 +715,11 @@ pub fn init(
     // register input callbacks for the editor
     setEditorInput(window);
 
+    var undo_stack = UndoRedoStack{};
+
+    try undo_stack.resize(allocator, 128);
+    errdefer undo_stack.deinit(allocator);
+
     return Editor{
         .allocator = allocator,
         .pointing_hand = pointing_hand,
@@ -726,7 +745,40 @@ pub fn init(
         .icons = EditorIcons.init(render_context.imgui_pipeline.texture_indices),
         // assigned by setCameraInput
         .user_pointer = undefined,
+        .undo_stack = undo_stack,
     };
+}
+
+pub fn deinit(self: *Editor) void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
+    self.scheduler.waitIdle();
+
+    self.pointing_hand.destroy();
+    self.arrow.destroy();
+    self.ibeam.destroy();
+    self.crosshair.destroy();
+    self.resize_ns.destroy();
+    self.resize_ew.destroy();
+    self.resize_nesw.destroy();
+    self.resize_nwse.destroy();
+    self.not_allowed.destroy();
+
+    self.render_context.deinit(self.allocator);
+    self.storage.deinit();
+    self.scheduler.deinit(self.allocator);
+    self.undo_stack.deinit(self.allocator);
+}
+
+pub fn popUndoStack(self: *Editor) void {
+    self.undo_stack.popAction(&self.storage) catch {
+        // TODO: log in debug
+    };
+
+    // TODO: Not needed always, only render components
+    // propagate all the changes to the GPU
+    try self.forceFlush();
 }
 
 pub fn exportEditorSceneToFile(self: *Editor, file_name: []const u8) !void {
@@ -1228,6 +1280,18 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                     if (new_len > 0) {
                         var metadata = try self.storage.getComponent(selected_entity, EntityMetadata);
                         metadata.rename(self.ui_state.object_inspector.name_buffer[0..new_len]);
+
+                        // Undo logic
+                        undo_blk: {
+                            const prev_component = self.storage.getComponent(selected_entity, EntityMetadata) catch |err| {
+                                std.debug.assert(err == error.ComponentMissing);
+                                self.undo_stack.pushRemoveComponent(selected_entity, EntityMetadata);
+                                // if get failed, dont store in undo stack
+                                break :undo_blk;
+                            };
+                            self.undo_stack.pushSetComponent(selected_entity, prev_component);
+                        }
+
                         try self.storage.setComponent(selected_entity, metadata);
                     }
                 }
@@ -1331,6 +1395,18 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                                     if (specializedAddHandle(Component)) |add_handle| {
                                         try add_handle.add(self, component);
                                     } else {
+
+                                        // Undo logic
+                                        undo_blk: {
+                                            const prev_component = self.storage.getComponent(selected_entity, Component) catch |err| {
+                                                std.debug.assert(err == error.ComponentMissing);
+                                                self.undo_stack.pushRemoveComponent(selected_entity, Component);
+                                                // if get failed, dont store in undo stack
+                                                break :undo_blk;
+                                            };
+                                            self.undo_stack.pushSetComponent(selected_entity, prev_component);
+                                        }
+
                                         try self.storage.setComponent(selected_entity, component.*);
                                     }
 
@@ -1371,6 +1447,13 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                                 if (specializedRemoveHandle(Component)) |remove_handle| {
                                     try remove_handle.remove(self);
                                 } else {
+                                    undo_blk: {
+                                        const prev_component = self.storage.getComponent(selected_entity, Component) catch {
+                                            break :undo_blk;
+                                        };
+                                        self.undo_stack.pushSetComponent(selected_entity, prev_component);
+                                    }
+
                                     // In the event a remove failed, then the select index is in a inconsistent state
                                     // and we do not really have to do anything
                                     self.storage.removeComponent(selected_entity, Component) catch {
@@ -1409,6 +1492,18 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                         }
 
                         if (changed) {
+
+                            // Undo set logic, TODO: only do this on mouse release
+                            undo_blk: {
+                                const prev_component = self.storage.getComponent(selected_entity, Component) catch |err| {
+                                    std.debug.assert(err == error.ComponentMissing);
+                                    self.undo_stack.pushRemoveComponent(selected_entity, Component);
+                                    // if get failed, dont store in undo stack
+                                    break :undo_blk;
+                                };
+                                self.undo_stack.pushSetComponent(selected_entity, prev_component);
+                            }
+
                             try self.storage.setComponent(selected_entity, component);
                             try self.forceFlush();
                         }
@@ -1421,26 +1516,6 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
     }
 
     try self.render_context.drawFrame(window, delta_time);
-}
-
-pub fn deinit(self: *Editor) void {
-    const zone = tracy.ZoneN(@src(), @src().fn_name);
-    defer zone.End();
-
-    self.scheduler.waitIdle();
-
-    self.pointing_hand.destroy();
-    self.arrow.destroy();
-    self.ibeam.destroy();
-    self.crosshair.destroy();
-    self.resize_ns.destroy();
-    self.resize_ew.destroy();
-    self.resize_nesw.destroy();
-    self.resize_nwse.destroy();
-    self.not_allowed.destroy();
-
-    self.render_context.deinit(self.allocator);
-    self.storage.deinit();
 }
 
 pub fn handleFramebufferResize(self: *Editor, window: glfw.Window) void {
@@ -1464,7 +1539,6 @@ pub fn setEditorInput(window: glfw.Window) void {
 
     const EditorCallbacks = struct {
         pub fn key(_window: glfw.Window, input_key: glfw.Key, scancode: i32, action: glfw.Action, mods: glfw.Mods) void {
-            _ = _window;
             _ = scancode;
 
             // apply modifiers
@@ -1476,6 +1550,21 @@ pub fn setEditorInput(window: glfw.Window) void {
             // zgui.addKeyEvent(zgui.Key.mod_num_lock, mod.num_lock);
 
             zgui.io.addKeyEvent(mapGlfwKeyToImgui(input_key), action == .press);
+
+            // TODO: very unsafe, find a better solution to this
+            const editor_ptr = search_user_ptr_blk: {
+                var user_ptr = _window.getUserPointer(UserPointer) orelse return;
+                while (user_ptr.type != 1) {
+                    user_ptr = user_ptr.next orelse return;
+                }
+
+                break :search_user_ptr_blk user_ptr.ptr;
+            };
+
+            const undo_action = input_key == .z and (action == .press) and mods.control;
+            if (undo_action) {
+                editor_ptr.popUndoStack();
+            }
         }
 
         pub fn char(_window: glfw.Window, codepoint: u21) void {
@@ -1668,15 +1757,6 @@ pub fn assignEntityMeshInstance(self: *Editor, entity: ecez.Entity, mesh_handle:
     };
 
     try self.storage.setComponent(entity, new_instance);
-}
-
-pub fn renameEntity(self: *Editor, entity: ecez.Entity, name: []const u8) !void {
-    const zone = tracy.ZoneN(@src(), @src().fn_name);
-    defer zone.End();
-
-    var metadata = try self.storage.getComponent(entity, EntityMetadata);
-    metadata.rename(name);
-    try self.storage.setComponent(entity, metadata);
 }
 
 pub fn signalRenderUpdate(self: *Editor) void {
