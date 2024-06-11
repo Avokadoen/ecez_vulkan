@@ -5,6 +5,8 @@ const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const ecez = @import("ecez");
 const Entity = ecez.Entity;
 
+const tracy = @import("ztracy");
+
 pub fn CreateType(comptime components: []const type) type {
     return struct {
         pub const ComponentEnum = gen_enum_type_blk: {
@@ -60,15 +62,24 @@ pub fn CreateType(comptime components: []const type) type {
         action_ring_buffer: ArrayListUnmanaged(Action) = .{},
 
         pub fn resize(self: *UndoRedoStack, allocator: Allocator, new_size: usize) Allocator.Error!void {
+            const zone = tracy.ZoneN(@src(), @src().fn_name);
+            defer zone.End();
+
             try self.action_ring_buffer.resize(allocator, new_size);
         }
 
         pub fn deinit(self: *UndoRedoStack, allocator: Allocator) void {
+            const zone = tracy.ZoneN(@src(), @src().fn_name);
+            defer zone.End();
+
             self.action_ring_buffer.deinit(allocator);
             self.action_ring_cursor = undefined;
         }
 
         pub fn pushSetComponent(self: *UndoRedoStack, entity: Entity, component: anytype) void {
+            const zone = tracy.ZoneN(@src(), @src().fn_name);
+            defer zone.End();
+
             const index = comptime indexOfComponent(@TypeOf(component));
             var action = Action{
                 .action_type = ActionType{ .set_component = entity },
@@ -81,6 +92,9 @@ pub fn CreateType(comptime components: []const type) type {
         }
 
         pub fn pushRemoveComponent(self: *UndoRedoStack, entity: Entity, Component: type) void {
+            const zone = tracy.ZoneN(@src(), @src().fn_name);
+            defer zone.End();
+
             const index = comptime indexOfComponent(Component);
             const action = Action{
                 .action_type = ActionType{ .remove_component = entity },
@@ -91,12 +105,18 @@ pub fn CreateType(comptime components: []const type) type {
         }
 
         pub fn pushAction(self: *UndoRedoStack, action: Action) void {
+            const zone = tracy.ZoneN(@src(), @src().fn_name);
+            defer zone.End();
+
             self.action_ring_buffer.items[@intCast(self.action_ring_cursor)] = action;
             self.action_ring_cursor = @rem((self.action_ring_cursor + 1), @as(i32, @intCast(self.action_ring_buffer.items.len)));
             self.action_ring_len = @min(self.action_ring_len + 1, self.action_ring_buffer.items.len - 1);
         }
 
         pub fn popAction(self: *UndoRedoStack, ecez_storage: anytype) !void {
+            const zone = tracy.ZoneN(@src(), @src().fn_name);
+            defer zone.End();
+
             if (0 == self.action_ring_len) return;
 
             self.action_ring_cursor = if (self.action_ring_cursor == 0)
