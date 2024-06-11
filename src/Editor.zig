@@ -767,7 +767,7 @@ pub fn deinit(self: *Editor) void {
 
     self.render_context.deinit(self.allocator);
     self.storage.deinit();
-    self.scheduler.deinit(self.allocator);
+    self.scheduler.deinit();
     self.undo_stack.deinit(self.allocator);
 }
 
