@@ -1052,11 +1052,10 @@ pub fn init(
             indirect_commands.items.len * @sizeOf(vk.DrawIndexedIndirectCommand),
         );
 
-        var i: usize = 0;
-        while (i < max_frames_in_flight) : (i += 1) {
+        for (0..max_frames_in_flight) |nth_frame| {
             _ = try buffer_staging_buffer.scheduleTransferToDst(
                 indirect_commands_buffer.buffer,
-                indirect_commands_size * i,
+                indirect_commands_size * nth_frame,
                 vk.DrawIndexedIndirectCommand,
                 indirect_commands.items,
             );
@@ -1801,11 +1800,10 @@ pub fn getNewInstance(self: *RenderContext, mesh_handle: MeshHandle) !InstanceHa
         self.nonCoherentAtomSize(),
         self.indirect_commands.items.len * @sizeOf(vk.DrawIndexedIndirectCommand),
     );
-    var i: usize = 0;
-    while (i < max_frames_in_flight) : (i += 1) {
+    for (0..max_frames_in_flight) |nth_frame| {
         _ = try self.buffer_staging_buffer.scheduleTransferToDst(
             self.indirect_commands_buffer.buffer,
-            indirect_commands_size * i,
+            indirect_commands_size * nth_frame,
             vk.DrawIndexedIndirectCommand,
             self.indirect_commands.items,
         );
@@ -1829,7 +1827,7 @@ pub fn getNewInstance(self: *RenderContext, mesh_handle: MeshHandle) !InstanceHa
 }
 
 /// Destroy the instance handle
-pub fn destroyInstanceHandle(self: *RenderContext, instance_handle: InstanceHandle) void {
+pub fn destroyInstanceHandle(self: *RenderContext, instance_handle: InstanceHandle) !void {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
@@ -1854,6 +1852,24 @@ pub fn destroyInstanceHandle(self: *RenderContext, instance_handle: InstanceHand
     // update the draw command to draw one less object
     std.debug.assert(self.indirect_commands.items[instance_handle.mesh_handle].instance_count >= 1);
     self.indirect_commands.items[instance_handle.mesh_handle].instance_count -= 1;
+
+    const indirect_commands_size = dmem.pow2Align(
+        self.nonCoherentAtomSize(),
+        self.indirect_commands.items.len * @sizeOf(vk.DrawIndexedIndirectCommand),
+    );
+
+    for (0..max_frames_in_flight) |nth_frame| {
+        _ = try self.buffer_staging_buffer.scheduleTransferToDst(
+            self.indirect_commands_buffer.buffer,
+            indirect_commands_size * nth_frame,
+            vk.DrawIndexedIndirectCommand,
+            self.indirect_commands.items,
+        );
+    }
+
+    // TODO: always flushing is really stupid. Maybe always flush staging in render frame
+    //       or when staging buffer is full (check returned error)
+    try self.buffer_staging_buffer.flushAndCopyToDestination(self.vkd, self.device, null);
 }
 
 inline fn instanceLookup(self: RenderContext, instance_handle: InstanceHandle) *DrawInstance {

@@ -172,7 +172,7 @@ fn overrideWidgetGenerator(comptime Component: type) ?type {
                                 instance_handle.mesh_handle = mesh_name_entry.value_ptr.*;
                             } else if (mesh_handle != mesh_name_entry.value_ptr.*) {
                                 // destroy old instance handle
-                                editor.render_context.destroyInstanceHandle(instance_handle.*);
+                                editor.render_context.destroyInstanceHandle(instance_handle.*) catch unreachable;
 
                                 // TODO: handle errors here and report to user
                                 const new_instance_handle = editor.render_context.getNewInstance(mesh_name_entry.value_ptr.*) catch unreachable;
@@ -281,7 +281,7 @@ fn specializedRemoveHandle(comptime Component: type) ?type {
                 };
 
                 // destroy old instance handle
-                editor.render_context.destroyInstanceHandle(instance_handle);
+                try editor.render_context.destroyInstanceHandle(instance_handle);
 
                 // TODO: move add/remove handle into decls on struct, handle in the undo/redo stack as well
                 // undo_blk: {
@@ -716,7 +716,6 @@ pub fn init(
     setEditorInput(window);
 
     var undo_stack = UndoRedoStack{};
-
     try undo_stack.resize(allocator, 128);
     errdefer undo_stack.deinit(allocator);
 
@@ -743,8 +742,7 @@ pub fn init(
         },
         .input_state = InputState{},
         .icons = EditorIcons.init(render_context.imgui_pipeline.texture_indices),
-        // assigned by setCameraInput
-        .user_pointer = undefined,
+        .user_pointer = undefined, // assigned by setCameraInput
         .undo_stack = undo_stack,
     };
 }
