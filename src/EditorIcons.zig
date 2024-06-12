@@ -3,7 +3,7 @@ const std = @import("std");
 const zgui = @import("zgui");
 const tracy = @import("ztracy");
 
-const ImguiPipeline = @import("ImguiPipeline.zig");
+const ImguiPipeline = @import("render.zig").ImguiPipeline;
 
 const EditorIcons = @This();
 

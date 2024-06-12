@@ -11,7 +11,7 @@ const tracy = @import("ztracy");
 const zm = @import("zmath");
 
 const AssetHandler = @import("AssetHandler.zig");
-const RenderContext = @import("RenderContext.zig");
+const RenderContext = @import("render.zig").Context;
 const MeshHandle = RenderContext.MeshHandle;
 const MeshInstancehInitializeContex = RenderContext.MeshInstancehInitializeContex;
 

@@ -6,7 +6,7 @@ const zgui = @import("zgui");
 const zigimg = @import("zigimg");
 const tracy = @import("ztracy");
 
-const AssetHandler = @import("AssetHandler.zig");
+const AssetHandler = @import("../AssetHandler.zig");
 
 const vk_dispatch = @import("vk_dispatch.zig");
 const DeviceDispatch = vk_dispatch.DeviceDispatch;

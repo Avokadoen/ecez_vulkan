@@ -6,7 +6,7 @@ const zm = @import("zmath");
 
 const Editor = @import("Editor.zig");
 
-const RenderContext = @import("RenderContext.zig");
+const RenderContext = @import("render.zig").Context;
 const AssetHandler = @import("AssetHandler.zig");
 
 const config_options = @import("config_options");

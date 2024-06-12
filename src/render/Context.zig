@@ -13,7 +13,7 @@ const BaseDispatch = vk_dispatch.BaseDispatch;
 const InstanceDispatch = vk_dispatch.InstanceDispatch;
 const DeviceDispatch = vk_dispatch.DeviceDispatch;
 
-const AssetHandler = @import("AssetHandler.zig");
+const AssetHandler = @import("../AssetHandler.zig");
 
 const pipeline_utils = @import("pipeline_utils.zig");
 
@@ -33,11 +33,11 @@ pub const max_frames_in_flight = 2;
 
 const UserPointer = extern struct {
     type: u32 = 0,
-    ptr: *RenderContext,
+    ptr: *Render,
     next: ?*UserPointer,
 };
 
-const RenderContext = @This();
+const Render = @This();
 
 // TODO: reduce debug assert, replace with errors
 // TODO: use sync2
@@ -76,7 +76,7 @@ pub const MeshInstancehInitializeContex = struct {
 };
 
 /// Metadata about a given grouping of instance
-const MeshInstanceContext = struct {
+const MeshInstanceRender = struct {
     total_instance_count: u32,
 };
 
@@ -263,7 +263,7 @@ mesh_name_handle_map: std.StringHashMap(MeshHandle),
 // TODO: rename model_contexts
 /// This is used to supply users with handles for any instance when
 /// they request a new object to render
-instance_contexts: []MeshInstanceContext,
+instance_contexts: []MeshInstanceRender,
 
 // TODO: code smell: array of array lists :')
 instance_handle_map: std.ArrayList(InstanceLookupList),
@@ -314,7 +314,7 @@ pub fn init(
     asset_handler: AssetHandler,
     mesh_instance_initalizers: []const MeshInstancehInitializeContex,
     config: Config,
-) !RenderContext {
+) !Render {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
@@ -1099,11 +1099,11 @@ pub fn init(
         instance_handle_map.deinit();
     }
 
-    const instance_contexts = try allocator.alloc(MeshInstanceContext, mesh_instance_initalizers.len);
+    const instance_contexts = try allocator.alloc(MeshInstanceRender, mesh_instance_initalizers.len);
     errdefer allocator.free(instance_contexts);
 
     for (mesh_instance_initalizers, 0..) |mesh_init, i| {
-        instance_contexts[i] = MeshInstanceContext{
+        instance_contexts[i] = MeshInstanceRender{
             .total_instance_count = mesh_init.instance_count,
         };
 
@@ -1118,7 +1118,7 @@ pub fn init(
         mesh_name_handle_map.putAssumeCapacity(mesh_name, @intCast(i));
     }
 
-    return RenderContext{
+    return Render{
         .vkb = vkb,
         .vki = vki,
         .vkd = vkd,
@@ -1180,7 +1180,7 @@ pub fn init(
     };
 }
 
-pub fn recreatePresentResources(self: *RenderContext, window: glfw.Window) !void {
+pub fn recreatePresentResources(self: *Render, window: glfw.Window) !void {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
@@ -1283,7 +1283,7 @@ pub fn recreatePresentResources(self: *RenderContext, window: glfw.Window) !void
     self.camera.projection = Camera.calcProjection(self.swapchain_extent, 45);
 }
 
-pub fn deinit(self: *RenderContext, allocator: Allocator) void {
+pub fn deinit(self: *Render, allocator: Allocator) void {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
@@ -1382,11 +1382,11 @@ pub fn deinit(self: *RenderContext, allocator: Allocator) void {
 }
 
 /// manually signal renderer to update all buffers
-pub inline fn signalUpdate(self: *RenderContext) void {
+pub inline fn signalUpdate(self: *Render) void {
     self.missing_updated_frames = max_frames_in_flight;
 }
 
-pub fn drawFrame(self: *RenderContext, window: glfw.Window, delta_time: f32) !void {
+pub fn drawFrame(self: *Render, window: glfw.Window, delta_time: f32) !void {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
@@ -1755,7 +1755,7 @@ fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki: Instan
 }
 
 /// Get a mesh handle based on the mesh basename
-pub inline fn getMeshHandleFromName(self: RenderContext, name: []const u8) ?MeshHandle {
+pub inline fn getMeshHandleFromName(self: Render, name: []const u8) ?MeshHandle {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
@@ -1763,7 +1763,7 @@ pub inline fn getMeshHandleFromName(self: RenderContext, name: []const u8) ?Mesh
 }
 
 /// Get a name based on a mesh handle
-pub inline fn getNameFromMeshHandle(self: RenderContext, mesh_handle: MeshHandle) ?*[]const u8 {
+pub inline fn getNameFromMeshHandle(self: Render, mesh_handle: MeshHandle) ?*[]const u8 {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
@@ -1776,7 +1776,7 @@ pub inline fn getNameFromMeshHandle(self: RenderContext, mesh_handle: MeshHandle
     return null;
 }
 
-pub fn getNewInstance(self: *RenderContext, mesh_handle: MeshHandle) !InstanceHandle {
+pub fn getNewInstance(self: *Render, mesh_handle: MeshHandle) !InstanceHandle {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
@@ -1827,7 +1827,7 @@ pub fn getNewInstance(self: *RenderContext, mesh_handle: MeshHandle) !InstanceHa
 }
 
 /// Destroy the instance handle
-pub fn destroyInstanceHandle(self: *RenderContext, instance_handle: InstanceHandle) !void {
+pub fn destroyInstanceHandle(self: *Render, instance_handle: InstanceHandle) !void {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
@@ -1872,7 +1872,7 @@ pub fn destroyInstanceHandle(self: *RenderContext, instance_handle: InstanceHand
     try self.buffer_staging_buffer.flushAndCopyToDestination(self.vkd, self.device, null);
 }
 
-inline fn instanceLookup(self: RenderContext, instance_handle: InstanceHandle) *DrawInstance {
+inline fn instanceLookup(self: Render, instance_handle: InstanceHandle) *DrawInstance {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
@@ -1881,7 +1881,7 @@ inline fn instanceLookup(self: RenderContext, instance_handle: InstanceHandle) *
     return &self.instance_data.items[lookup.opaque_instance];
 }
 
-pub inline fn setInstanceTransform(self: *RenderContext, instance_handle: InstanceHandle, transform: zm.Mat) void {
+pub inline fn setInstanceTransform(self: *Render, instance_handle: InstanceHandle, transform: zm.Mat) void {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
@@ -1889,7 +1889,7 @@ pub inline fn setInstanceTransform(self: *RenderContext, instance_handle: Instan
     draw_instance.transform = transform;
 }
 
-pub inline fn getInstanceTransform(self: RenderContext, instance_handle: InstanceHandle) zm.Mat {
+pub inline fn getInstanceTransform(self: Render, instance_handle: InstanceHandle) zm.Mat {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
@@ -1897,7 +1897,7 @@ pub inline fn getInstanceTransform(self: RenderContext, instance_handle: Instanc
     return draw_instance.transform;
 }
 
-pub inline fn getInstanceTransformPtr(self: *RenderContext, instance_handle: InstanceHandle) *zm.Mat {
+pub inline fn getInstanceTransformPtr(self: *Render, instance_handle: InstanceHandle) *zm.Mat {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
@@ -1907,7 +1907,7 @@ pub inline fn getInstanceTransformPtr(self: *RenderContext, instance_handle: Ins
 
 /// Free all instances so that the render can be reused for new scenes
 /// This will invalidate all current InstanceHandles
-pub fn clearInstancesRetainingCapacity(self: *RenderContext) void {
+pub fn clearInstancesRetainingCapacity(self: *Render) void {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
@@ -1922,12 +1922,12 @@ pub fn clearInstancesRetainingCapacity(self: *RenderContext) void {
     }
 }
 
-pub inline fn isMinimized(self: RenderContext) bool {
+pub inline fn isMinimized(self: Render) bool {
     return (self.swapchain_extent.width * self.swapchain_extent.height) == 0;
 }
 
 /// Ensure render context handle resizing.
-pub fn handleFramebufferResize(self: *RenderContext, window: glfw.Window, set_window_user_pointer: bool) void {
+pub fn handleFramebufferResize(self: *Render, window: glfw.Window, set_window_user_pointer: bool) void {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
@@ -1961,7 +1961,7 @@ pub fn handleFramebufferResize(self: *RenderContext, window: glfw.Window, set_wi
     window.setFramebufferSizeCallback(callback);
 }
 
-pub inline fn nonCoherentAtomSize(self: RenderContext) vk.DeviceSize {
+pub inline fn nonCoherentAtomSize(self: Render) vk.DeviceSize {
     return self.device_properties.limits.non_coherent_atom_size;
 }
 
