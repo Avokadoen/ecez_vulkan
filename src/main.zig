@@ -4,10 +4,12 @@ const tracy = @import("ztracy");
 const glfw = @import("glfw");
 const zm = @import("zmath");
 
-const Editor = @import("Editor.zig");
+const Editor = @import("editor.zig").Editor;
 
 const RenderContext = @import("render.zig").Context;
 const AssetHandler = @import("AssetHandler.zig");
+
+const game = @import("game.zig");
 
 const config_options = @import("config_options");
 
@@ -102,15 +104,15 @@ fn editorMain(allocator: std.mem.Allocator, asset_handler: AssetHandler, window:
     // load some test stuff while we are missing a file format for scenes
     const box_mesh_handle = editor.getMeshHandleFromName("BoxTextured").?;
     try editor.createNewVisbleObject("box", box_mesh_handle, Editor.FlushAllObjects.no, .{
-        .rotation = Editor.Rotation{ .quat = zm.quatFromNormAxisAngle(zm.f32x4(0, 0, 1, 0), std.math.pi) },
-        .position = Editor.Position{ .vec = zm.f32x4(-1, 0, 0, 0) },
-        .scale = Editor.Scale{ .vec = zm.f32x4(1, 1, 1, 1) },
+        .rotation = game.components.Rotation{ .quat = zm.quatFromNormAxisAngle(zm.f32x4(0, 0, 1, 0), std.math.pi) },
+        .position = game.components.Position{ .vec = zm.f32x4(-1, 0, 0, 0) },
+        .scale = game.components.Scale{ .vec = zm.f32x4(1, 1, 1, 1) },
     });
 
     const helmet_mesh_handle = editor.getMeshHandleFromName("SciFiHelmet").?;
     try editor.createNewVisbleObject("helmet", helmet_mesh_handle, Editor.FlushAllObjects.yes, .{
-        .rotation = Editor.Rotation{ .quat = zm.quatFromNormAxisAngle(zm.f32x4(0, 1, 0, 0), std.math.pi * 0.5) },
-        .position = Editor.Position{ .vec = zm.f32x4(1, 0, 0, 0) },
+        .rotation = game.components.Rotation{ .quat = zm.quatFromNormAxisAngle(zm.f32x4(0, 1, 0, 0), std.math.pi * 0.5) },
+        .position = game.components.Position{ .vec = zm.f32x4(1, 0, 0, 0) },
     });
 
     var then = std.time.microTimestamp();
