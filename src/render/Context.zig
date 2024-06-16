@@ -13,7 +13,7 @@ const BaseDispatch = vk_dispatch.BaseDispatch;
 const InstanceDispatch = vk_dispatch.InstanceDispatch;
 const DeviceDispatch = vk_dispatch.DeviceDispatch;
 
-const AssetHandler = @import("../AssetHandler.zig");
+const core = @import("../core.zig");
 
 const pipeline_utils = @import("pipeline_utils.zig");
 
@@ -32,9 +32,9 @@ pub const is_debug_build = @import("builtin").mode == .Debug;
 pub const max_frames_in_flight = 2;
 
 const UserPointer = extern struct {
-    type: u32 = 0,
-    ptr: *Render,
+    type: core.glfw_integration.UserPointerType = .render,
     next: ?*UserPointer,
+    ptr: *Render,
 };
 
 const Render = @This();
@@ -311,7 +311,7 @@ user_pointer: UserPointer,
 pub fn init(
     allocator: Allocator,
     window: glfw.Window,
-    asset_handler: AssetHandler,
+    asset_handler: core.AssetHandler,
     mesh_instance_initalizers: []const MeshInstancehInitializeContex,
     config: Config,
 ) !Render {
@@ -1936,17 +1936,12 @@ pub fn handleFramebufferResize(self: *Render, window: glfw.Window, set_window_us
             _ = width;
             _ = height;
 
-            // TODO: very unsafe, find a better solution to this
-            const render_context_ptr = search_user_ptr_blk: {
-                var user_ptr = _window.getUserPointer(UserPointer) orelse return;
-                while (user_ptr.type != 0) {
-                    user_ptr = user_ptr.next orelse return;
-                }
+            const user_pointer = core.glfw_integration.findUserPointer(
+                UserPointer,
+                _window,
+            ) orelse return;
 
-                break :search_user_ptr_blk user_ptr.ptr;
-            };
-
-            render_context_ptr.recreatePresentResources(_window) catch {};
+            user_pointer.ptr.recreatePresentResources(_window) catch {};
         }
     }.func;
 

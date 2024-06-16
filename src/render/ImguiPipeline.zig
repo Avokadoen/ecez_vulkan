@@ -6,7 +6,7 @@ const zgui = @import("zgui");
 const zigimg = @import("zigimg");
 const tracy = @import("ztracy");
 
-const AssetHandler = @import("../AssetHandler.zig");
+const core = @import("../core.zig");
 
 const vk_dispatch = @import("vk_dispatch.zig");
 const DeviceDispatch = vk_dispatch.DeviceDispatch;
@@ -75,7 +75,7 @@ pub fn init(
     swapchain_count: u32,
     render_pass: vk.RenderPass,
     image_staging_buffer: *StagingBuffer.Image,
-    asset_handler: AssetHandler,
+    asset_handler: core.AssetHandler,
 ) !ImguiPipeline {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();

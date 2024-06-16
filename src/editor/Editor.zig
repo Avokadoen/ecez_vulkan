@@ -10,7 +10,7 @@ const tracy = @import("ztracy");
 
 const zm = @import("zmath");
 
-const AssetHandler = @import("../AssetHandler.zig");
+const core = @import("../core.zig");
 
 const EditorIcons = @import("EditorIcons.zig");
 const Icons = EditorIcons.Icon;
@@ -35,9 +35,9 @@ const Scale = game.components.Scale;
 const all_components = editor_components.all ++ game.components.all ++ render.components.all;
 
 const UserPointer = extern struct {
-    type: u32 = 1,
-    ptr: *Editor,
+    type: core.glfw_integration.UserPointerType = .editor,
     next: ?*UserPointer,
+    ptr: *Editor,
 };
 
 fn ComponentTypeArrayToTupleType(comptime components: []const type) type {
@@ -515,7 +515,7 @@ undo_stack: UndoRedoStack,
 pub fn init(
     allocator: Allocator,
     window: glfw.Window,
-    asset_handler: AssetHandler,
+    asset_handler: core.AssetHandler,
     mesh_instance_initalizers: []const MeshInstancehInitializeContex,
 ) !Editor {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
@@ -1425,19 +1425,14 @@ pub fn setEditorInput(window: glfw.Window) void {
 
             zgui.io.addKeyEvent(mapGlfwKeyToImgui(input_key), action == .press);
 
-            // TODO: very unsafe, find a better solution to this
-            const editor_ptr = search_user_ptr_blk: {
-                var user_ptr = _window.getUserPointer(UserPointer) orelse return;
-                while (user_ptr.type != 1) {
-                    user_ptr = user_ptr.next orelse return;
-                }
-
-                break :search_user_ptr_blk user_ptr.ptr;
-            };
+            const user_pointer = core.glfw_integration.findUserPointer(
+                UserPointer,
+                _window,
+            ) orelse return;
 
             const undo_action = input_key == .z and (action == .press) and mods.control;
             if (undo_action) {
-                editor_ptr.popUndoStack();
+                user_pointer.ptr.popUndoStack();
             }
         }
 
@@ -1471,18 +1466,14 @@ pub fn setEditorInput(window: glfw.Window) void {
         }
 
         pub fn cursorPos(_window: glfw.Window, xpos: f64, ypos: f64) void {
-            const editor_ptr = search_user_ptr_blk: {
-                var user_ptr = _window.getUserPointer(UserPointer) orelse return;
-                while (user_ptr.type != 1) {
-                    user_ptr = user_ptr.next orelse return;
-                }
-
-                break :search_user_ptr_blk user_ptr.ptr;
-            };
+            const user_pointer = core.glfw_integration.findUserPointer(
+                UserPointer,
+                _window,
+            ) orelse return;
 
             defer {
-                editor_ptr.input_state.previous_cursor_xpos = xpos;
-                editor_ptr.input_state.previous_cursor_ypos = ypos;
+                user_pointer.ptr.input_state.previous_cursor_xpos = xpos;
+                user_pointer.ptr.input_state.previous_cursor_ypos = ypos;
             }
 
             zgui.io.addMousePositionEvent(@as(f32, @floatCast(xpos)), @as(f32, @floatCast(ypos)));
@@ -1515,15 +1506,12 @@ pub fn setCameraInput(window: glfw.Window) void {
             _ = mods;
             _ = scancode;
 
-            // TODO: very unsafe, find a better solution to this
-            const editor_ptr = search_user_ptr_blk: {
-                var user_ptr = _window.getUserPointer(UserPointer) orelse return;
-                while (user_ptr.type != 1) {
-                    user_ptr = user_ptr.next orelse return;
-                }
+            const user_pointer = core.glfw_integration.findUserPointer(
+                UserPointer,
+                _window,
+            ) orelse return;
 
-                break :search_user_ptr_blk user_ptr.ptr;
-            };
+            const editor_ptr = user_pointer.ptr;
 
             const axist_value: f32 = switch (action) {
                 .press => 1,
@@ -1559,15 +1547,12 @@ pub fn setCameraInput(window: glfw.Window) void {
         }
 
         pub fn cursorPos(_window: glfw.Window, xpos: f64, ypos: f64) void {
-            // TODO: very unsafe, find a better solution to this
-            const editor_ptr = search_user_ptr_blk: {
-                var user_ptr = _window.getUserPointer(UserPointer) orelse return;
-                while (user_ptr.type != 1) {
-                    user_ptr = user_ptr.next orelse return;
-                }
+            const user_pointer = core.glfw_integration.findUserPointer(
+                UserPointer,
+                _window,
+            ) orelse return;
 
-                break :search_user_ptr_blk user_ptr.ptr;
-            };
+            const editor_ptr = user_pointer.ptr;
 
             defer {
                 editor_ptr.input_state.previous_cursor_xpos = xpos;

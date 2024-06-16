@@ -7,7 +7,8 @@ const zm = @import("zmath");
 const Editor = @import("editor.zig").Editor;
 
 const RenderContext = @import("render.zig").Context;
-const AssetHandler = @import("AssetHandler.zig");
+
+const core = @import("core.zig");
 
 const game = @import("game.zig");
 
@@ -48,7 +49,7 @@ pub fn main() !void {
     };
     defer window.destroy();
 
-    const asset_handler = try AssetHandler.init(allocator);
+    const asset_handler = try core.AssetHandler.init(allocator);
     defer asset_handler.deinit(allocator);
 
     switch (config_options.editor_or_game) {
@@ -57,7 +58,7 @@ pub fn main() !void {
     }
 }
 
-fn editorMain(allocator: std.mem.Allocator, asset_handler: AssetHandler, window: glfw.Window) !void {
+fn editorMain(allocator: std.mem.Allocator, asset_handler: core.AssetHandler, window: glfw.Window) !void {
     var editor: Editor = editor_init_blk: {
         var mesh_initializers = std.ArrayList(RenderContext.MeshInstancehInitializeContex).init(allocator);
         defer {
@@ -130,7 +131,7 @@ fn editorMain(allocator: std.mem.Allocator, asset_handler: AssetHandler, window:
     }
 }
 
-fn gameMain(allocator: std.mem.Allocator, asset_handler: AssetHandler, window: glfw.Window) !void {
+fn gameMain(allocator: std.mem.Allocator, asset_handler: core.AssetHandler, window: glfw.Window) !void {
     _ = allocator;
     _ = asset_handler;
     _ = window;
