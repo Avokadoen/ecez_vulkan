@@ -7,7 +7,6 @@ const ezby = ecez.ezby;
 const zgui = @import("zgui");
 const glfw = @import("glfw");
 const tracy = @import("ztracy");
-
 const zm = @import("zmath");
 
 const core = @import("../core.zig");
@@ -32,395 +31,15 @@ const Position = game.components.Position;
 const Rotation = game.components.Rotation;
 const Scale = game.components.Scale;
 
-const all_components = editor_components.all ++ game.components.all ++ render.components.all;
+const component_reflect = @import("component_reflect.zig");
+const all_components = component_reflect.all_components;
+const biggest_component_size = component_reflect.biggest_component_size;
 
 const UserPointer = extern struct {
     type: core.glfw_integration.UserPointerType = .editor,
     next: ?*UserPointer,
     ptr: *Editor,
 };
-
-fn ComponentTypeArrayToTupleType(comptime components: []const type) type {
-    const Tuple = std.meta.Tuple(&[_]type{type} ** components.len);
-    return Tuple;
-}
-
-fn componentTypeArrayToTuple(comptime components: []const type) ComponentTypeArrayToTupleType(components) {
-    const Tuple = ComponentTypeArrayToTupleType(components);
-    comptime var tuple: Tuple = undefined;
-    inline for (components, 0..) |Component, comp_index| {
-        tuple[comp_index] = Component;
-    }
-    return tuple;
-}
-
-const object_metadata_index = blk: {
-    for (all_components, 0..) |Component, component_index| {
-        if (Component == EntityMetadata) {
-            break :blk component_index;
-        }
-    }
-};
-
-const biggest_component_size = blk: {
-    var size = 0;
-    for (game.components.all ++ editor_components.all) |Component| {
-        if (@sizeOf(Component) > size) {
-            size = @sizeOf(Component);
-        }
-    }
-    break :blk size;
-};
-
-fn overrideWidgetGenerator(comptime Component: type) ?type {
-    return switch (Component) {
-        InstanceHandle => struct {
-            pub fn widget(editor: *Editor, instance_handle: *InstanceHandle) bool {
-                const zone = tracy.ZoneN(@src(), @src().fn_name);
-                defer zone.End();
-
-                const mesh_handle = instance_handle.*.mesh_handle;
-                const mesh_name = editor.render_context.getNameFromMeshHandle(mesh_handle).?;
-                const preview_value: *[:0]const u8 = @ptrCast(mesh_name);
-
-                if (zgui.beginCombo("Mesh", .{ .preview_value = preview_value.* })) {
-                    defer zgui.endCombo();
-
-                    var mesh_name_iter = editor.render_context.mesh_name_handle_map.iterator();
-                    while (mesh_name_iter.next()) |mesh_name_entry| {
-                        const c_name: *[:0]const u8 = @ptrCast(mesh_name_entry.key_ptr);
-
-                        if (zgui.selectable(c_name.*, .{
-                            .selected = mesh_handle == mesh_name_entry.value_ptr.*,
-                        })) {
-                            // If we are in the processing of adding a instance handle, then we do not want to
-                            // destroy none existing handle in the renderer, only set the in flight handle
-                            if (editor.ui_state.add_component_modal.is_active) {
-                                instance_handle.mesh_handle = mesh_name_entry.value_ptr.*;
-                            } else if (mesh_handle != mesh_name_entry.value_ptr.*) {
-                                // destroy old instance handle
-                                editor.render_context.destroyInstanceHandle(instance_handle.*) catch unreachable;
-
-                                // TODO: handle errors here and report to user
-                                const new_instance_handle = editor.render_context.getNewInstance(mesh_name_entry.value_ptr.*) catch unreachable;
-                                editor.storage.setComponent(editor.ui_state.selected_entity.?, new_instance_handle) catch unreachable;
-
-                                instance_handle.* = new_instance_handle;
-                                editor.forceFlush() catch unreachable;
-                            }
-                        }
-                    }
-                }
-
-                const transform = editor.render_context.getInstanceTransform(instance_handle.*);
-                zgui.text("Transform (readonly): ", .{});
-                {
-                    zgui.beginDisabled(.{ .disabled = true });
-                    defer zgui.endDisabled();
-
-                    var row_0: [4]f32 = transform[0];
-                    _ = zgui.inputFloat4("##transform_row_0", .{
-                        .v = &row_0,
-                        .flags = .{ .read_only = true },
-                    });
-
-                    var row_1: [4]f32 = transform[1];
-                    _ = zgui.inputFloat4("##transform_row_1", .{
-                        .v = &row_1,
-                        .flags = .{ .read_only = true },
-                    });
-
-                    var row_2: [4]f32 = transform[2];
-                    _ = zgui.inputFloat4("##transform_row_2", .{
-                        .v = &row_2,
-                        .flags = .{ .read_only = true },
-                    });
-
-                    var row_3: [4]f32 = transform[3];
-                    _ = zgui.inputFloat4("##transform_row_3", .{
-                        .v = &row_3,
-                        .flags = .{ .read_only = true },
-                    });
-                }
-
-                return false;
-            }
-        },
-        Rotation => struct {
-            pub fn widget(editor: *Editor, rotation: *Rotation) bool {
-                const zone = tracy.ZoneN(@src(), @src().fn_name);
-                defer zone.End();
-                _ = editor;
-
-                var euler_angles = blk: {
-                    const angles = zm.quatToRollPitchYaw(rotation.quat);
-                    break :blk [_]f32{
-                        std.math.radiansToDegrees(f32, angles[0]),
-                        std.math.radiansToDegrees(f32, angles[1]),
-                        std.math.radiansToDegrees(f32, angles[2]),
-                    };
-                };
-
-                zgui.text("Angles: ", .{});
-                zgui.sameLine(.{});
-                if (zgui.dragFloat3("##euler_angles", .{ .v = &euler_angles })) {
-                    const x_rad = std.math.degreesToRadians(f32, euler_angles[0]);
-                    const y_rad = std.math.degreesToRadians(f32, euler_angles[1]);
-                    const z_rad = std.math.degreesToRadians(f32, euler_angles[2]);
-
-                    rotation.quat = zm.quatFromRollPitchYaw(x_rad, y_rad, z_rad);
-                    return true;
-                }
-
-                return false;
-            }
-        },
-        else => null,
-    };
-}
-
-fn specializedAddHandle(comptime Component: type) ?type {
-    return switch (Component) {
-        InstanceHandle => struct {
-            pub fn add(editor: *Editor, instance_handle: *InstanceHandle) !void {
-                // TODO: move add/remove handle into decls on struct, handle in the undo/redo stack as well
-                try editor.assignEntityMeshInstance(
-                    editor.ui_state.selected_entity.?,
-                    instance_handle.mesh_handle,
-                );
-            }
-        },
-        else => null,
-    };
-}
-
-fn specializedRemoveHandle(comptime Component: type) ?type {
-    return switch (Component) {
-        InstanceHandle => struct {
-            pub fn remove(editor: *Editor) !void {
-                const zone = tracy.ZoneN(@src(), @src().fn_name);
-                defer zone.End();
-
-                const selected_entity = editor.ui_state.selected_entity.?;
-                const instance_handle = blk: {
-                    const handle = try editor.storage.getComponent(selected_entity, InstanceHandle);
-                    break :blk handle;
-                };
-
-                // destroy old instance handle
-                try editor.render_context.destroyInstanceHandle(instance_handle);
-
-                // TODO: move add/remove handle into decls on struct, handle in the undo/redo stack as well
-                // undo_blk: {
-                //     const prev_component = editor.storage.getComponent(selected_entity, Component) catch {
-                //         break :undo_blk;
-                //     };
-                //     editor.undo_stack.pushSetComponent(selected_entity, prev_component);
-                // }
-
-                // In the event a remove failed, then the select index is in a inconsistent state
-                // and we do not really have to do anything
-                editor.storage.removeComponent(selected_entity, Component) catch {
-                    // TODO: log here in debug builds
-                };
-
-                try editor.forceFlush();
-            }
-        },
-        Position, Rotation, Scale => struct {
-            pub fn remove(editor: *Editor) !void {
-                const selected_entity = editor.ui_state.selected_entity.?;
-
-                editor.storage.removeComponent(selected_entity, Component) catch {
-                    // TODO: log here in debug builds
-                };
-
-                try editor.forceFlush();
-            }
-        },
-        else => null,
-    };
-}
-
-fn componentWidget(comptime T: type, component: *T) bool {
-    const zone = tracy.ZoneN(@src(), @src().fn_name);
-    defer zone.End();
-    var component_changed = false;
-
-    const component_info = switch (@typeInfo(T)) {
-        .Struct => |info| info,
-        else => @compileError("invalid component type"),
-    };
-
-    inline for (component_info.fields, 0..) |field, i| {
-        zgui.text(" {s}:", .{field.name});
-
-        component_changed = fieldWidget(T, field.type, i, &@field(component, field.name)) or component_changed;
-    }
-
-    return component_changed;
-}
-
-fn fieldWidget(comptime Component: type, comptime T: type, comptime id_mod: usize, field: *T) bool {
-    const zone = tracy.ZoneN(@src(), @src().fn_name);
-    defer zone.End();
-
-    var input_id_buf: [2 + @typeName(Component).len + @typeName(T).len + 16]u8 = undefined;
-    const id = std.fmt.bufPrint(&input_id_buf, "##{s}{s}{d}", .{ @typeName(Component), @typeName(T), id_mod }) catch unreachable;
-    input_id_buf[id.len] = 0;
-
-    var field_changed = false;
-    const c_id = input_id_buf[0..id.len :0];
-    switch (@typeInfo(T)) {
-        .Int => {
-            var value = @as(i32, @intCast(field.*));
-            if (zgui.inputInt(c_id, .{ .v = &value })) {
-                field.* = @as(T, @intCast(value));
-                field_changed = true;
-            }
-        },
-        .Float => {
-            var value = @as(f32, @intCast(field.*));
-            if (zgui.inputFloat(c_id, .{ .v = &value })) {
-                field.* = @as(T, @intCast(value));
-                field_changed = true;
-            }
-        },
-        .Array => |array_info| {
-            switch (@typeInfo(array_info.child)) {
-                .Float => {
-                    var values: [array_info.len]f32 = undefined;
-                    for (&values, 0..) |*value, j| {
-                        value.* = @as(f32, @floatCast(field.*[j]));
-                    }
-
-                    var array_input = false;
-                    switch (array_info.len) {
-                        1 => {
-                            var value = @as(f32, @intCast(field.*));
-                            if (zgui.inputFloat(c_id, .{ .v = &value })) {
-                                array_input = true;
-                            }
-                        },
-                        2 => {
-                            if (zgui.dragFloat2(c_id, .{ .v = &values })) {
-                                array_input = true;
-                            }
-                        },
-                        3 => {
-                            if (zgui.dragFloat3(c_id, .{ .v = &values })) {
-                                array_input = true;
-                            }
-                        },
-                        4 => {
-                            if (zgui.dragFloat4(c_id, .{ .v = &values })) {
-                                array_input = true;
-                            }
-                        },
-                        else => std.debug.panic("unimplemented array length of {d}", .{array_info.len}),
-                    }
-                    if (array_input) {
-                        field_changed = true;
-                        for (values, 0..) |value, j| {
-                            field.*[j] = @as(array_info.child, @floatCast(value));
-                        }
-                    }
-                },
-                .Int => {
-                    if (array_info.child == u8) {
-                        if (zgui.inputText(c_id, .{ .buf = field })) {
-                            field_changed = true;
-                        }
-                    } else {
-                        var values: [array_info.len]i32 = undefined;
-                        for (values, 0..) |*value, j| {
-                            value.* = @as(i32, @floatCast(field.*[j]));
-                        }
-
-                        var array_input = false;
-                        switch (array_info.len) {
-                            1 => {
-                                var value = @as(i32, @intCast(field.*));
-                                if (zgui.inputFloat(c_id, .{ .v = &value })) {
-                                    array_input = true;
-                                }
-                            },
-                            2 => {
-                                if (zgui.inputFloat2(c_id, .{ .v = &values })) {
-                                    array_input = true;
-                                }
-                            },
-                            3 => {
-                                if (zgui.inputFloat3(c_id, .{ .v = &values })) {
-                                    array_input = true;
-                                }
-                            },
-                            4 => {
-                                if (zgui.inputFloat4(c_id, .{ .v = &values })) {
-                                    array_input = true;
-                                }
-                            },
-                            else => std.debug.panic("unimplemented array length of {d}", .{array_info.len}),
-                        }
-                        if (array_input) {
-                            field_changed = true;
-                            for (values, 0..) |value, j| {
-                                field.*[j] = @as(array_info.child, @floatCast(value));
-                            }
-                        }
-                    }
-                },
-                .Vector => |vec_info| {
-                    comptime var index: usize = 0;
-                    inline while (index < vec_info.len) : (index += 1) {
-                        field_changed = field_changed or fieldWidget(Component, @TypeOf(field[index]), (id_mod + index) << 1, &field[index]);
-                    }
-                },
-                else => std.debug.panic("unimplemented array type of {s}", .{@typeName(array_info.child)}),
-            }
-        },
-        .Vector => |vec_info| {
-            switch (@typeInfo(vec_info.child)) {
-                .Float => {
-                    var values: [vec_info.len]f32 = undefined;
-                    for (&values, 0..) |*value, j| {
-                        value.* = @as(f32, @floatCast(field.*[j]));
-                    }
-
-                    if (fieldWidget(Component, @TypeOf(values), id_mod << 1, &values)) {
-                        for (values, 0..) |value, j| {
-                            field.*[j] = value;
-                        }
-
-                        field_changed = true;
-                    }
-                },
-                .Int => {
-                    var values: [vec_info.len]i32 = undefined;
-                    for (&values, 0..) |*value, j| {
-                        value.* = @as(i32, @floatCast(field.*[j]));
-                    }
-
-                    if (fieldWidget(Component, @TypeOf(values), id_mod << 1, &values)) {
-                        for (values, 0..) |value, j| {
-                            field.*[j] = value;
-                        }
-
-                        field_changed = true;
-                    }
-                },
-                else => std.debug.panic("unimplemented vector type of {s}", .{@typeName(vec_info.child)}),
-            }
-        },
-        .Pointer => |ptr_info| {
-            _ = ptr_info;
-            std.debug.panic("todo", .{});
-        },
-        else => std.debug.panic("unimplemented type of {s}", .{@typeName(field.type)}),
-    }
-
-    return field_changed;
-}
 
 const UiState = struct {
     const ObjectList = struct {
@@ -480,7 +99,7 @@ const CameraState = struct {
     // roll always 0
 };
 
-const EditorStorage = ecez.CreateStorage(componentTypeArrayToTuple(&all_components));
+const EditorStorage = ecez.CreateStorage(component_reflect.all_components_tuple);
 
 // TODO: convert on_import to simple queries inline
 const Scheduler = ecez.CreateScheduler(EditorStorage, .{
@@ -1254,12 +873,12 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                                     };
 
                                     // if component has specialized widget
-                                    if (overrideWidgetGenerator(Component)) |Override| {
+                                    if (component_reflect.overrideWidgetGenerator(Component)) |Override| {
                                         // call manually implemented widget
                                         _ = Override.widget(self, component_ptr);
                                     } else {
                                         // .. or generated widget
-                                        _ = componentWidget(Component, component_ptr);
+                                        _ = component_reflect.componentWidget(Component, component_ptr);
                                     }
                                 }
                             }
@@ -1277,7 +896,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                                         @ptrCast(@alignCast(&self.ui_state.add_component_modal.component_bytes)),
                                     );
 
-                                    if (specializedAddHandle(Component)) |add_handle| {
+                                    if (component_reflect.specializedAddHandle(Component)) |add_handle| {
                                         try add_handle.add(self, component);
                                     } else {
 
@@ -1318,7 +937,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 zgui.sameLine(.{});
 
                 {
-                    const object_metadata_selected = object_metadata_index == self.ui_state.object_inspector.selected_component_index;
+                    const object_metadata_selected = component_reflect.object_metadata_index == self.ui_state.object_inspector.selected_component_index;
                     const nothing_selected = self.ui_state.object_inspector.selected_component_index == all_components.len;
                     zgui.beginDisabled(.{
                         .disabled = object_metadata_selected or nothing_selected,
@@ -1329,7 +948,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                         inline for (all_components, 0..) |Component, comp_index| {
                             // deleting the metadata of an entity is illegal
                             if (Component != EntityMetadata and comp_index == self.ui_state.object_inspector.selected_component_index) {
-                                if (specializedRemoveHandle(Component)) |remove_handle| {
+                                if (component_reflect.specializedRemoveHandle(Component)) |remove_handle| {
                                     try remove_handle.remove(self);
                                 } else {
                                     undo_blk: {
@@ -1368,12 +987,12 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                         var component = self.storage.getComponent(selected_entity, Component) catch unreachable;
                         var changed = false;
                         // if component has specialized widget
-                        if (overrideWidgetGenerator(Component)) |Override| {
+                        if (component_reflect.overrideWidgetGenerator(Component)) |Override| {
                             // call manually implemented widget
                             changed = Override.widget(self, &component);
                         } else {
                             // .. or generated widget
-                            changed = componentWidget(Component, &component);
+                            changed = component_reflect.componentWidget(Component, &component);
                         }
 
                         if (changed) {
@@ -1679,7 +1298,7 @@ pub fn createNewVisbleObject(
     }
 }
 
-fn forceFlush(self: *Editor) !void {
+pub fn forceFlush(self: *Editor) !void {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
