@@ -88,17 +88,6 @@ const InputState = struct {
     previous_cursor_ypos: f64 = 0,
 };
 
-const CameraState = struct {
-    movement_speed: zm.Vec,
-    movement_vector: zm.Vec,
-    position: zm.Vec,
-
-    turn_rate: f64,
-    yaw: f64 = 0,
-    pitch: f64 = 0,
-    // roll always 0
-};
-
 const EditorStorage = ecez.CreateStorage(component_reflect.all_components_tuple);
 
 // TODO: convert on_import to simple queries inline
@@ -134,13 +123,14 @@ scheduler: Scheduler,
 
 render_context: RenderContext,
 ui_state: UiState,
-camera_state: CameraState,
 input_state: InputState,
 
 icons: EditorIcons,
 user_pointer: UserPointer,
 
 undo_stack: UndoRedoStack,
+
+active_camera: ?ecez.Entity = null,
 
 pub fn init(
     allocator: Allocator,
@@ -240,12 +230,6 @@ pub fn init(
         .scheduler = scheduler,
         .render_context = render_context,
         .ui_state = ui_state,
-        .camera_state = CameraState{
-            .movement_speed = @splat(20),
-            .movement_vector = zm.f32x4(0, 0, 0, 0),
-            .position = zm.f32x4(0, 0, -4, 0),
-            .turn_rate = 0.0005,
-        },
         .input_state = InputState{},
         .icons = EditorIcons.init(render_context.imgui_pipeline.texture_indices),
         .user_pointer = undefined, // assigned by setCameraInput
@@ -393,26 +377,47 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
-    if (self.ui_state.camera_control_active) {
+    // TODO: Move out of newFrame, into update function instead ...
+    {
         const camera_zone = tracy.ZoneN(@src(), @src().fn_name ++ " camera control");
         defer camera_zone.End();
 
-        const yaw_quat = zm.quatFromAxisAngle(zm.f32x4(0.0, 1.0, 0.0, 0.0), @floatCast(self.camera_state.yaw));
-        const pitch_quat = zm.quatFromAxisAngle(zm.f32x4(1.0, 0.0, 0.0, 0.0), @floatCast(self.camera_state.pitch));
-        const orientation = zm.qmul(yaw_quat, pitch_quat);
+        if (self.validActiveCamera()) {
+            const active_camera = self.active_camera.?; // validActiveCamera only true when set
 
-        const is_movement_vector_set = @reduce(.Min, self.camera_state.movement_vector) != 0 or @reduce(.Max, self.camera_state.movement_vector) != 0;
-        if (is_movement_vector_set) {
-            const movement_dir = zm.normalize3(zm.rotate(zm.conjugate(orientation), self.camera_state.movement_vector));
-            const actionable_movement = movement_dir * self.camera_state.movement_speed;
+            // calculate the current camera orientation
+            const orientation = orientation_calc_blk: {
+                const camera_state = self.storage.getComponent(active_camera, game.components.Camera) catch unreachable;
 
-            const delta_time_vec = @as(zm.Vec, @splat(delta_time));
-            self.camera_state.position += actionable_movement * delta_time_vec;
+                const yaw_quat = zm.quatFromAxisAngle(zm.f32x4(0.0, 1.0, 0.0, 0.0), @floatCast(camera_state.yaw));
+                const pitch_quat = zm.quatFromAxisAngle(zm.f32x4(1.0, 0.0, 0.0, 0.0), @floatCast(camera_state.pitch));
+                break :orientation_calc_blk zm.qmul(yaw_quat, pitch_quat);
+            };
+
+            // fetch the camera position pointer and calculate the position delta
+            const camera_position_ptr = self.storage.getComponent(active_camera, *game.components.Position) catch unreachable;
+            camera_position_ptr.vec += calc_position_delta_blk: {
+                const camera_velocity = self.storage.getComponent(active_camera, game.components.Velocity) catch unreachable;
+                const camera_movespeed = self.storage.getComponent(active_camera, game.components.MoveSpeed) catch unreachable;
+                const is_movement_vector_set = @reduce(.Min, camera_velocity.vec) != 0 or @reduce(.Max, camera_velocity.vec) != 0;
+                if (is_movement_vector_set) {
+                    const movement_dir = zm.normalize3(zm.rotate(zm.conjugate(orientation), zm.normalize3(camera_velocity.vec)));
+                    const actionable_movement = movement_dir * camera_movespeed.vec;
+
+                    const delta_time_vec = @as(zm.Vec, @splat(delta_time));
+
+                    break :calc_position_delta_blk actionable_movement * delta_time_vec;
+                }
+
+                break :calc_position_delta_blk @splat(0);
+            };
+
+            // apply update render camera with editor camera
+            self.render_context.camera.view = RenderContext.Camera.calcView(orientation, camera_position_ptr.vec);
         }
+    }
 
-        // apply update render camera with editor camera
-        self.render_context.camera.view = RenderContext.Camera.calcView(orientation, self.camera_state.position);
-    } else {
+    if (false == self.ui_state.camera_control_active) {
         // If we are not controlling the camera, then we should update cursor if needed
         // NOTE: getting cursor must be done before calling zgui.newFrame
         window.setInputModeCursor(.normal);
@@ -504,14 +509,23 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 if (self.icons.button(.new_object, "new_object_button##00", "spawn new entity in the scene", EditorIcons.icon_size, EditorIcons.icon_size, .{})) {
                     try self.createNewEntityMenu();
                 }
-                const camera_icon = if (self.ui_state.camera_control_active) Icons.camera_on else Icons.camera_off;
-                if (self.icons.button(camera_icon, "camera_control_button##00", "control camera with key and mouse (esc to exit)", EditorIcons.icon_size, EditorIcons.icon_size, .{})) {
-                    if (self.ui_state.camera_control_active == false) {
-                        self.ui_state.camera_control_active = true;
-                        setCameraInput(window);
-                    } else {
-                        self.ui_state.camera_control_active = false;
-                        setEditorInput(window);
+
+                // camera control button
+                {
+                    zgui.beginDisabled(.{
+                        .disabled = false == self.validActiveCamera(),
+                    });
+                    defer zgui.endDisabled();
+
+                    const camera_icon = if (self.ui_state.camera_control_active) Icons.camera_on else Icons.camera_off;
+                    if (self.icons.button(camera_icon, "camera_control_button##00", "control camera with key and mouse (esc to exit)", EditorIcons.icon_size, EditorIcons.icon_size, .{})) {
+                        if (self.ui_state.camera_control_active == false) {
+                            self.ui_state.camera_control_active = true;
+                            setCameraInput(window);
+                        } else {
+                            self.ui_state.camera_control_active = false;
+                            setEditorInput(window);
+                        }
                     }
                 }
             }
@@ -644,8 +658,8 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
         // define Object List
         object_list_blk: {
-            const camera_zone = tracy.ZoneN(@src(), @src().fn_name ++ " object list");
-            defer camera_zone.End();
+            const object_list_zone = tracy.ZoneN(@src(), @src().fn_name ++ " object list");
+            defer object_list_zone.End();
 
             if (self.ui_state.object_list_active == false) {
                 break :object_list_blk;
@@ -749,8 +763,8 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
         // define Object Inspector
         object_inspector_blk: {
-            const camera_zone = tracy.ZoneN(@src(), @src().fn_name ++ " object inspector");
-            defer camera_zone.End();
+            const object_inspector_zone = tracy.ZoneN(@src(), @src().fn_name ++ " object inspector");
+            defer object_inspector_zone.End();
 
             if (self.ui_state.object_inspector_active == false) {
                 break :object_inspector_blk;
@@ -797,6 +811,14 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                         }
 
                         try self.storage.setComponent(selected_entity, metadata);
+                    }
+                }
+
+                if (self.active_camera) |camera_entity| {
+                    if (selected_entity.id != camera_entity.id) {
+                        if (self.icons.button(.camera_off, "Set active camera##00", "make current entity the active scene camera", EditorIcons.icon_size, EditorIcons.icon_size, .{})) {
+                            self.active_camera = selected_entity;
+                        }
                     }
                 }
 
@@ -1022,6 +1044,55 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
     try self.render_context.drawFrame(window, delta_time);
 }
 
+pub fn createTestScene(self: *Editor) !void {
+    // load some test stuff while we are missing a file format for scenes
+    const box_mesh_handle = self.getMeshHandleFromName("BoxTextured").?;
+    try self.createNewVisbleObject("box", box_mesh_handle, Editor.FlushAllObjects.no, .{
+        .rotation = game.components.Rotation{ .quat = zm.quatFromNormAxisAngle(zm.f32x4(0, 0, 1, 0), std.math.pi) },
+        .position = game.components.Position{ .vec = zm.f32x4(-1, 0, 0, 0) },
+        .scale = game.components.Scale{ .vec = zm.f32x4(1, 1, 1, 1) },
+    });
+
+    const helmet_mesh_handle = self.getMeshHandleFromName("SciFiHelmet").?;
+    try self.createNewVisbleObject("helmet", helmet_mesh_handle, Editor.FlushAllObjects.yes, .{
+        .rotation = game.components.Rotation{ .quat = zm.quatFromNormAxisAngle(zm.f32x4(0, 1, 0, 0), std.math.pi * 0.5) },
+        .position = game.components.Position{ .vec = zm.f32x4(1, 0, 0, 0) },
+    });
+
+    // camera init
+    {
+        const CameraArch = struct {
+            b: game.components.Position = .{ .vec = zm.f32x4(0, 0, -4, 0) },
+            c: game.components.MoveSpeed = .{ .vec = @splat(20) },
+            d: game.components.Velocity = .{ .vec = @splat(0) },
+            e: game.components.Camera = .{ .turn_rate = 0.0005 },
+        };
+
+        const active_camera = try self.newSceneEntity("default_camera");
+        try self.storage.setComponents(active_camera, CameraArch{});
+        self.active_camera = active_camera;
+    }
+}
+
+pub fn validActiveCamera(self: *Editor) bool {
+    const active_camera = self.active_camera orelse return false;
+
+    const expected_camera_components = [_]type{
+        game.components.Position,
+        game.components.MoveSpeed,
+        game.components.Velocity,
+        game.components.Camera,
+    };
+
+    inline for (expected_camera_components) |Component| {
+        if (false == self.storage.hasComponent(active_camera, Component)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 pub fn handleFramebufferResize(self: *Editor, window: glfw.Window) void {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
@@ -1149,18 +1220,23 @@ pub fn setCameraInput(window: glfw.Window) void {
                 .repeat => return,
             };
 
-            switch (input_key) {
-                .w => editor_ptr.camera_state.movement_vector[2] += axist_value,
-                .a => editor_ptr.camera_state.movement_vector[0] += axist_value,
-                .s => editor_ptr.camera_state.movement_vector[2] -= axist_value,
-                .d => editor_ptr.camera_state.movement_vector[0] -= axist_value,
-                // exit camera mode
-                .escape => {
-                    editor_ptr.camera_state.movement_vector = @splat(0);
-                    editor_ptr.ui_state.camera_control_active = false;
-                    setEditorInput(_window);
-                },
-                else => {},
+            if (editor_ptr.active_camera) |camera_entity| {
+                // TODO: log error
+                const camera_velocity_ptr = editor_ptr.storage.getComponent(camera_entity, *game.components.Velocity) catch unreachable;
+
+                switch (input_key) {
+                    .w => camera_velocity_ptr.vec[2] += axist_value,
+                    .a => camera_velocity_ptr.vec[0] += axist_value,
+                    .s => camera_velocity_ptr.vec[2] -= axist_value,
+                    .d => camera_velocity_ptr.vec[0] -= axist_value,
+                    // exit camera mode
+                    .escape => {
+                        camera_velocity_ptr.vec = @splat(0);
+                        editor_ptr.ui_state.camera_control_active = false;
+                        setEditorInput(_window);
+                    },
+                    else => {},
+                }
             }
         }
 
@@ -1192,8 +1268,15 @@ pub fn setCameraInput(window: glfw.Window) void {
             const x_delta = xpos - editor_ptr.input_state.previous_cursor_xpos;
             const y_delta = ypos - editor_ptr.input_state.previous_cursor_ypos;
 
-            editor_ptr.camera_state.yaw += x_delta * editor_ptr.camera_state.turn_rate;
-            editor_ptr.camera_state.pitch -= y_delta * editor_ptr.camera_state.turn_rate;
+            camera_update_blk: {
+                if (editor_ptr.active_camera) |camera_entity| {
+                    const camera_ptr = editor_ptr.storage.getComponent(camera_entity, *game.components.Camera) catch {
+                        break :camera_update_blk;
+                    };
+                    camera_ptr.yaw += x_delta * camera_ptr.turn_rate;
+                    camera_ptr.pitch -= y_delta * camera_ptr.turn_rate;
+                }
+            }
         }
 
         pub fn scroll(_window: glfw.Window, xoffset: f64, yoffset: f64) void {

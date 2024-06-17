@@ -265,9 +265,9 @@ pub fn fieldWidget(comptime Component: type, comptime T: type, comptime id_mod: 
             }
         },
         .Float => {
-            var value = @as(f32, @intCast(field.*));
+            var value = @as(f32, @floatCast(field.*));
             if (zgui.inputFloat(c_id, .{ .v = &value })) {
-                field.* = @as(T, @intCast(value));
+                field.* = @as(T, @floatCast(value));
                 field_changed = true;
             }
         },
@@ -282,7 +282,7 @@ pub fn fieldWidget(comptime Component: type, comptime T: type, comptime id_mod: 
                     var array_input = false;
                     switch (array_info.len) {
                         1 => {
-                            var value = @as(f32, @intCast(field.*));
+                            var value = @as(f32, @floatCast(field.*));
                             if (zgui.inputFloat(c_id, .{ .v = &value })) {
                                 array_input = true;
                             }

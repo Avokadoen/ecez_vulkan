@@ -101,20 +101,8 @@ fn editorMain(allocator: std.mem.Allocator, asset_handler: core.AssetHandler, wi
     // handle if user resize window
     editor.handleFramebufferResize(window);
 
-    // TODO: make a test scene while file format facilities are not in place
-    // load some test stuff while we are missing a file format for scenes
-    const box_mesh_handle = editor.getMeshHandleFromName("BoxTextured").?;
-    try editor.createNewVisbleObject("box", box_mesh_handle, Editor.FlushAllObjects.no, .{
-        .rotation = game.components.Rotation{ .quat = zm.quatFromNormAxisAngle(zm.f32x4(0, 0, 1, 0), std.math.pi) },
-        .position = game.components.Position{ .vec = zm.f32x4(-1, 0, 0, 0) },
-        .scale = game.components.Scale{ .vec = zm.f32x4(1, 1, 1, 1) },
-    });
-
-    const helmet_mesh_handle = editor.getMeshHandleFromName("SciFiHelmet").?;
-    try editor.createNewVisbleObject("helmet", helmet_mesh_handle, Editor.FlushAllObjects.yes, .{
-        .rotation = game.components.Rotation{ .quat = zm.quatFromNormAxisAngle(zm.f32x4(0, 1, 0, 0), std.math.pi * 0.5) },
-        .position = game.components.Position{ .vec = zm.f32x4(1, 0, 0, 0) },
-    });
+    // create default test scene
+    try editor.createTestScene();
 
     var then = std.time.microTimestamp();
     // Wait for the user to close the window.
