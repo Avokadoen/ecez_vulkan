@@ -227,6 +227,17 @@ fn specializedRemoveHandle(comptime Component: type) ?type {
                 try editor.forceFlush();
             }
         },
+        Position, Rotation, Scale => struct {
+            pub fn remove(editor: *Editor) !void {
+                const selected_entity = editor.ui_state.selected_entity.?;
+
+                editor.storage.removeComponent(selected_entity, Component) catch {
+                    // TODO: log here in debug builds
+                };
+
+                try editor.forceFlush();
+            }
+        },
         else => null,
     };
 }
