@@ -366,15 +366,14 @@ fn deserializeAndSyncState(self: *Editor, bytes: []const u8) !void {
     }
 }
 
-pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
+pub fn update(self: *Editor, delta_time: f32) void {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
-    // TODO: Move out of newFrame, into update function instead ...
     {
         const camera_zone = tracy.ZoneN(@src(), @src().fn_name ++ " camera control");
         defer camera_zone.End();
-
+        // TODO: convert to system?
         if (self.validCameraEntity(self.active_camera)) {
             const active_camera = self.active_camera.?; // validCameraEntity only true when set
 
@@ -409,7 +408,13 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
             self.render_context.camera.view = RenderContext.Camera.calcView(orientation, camera_position_ptr.vec);
         }
     }
+}
 
+pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
+    const zone = tracy.ZoneN(@src(), @src().fn_name);
+    defer zone.End();
+
+    // TODO: Move out of newFrame, into update function instead ...
     if (false == self.ui_state.camera_control_active) {
         // If we are not controlling the camera, then we should update cursor if needed
         // NOTE: getting cursor must be done before calling zgui.newFrame
@@ -1044,7 +1049,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
         }
     }
 
-    try self.render_context.drawFrame(window, delta_time);
+    try self.render_context.drawFrame(window);
 
     try self.forceFlush();
 }

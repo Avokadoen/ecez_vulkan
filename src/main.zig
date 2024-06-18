@@ -115,6 +115,7 @@ fn editorMain(allocator: std.mem.Allocator, asset_handler: core.AssetHandler, wi
         const delta_time = @max(@as(f32, @floatFromInt(now - then)) / std.time.us_per_s, 0.000001);
         then = now;
 
+        editor.update(delta_time);
         try editor.newFrame(window, delta_time);
     }
 }

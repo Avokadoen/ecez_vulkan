@@ -49,7 +49,6 @@ pub const enable_imgui = true;
 pub const MeshHandle = u16;
 
 pub const UpdateRate = union(enum) {
-    time_seconds: f32, // every nth microsecond
     every_nth_frame: u32, // every nth frame
     always: void,
     manually: void,
@@ -1386,7 +1385,7 @@ pub inline fn signalUpdate(self: *Render) void {
     self.missing_updated_frames = max_frames_in_flight;
 }
 
-pub fn drawFrame(self: *Render, window: glfw.Window, delta_time: f32) !void {
+pub fn drawFrame(self: *Render, window: glfw.Window) !void {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
@@ -1408,14 +1407,6 @@ pub fn drawFrame(self: *Render, window: glfw.Window, delta_time: f32) !void {
                     self.missing_updated_frames = max_frames_in_flight;
                 } else {
                     self.last_update.every_nth_frame += 1;
-                }
-            },
-            .time_seconds => |ms| {
-                if (self.last_update.time_seconds >= ms) {
-                    self.last_update.time_seconds = 0;
-                    self.missing_updated_frames = max_frames_in_flight;
-                } else {
-                    self.last_update.time_seconds += delta_time;
                 }
             },
             .manually => {},
