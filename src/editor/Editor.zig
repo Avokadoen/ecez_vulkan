@@ -814,22 +814,25 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                     }
                 }
 
-                const needs_dummy_space = entity_icons_blk: {
-                    if (self.active_camera) |camera_entity| {
-                        if (selected_entity.id != camera_entity.id and self.validCameraEntity(selected_entity)) {
-                            if (self.icons.button(.camera_off, "Set active camera##00", "make current entity the active scene camera", EditorIcons.icon_size, EditorIcons.icon_size, .{})) {
-                                self.active_camera = selected_entity;
+                // entity buttons
+                {
+                    const needs_dummy_space = entity_icons_blk: {
+                        if (self.active_camera) |camera_entity| {
+                            if (selected_entity.id != camera_entity.id and self.validCameraEntity(selected_entity)) {
+                                if (self.icons.button(.camera_off, "Set active camera##00", "make current entity the active scene camera", EditorIcons.icon_size, EditorIcons.icon_size, .{})) {
+                                    self.active_camera = selected_entity;
+                                }
+
+                                break :entity_icons_blk false;
                             }
-
-                            break :entity_icons_blk false;
                         }
-                    }
-                    break :entity_icons_blk true;
-                };
+                        break :entity_icons_blk true;
+                    };
 
-                // TODO: this does not match icon height for some reason (buttons has padding on image)
-                if (needs_dummy_space) {
-                    zgui.dummy(.{ .w = EditorIcons.icon_size, .h = EditorIcons.icon_size + 2 });
+                    // TODO: this does not match icon height for some reason (buttons has padding on image)
+                    if (needs_dummy_space) {
+                        zgui.dummy(.{ .w = EditorIcons.icon_size, .h = EditorIcons.icon_size + 2 });
+                    }
                 }
 
                 zgui.separator();
