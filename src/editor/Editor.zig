@@ -382,8 +382,8 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
         const camera_zone = tracy.ZoneN(@src(), @src().fn_name ++ " camera control");
         defer camera_zone.End();
 
-        if (self.validActiveCamera()) {
-            const active_camera = self.active_camera.?; // validActiveCamera only true when set
+        if (self.validCameraEntity(self.active_camera)) {
+            const active_camera = self.active_camera.?; // validCameraEntity only true when set
 
             // calculate the current camera orientation
             const orientation = orientation_calc_blk: {
@@ -513,7 +513,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 // camera control button
                 {
                     zgui.beginDisabled(.{
-                        .disabled = false == self.validActiveCamera(),
+                        .disabled = false == self.validCameraEntity(self.active_camera),
                     });
                     defer zgui.endDisabled();
 
@@ -814,12 +814,22 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                     }
                 }
 
-                if (self.active_camera) |camera_entity| {
-                    if (selected_entity.id != camera_entity.id) {
-                        if (self.icons.button(.camera_off, "Set active camera##00", "make current entity the active scene camera", EditorIcons.icon_size, EditorIcons.icon_size, .{})) {
-                            self.active_camera = selected_entity;
+                const needs_dummy_space = entity_icons_blk: {
+                    if (self.active_camera) |camera_entity| {
+                        if (selected_entity.id != camera_entity.id and self.validCameraEntity(selected_entity)) {
+                            if (self.icons.button(.camera_off, "Set active camera##00", "make current entity the active scene camera", EditorIcons.icon_size, EditorIcons.icon_size, .{})) {
+                                self.active_camera = selected_entity;
+                            }
+
+                            break :entity_icons_blk false;
                         }
                     }
+                    break :entity_icons_blk true;
+                };
+
+                // TODO: this does not match icon height for some reason (buttons has padding on image)
+                if (needs_dummy_space) {
+                    zgui.dummy(.{ .w = EditorIcons.icon_size, .h = EditorIcons.icon_size + 2 });
                 }
 
                 zgui.separator();
@@ -1074,8 +1084,8 @@ pub fn createTestScene(self: *Editor) !void {
     }
 }
 
-pub fn validActiveCamera(self: *Editor) bool {
-    const active_camera = self.active_camera orelse return false;
+pub fn validCameraEntity(self: *Editor, entity: ?ecez.Entity) bool {
+    const camera_entity = entity orelse return false;
 
     const expected_camera_components = [_]type{
         game.components.Position,
@@ -1085,7 +1095,7 @@ pub fn validActiveCamera(self: *Editor) bool {
     };
 
     inline for (expected_camera_components) |Component| {
-        if (false == self.storage.hasComponent(active_camera, Component)) {
+        if (false == self.storage.hasComponent(camera_entity, Component)) {
             return false;
         }
     }
