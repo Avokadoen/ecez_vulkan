@@ -146,7 +146,7 @@ pub fn init(
         window,
         asset_handler,
         mesh_instance_initalizers,
-        .{ .update_rate = .manually },
+        .{ .update_rate = .always },
     );
     errdefer render_context.deinit(allocator);
 
@@ -263,10 +263,6 @@ pub fn popUndoStack(self: *Editor) void {
     self.undo_stack.popAction(&self.storage) catch {
         // TODO: log in debug
     };
-
-    // TODO: Not needed always, only render components
-    // propagate all the changes to the GPU
-    try self.forceFlush();
 }
 
 pub fn exportEditorSceneToFile(self: *Editor, file_name: []const u8) !void {
@@ -368,9 +364,6 @@ fn deserializeAndSyncState(self: *Editor, bytes: []const u8) !void {
     while (instance_handle_iter.next()) |item| {
         item.instance_handle.* = try self.render_context.getNewInstance(item.instance_handle.mesh_handle);
     }
-
-    // propagate all the changes to the GPU
-    try self.forceFlush();
 }
 
 pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
@@ -948,8 +941,6 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
                                         try self.storage.setComponent(selected_entity, component.*);
                                     }
-
-                                    try self.forceFlush();
                                 }
                             }
 
@@ -1044,7 +1035,6 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                             }
 
                             try self.storage.setComponent(selected_entity, component);
-                            try self.forceFlush();
                         }
 
                         zgui.separator();
@@ -1055,19 +1045,21 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
     }
 
     try self.render_context.drawFrame(window, delta_time);
+
+    try self.forceFlush();
 }
 
 pub fn createTestScene(self: *Editor) !void {
     // load some test stuff while we are missing a file format for scenes
     const box_mesh_handle = self.getMeshHandleFromName("BoxTextured").?;
-    try self.createNewVisbleObject("box", box_mesh_handle, Editor.FlushAllObjects.no, .{
+    try self.createNewVisbleObject("box", box_mesh_handle, .{
         .rotation = game.components.Rotation{ .quat = zm.quatFromNormAxisAngle(zm.f32x4(0, 0, 1, 0), std.math.pi) },
         .position = game.components.Position{ .vec = zm.f32x4(-1, 0, 0, 0) },
         .scale = game.components.Scale{ .vec = zm.f32x4(1, 1, 1, 1) },
     });
 
     const helmet_mesh_handle = self.getMeshHandleFromName("SciFiHelmet").?;
-    try self.createNewVisbleObject("helmet", helmet_mesh_handle, Editor.FlushAllObjects.yes, .{
+    try self.createNewVisbleObject("helmet", helmet_mesh_handle, .{
         .rotation = game.components.Rotation{ .quat = zm.quatFromNormAxisAngle(zm.f32x4(0, 1, 0, 0), std.math.pi * 0.5) },
         .position = game.components.Position{ .vec = zm.f32x4(1, 0, 0, 0) },
     });
@@ -1351,12 +1343,6 @@ pub fn signalRenderUpdate(self: *Editor) void {
     self.render_context.signalUpdate();
 }
 
-/// Wether createNewVisbleObject should update all transforms and submit all scene object
-/// state to the GPU
-pub const FlushAllObjects = enum(u1) {
-    yes,
-    no,
-};
 pub const VisibleObjectConfig = struct {
     position: ?Editor.Position = null,
     rotation: ?Editor.Rotation = null,
@@ -1368,7 +1354,6 @@ pub fn createNewVisbleObject(
     self: *Editor,
     object_name: []const u8,
     mesh_handle: RenderContext.MeshHandle,
-    comptime flush_all_objects: FlushAllObjects,
     config: VisibleObjectConfig,
 ) !void {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
@@ -1386,12 +1371,6 @@ pub fn createNewVisbleObject(
     if (config.scale) |scale| {
         try self.storage.setComponent(new_entity, scale);
     }
-
-    // Make sure editor updates renderer after we have set some render state programatically.
-    // This is highly sub-optimal and should not be done in any hot loop
-    if (flush_all_objects == .yes) {
-        try self.forceFlush();
-    }
 }
 
 pub fn forceFlush(self: *Editor) !void {
@@ -1400,7 +1379,9 @@ pub fn forceFlush(self: *Editor) !void {
 
     self.scheduler.dispatchEvent(&self.storage, .transform_update, &self.render_context, .{});
     self.scheduler.waitEvent(.transform_update);
-    self.signalRenderUpdate();
+
+    // Currently the renderer is configured to always flush
+    // self.signalRenderUpdate();
 }
 
 /// Display imgui menu with a list of options for a new entity
@@ -1422,7 +1403,7 @@ inline fn createNewEntityMenu(self: *Editor) !void {
             const c_name: *[:0]const u8 = @ptrCast(mesh_name_entry);
             if (zgui.menuItem(c_name.*, .{})) {
                 const mesh_handle = self.getMeshHandleFromName(c_name.*).?;
-                try self.createNewVisbleObject(c_name.*, mesh_handle, .yes, .{});
+                try self.createNewVisbleObject(c_name.*, mesh_handle, .{});
             }
         }
     }
