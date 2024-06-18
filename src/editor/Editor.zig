@@ -1225,8 +1225,8 @@ pub fn setCameraInput(window: glfw.Window) void {
                 .repeat => return,
             };
 
-            if (editor_ptr.active_camera) |camera_entity| {
-                // TODO: log error
+            if (editor_ptr.validCameraEntity(editor_ptr.active_camera)) {
+                const camera_entity = editor_ptr.active_camera.?;
                 const camera_velocity_ptr = editor_ptr.storage.getComponent(camera_entity, *game.components.Velocity) catch unreachable;
 
                 switch (input_key) {
