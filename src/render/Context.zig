@@ -48,10 +48,9 @@ pub const enable_imgui = true;
 
 pub const MeshHandle = u16;
 
-pub const UpdateRate = union(enum) {
-    every_nth_frame: u32, // every nth frame
-    always: void,
-    manually: void,
+pub const UpdateRate = enum {
+    always,
+    manually,
 };
 
 pub const Config = struct {
@@ -97,7 +96,10 @@ pub const Camera = struct {
         const zone = tracy.ZoneN(@src(), @src().fn_name);
         defer zone.End();
 
-        return zm.mul(zm.translationV(pos), zm.quatToMat(orientation));
+        const look_to = zm.normalize3(zm.rotate(zm.conjugate(orientation), zm.f32x4(0.0, 0.0, 1.0, 0.0)));
+        const up = zm.f32x4(0.0, 1.0, 0.0, 0.0);
+        const view = zm.lookToLh(pos, look_to, up);
+        return view;
     }
 
     pub fn calcProjection(swapchain_extent: vk.Extent2D, fov_degree: f32) zm.Mat {
@@ -1389,11 +1391,6 @@ pub fn drawFrame(self: *Render, window: glfw.Window) !void {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
-    // if minimized, no point in drawing
-    if (self.isMinimized()) {
-        return;
-    }
-
     // TODO: utilize comptime for this when we introduce the component logic (issue #23)?
     {
         const update_rate_zone = tracy.ZoneN(@src(), @src().fn_name ++ " update rate zone");
@@ -1401,14 +1398,6 @@ pub fn drawFrame(self: *Render, window: glfw.Window) !void {
 
         switch (self.update_rate) {
             .always => self.missing_updated_frames = max_frames_in_flight,
-            .every_nth_frame => |frame| {
-                if (self.last_update.every_nth_frame >= frame) {
-                    self.last_update.every_nth_frame = 0;
-                    self.missing_updated_frames = max_frames_in_flight;
-                } else {
-                    self.last_update.every_nth_frame += 1;
-                }
-            },
             .manually => {},
         }
     }
@@ -1428,6 +1417,14 @@ pub fn drawFrame(self: *Render, window: glfw.Window) !void {
             DrawInstance,
             self.instance_data.items,
         );
+
+        // flush instance data changes to GPU before rendering
+        try self.instance_data_buffer.flush(self.vkd, self.device);
+    }
+
+    // if minimized, no point in drawing
+    if (self.isMinimized()) {
+        return;
     }
 
     {
@@ -1438,11 +1435,6 @@ pub fn drawFrame(self: *Render, window: glfw.Window) !void {
     }
 
     if (enable_imgui) {
-        const imgui_flush_zone = tracy.ZoneN(@src(), @src().fn_name ++ " imgui flush");
-        defer imgui_flush_zone.End();
-
-        // flush instance data changes to GPU before rendering
-        try self.instance_data_buffer.flush(self.vkd, self.device);
         self.imgui_pipeline.updateDisplay(self.swapchain_extent);
     }
 

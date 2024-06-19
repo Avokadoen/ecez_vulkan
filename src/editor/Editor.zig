@@ -1050,7 +1050,6 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
     }
 
     try self.render_context.drawFrame(window);
-
     try self.forceFlush();
 }
 
@@ -1235,10 +1234,10 @@ pub fn setCameraInput(window: glfw.Window) void {
                 const camera_velocity_ptr = editor_ptr.storage.getComponent(camera_entity, *game.components.Velocity) catch unreachable;
 
                 switch (input_key) {
-                    .w => camera_velocity_ptr.vec[2] += axist_value,
-                    .a => camera_velocity_ptr.vec[0] += axist_value,
-                    .s => camera_velocity_ptr.vec[2] -= axist_value,
-                    .d => camera_velocity_ptr.vec[0] -= axist_value,
+                    .w => camera_velocity_ptr.vec[2] -= axist_value,
+                    .a => camera_velocity_ptr.vec[0] -= axist_value,
+                    .s => camera_velocity_ptr.vec[2] += axist_value,
+                    .d => camera_velocity_ptr.vec[0] += axist_value,
                     // exit camera mode
                     .escape => {
                         camera_velocity_ptr.vec = @splat(0);
