@@ -97,8 +97,8 @@ pub const Camera = struct {
         defer zone.End();
 
         const look_to = zm.normalize3(zm.rotate(zm.conjugate(orientation), zm.f32x4(0.0, 0.0, 1.0, 0.0)));
-        const up = zm.f32x4(0.0, 1.0, 0.0, 0.0);
-        const view = zm.lookToLh(pos, look_to, up);
+        const up = zm.f32x4(0.0, -1.0, 0.0, 0.0);
+        const view = zm.lookToRh(pos, look_to, up);
         return view;
     }
 
