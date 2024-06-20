@@ -106,7 +106,7 @@ pub const Camera = struct {
         const zone = tracy.ZoneN(@src(), @src().fn_name);
         defer zone.End();
 
-        const fovy = std.math.degreesToRadians(f32, fov_degree);
+        const fovy = std.math.degreesToRadians(fov_degree);
         const aspect = @as(f32, @floatFromInt(swapchain_extent.width)) / @as(f32, @floatFromInt(swapchain_extent.height));
         const near = 0.01;
         const far = 300;
@@ -351,11 +351,11 @@ pub fn init(
         try extensions.appendSlice(glfw_extensions);
 
         // required extension for VK_EXT_DESCRIPTOR_INDEXING_EXTENSION
-        try extensions.append(vk.extension_info.khr_get_physical_device_properties_2.name);
+        try extensions.append(vk.extensions.khr_get_physical_device_properties_2.name);
 
         if (is_debug_build) {
             // add the debug utils extension
-            try extensions.append(vk.extension_info.ext_debug_utils.name);
+            try extensions.append(vk.extensions.ext_debug_utils.name);
         }
 
         const instance_info = vk.InstanceCreateInfo{

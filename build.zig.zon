@@ -3,8 +3,8 @@
     .version = "0.0.0",
     .dependencies = .{
         .ecez = .{
-            .url = "https://github.com/avokadoen/ecez/archive/9faf59fe718d7544f0cceead25ab33b3b66f7542.tar.gz",
-            .hash = "122019b40ebbc2ef97c37aad3026bdd7b206f60ce2b419cd39c8752b74969c807511",
+            .url = "https://github.com/avokadoen/ecez/archive/ba0a0318b5e50740d9d27620abc5e78cdc7eaf36.tar.gz",
+            .hash = "122067fc19cddcdf90854619d4fd9d90b81c28b7a2caf7638230a16811de5d69ac57",
         },
 
         // zig-gamedev deps
@@ -14,16 +14,16 @@
         .zmesh = .{ .path = "deps/zmesh" },
 
         .mach_glfw = .{
-            .url = "https://github.com/hexops/mach-glfw/archive/42fe7ee494d36bee8a82c1563c291d8314a41823.tar.gz",
-            .hash = "1220a72c54b4a3674a1e5a907ac6ea33d1868681f187f5a07f3cfb562ff7cf2c63e0",
-        },
-        .vulkan_zig = .{
-            .url = "https://github.com/Snektron/vulkan-zig/archive/7f161ce0edfcc91bd4defe4fb2fa45a7d39097e7.tar.gz",
-            .hash = "1220e6c4e31599c25cc7df2b300ee5ece3d89ddf0c566dbb5e4eb8d0d49e32ad5bb6",
+            .url = "https://pkg.machengine.org/mach-glfw/8da44b719e345097664ff2e0a7620474eb11db5f.tar.gz",
+            .hash = "1220e5343c2fe2a490aa90dc52d92fd34ebfd7d0ffc7d246dd4720bb5c339ead4d7b",
         },
         .zigimg = .{
-            .url = "https://github.com/zigimg/zigimg/archive/8873f29fc449e1b63400e9f4ad86d3c76204f962.tar.gz",
-            .hash = "122019f6439545235af116d0d8eb81fde1ff05fdb070da57c723772c557f84c5bf39",
+            .url = "https://github.com/zigimg/zigimg/archive/588f11f24cdc3b12f46082217dc830436b7f325e.tar.gz",
+            .hash = "1220dc313944ea71a87b4f54f26b1427ad2992a721a221cb42f7f80b8eee4e4944b7",
+        },
+        .vulkan_zig = .{
+            .url = "https://github.com/Snektron/vulkan-zig/archive/f537d09955e08968c51c7446c635b4e513d2e8d0.tar.gz",
+            .hash = "122054483f015e4db11334fedec4ad172501dbba0d0db64741aca988b080b917cde8",
         },
         .vulkan_headers = .{
             .url = "https://github.com/KhronosGroup/Vulkan-Headers/archive/v1.3.283.tar.gz",

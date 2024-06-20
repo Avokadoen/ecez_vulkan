@@ -279,7 +279,7 @@ pub fn exportEditorSceneToFile(self: *Editor, file_name: []const u8) !void {
         else => return err,
     };
 
-    try std.fs.cwd().writeFile(file_name, ezby_stream);
+    try std.fs.cwd().writeFile(.{ .sub_path = file_name, .data = ezby_stream });
 }
 
 pub fn exportGameSceneToFile(self: *Editor, file_name: []const u8) !void {
@@ -322,7 +322,7 @@ pub fn exportGameSceneToFile(self: *Editor, file_name: []const u8) !void {
         else => return err,
     };
 
-    try std.fs.cwd().writeFile(file_name, game_stream);
+    try std.fs.cwd().writeFile(.{ .sub_path = file_name, .data = game_stream });
 }
 
 pub fn importEditorSceneFromFile(self: *Editor, file_name: []const u8) !void {
@@ -1071,7 +1071,7 @@ pub fn createTestScene(self: *Editor) !void {
     // camera init
     {
         const CameraArch = struct {
-            b: game.components.Position = .{ .vec = zm.f32x4(0, 0, -4, 0) },
+            b: game.components.Position = .{ .vec = zm.f32x4(0, 0, 4, 0) },
             c: game.components.MoveSpeed = .{ .vec = @splat(20) },
             d: game.components.Velocity = .{ .vec = @splat(0) },
             e: game.components.Camera = .{ .turn_rate = 0.0005 },

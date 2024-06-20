@@ -25,9 +25,10 @@ pub fn build(b: *Build) void {
         break :build_options_blk opts;
     };
 
+    const main_path = b.path("src/main.zig");
     const exe = b.addExecutable(.{
         .name = if (build_product == .editor) "editor" else "game",
-        .root_source_file = .{ .path = "src/main.zig" },
+        .root_source_file = main_path,
         .target = target,
         .optimize = optimize,
     });
@@ -98,7 +99,7 @@ pub fn build(b: *Build) void {
         // Get the (lazy) path to vk.xml:
         const registry = b.dependency("vulkan_headers", .{}).path("deps/vk.xml");
         // Get generator executable reference
-        const vk_gen = b.dependency("vulkan_zig", .{}).artifact("generator");
+        const vk_gen = b.dependency("vulkan_zig", .{}).artifact("vulkan-zig-generator");
         // Set up a run step to generate the bindings
         const vk_generate_cmd = b.addRunArtifact(vk_gen);
         // Pass the registry to the generator
@@ -155,7 +156,7 @@ pub fn build(b: *Build) void {
     run_step.dependOn(&asset_move_step.step);
 
     const exe_tests = b.addTest(.{
-        .root_source_file = .{ .path = "src/main.zig" },
+        .root_source_file = main_path,
         .target = target,
         .optimize = optimize,
     });
@@ -205,8 +206,8 @@ const AssetMoveStep = struct {
         return self;
     }
 
-    fn make(step: *Step, prog_node: *std.Progress.Node) anyerror!void {
-        const self: *AssetMoveStep = @fieldParentPtr(AssetMoveStep, "step", step);
+    fn make(step: *Step, prog_node: std.Progress.Node) anyerror!void {
+        const self: *AssetMoveStep = @fieldParentPtr("step", step);
 
         try createFolder(self.builder.install_prefix);
 

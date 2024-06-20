@@ -342,15 +342,6 @@ extern fn zguiSetClipboardText(text: [*:0]const u8) void;
 extern fn zguiGetClipboardText() [*:0]const u8;
 //--------------------------------------------------------------------------------------------------
 const Context = *opaque {};
-
-fn Vector(comptime T: type) type {
-    return extern struct {
-        len: c_int,
-        capacity: c_int,
-        items: [*]T,
-    };
-}
-
 pub const DrawData = *extern struct {
     valid: bool,
     cmd_lists_count: c_int,
@@ -688,7 +679,12 @@ pub fn setNextWindowBgAlpha(args: SetNextWindowBgAlpha) void {
     zguiSetNextWindowBgAlpha(args.alpha);
 }
 extern fn zguiSetNextWindowBgAlpha(alpha: f32) void;
-
+//--------------------------------------------------------------------------------------------------
+pub fn setWindowFocus(name: ?[:0]const u8) void {
+    zguiSetWindowFocus(name orelse null);
+}
+extern fn zguiSetWindowFocus(name: ?[*:0]const u8) void;
+//-------------------------------------------------------------------------------------------------
 pub fn setKeyboardFocusHere(offset: i32) void {
     zguiSetKeyboardFocusHere(offset);
 }
@@ -1666,7 +1662,7 @@ pub fn comboFromEnum(
         else => @compileError("Error: current_item must be a pointer-to-an-enum, not a " ++ @TypeOf(current_item)),
     };
 
-    const FieldNameIndex = std.meta.Tuple(&[_]type{ []const u8, i32 });
+    const FieldNameIndex = std.meta.Tuple(&.{ []const u8, i32 });
     comptime var item_names: [:0]const u8 = "";
     comptime var field_name_to_index_list: [enum_type_info.fields.len]FieldNameIndex = undefined;
     comptime var index_to_enum: [enum_type_info.fields.len]EnumType = undefined;
@@ -4546,6 +4542,14 @@ pub const DrawList = *opaque {
     }
     extern fn zguiDrawList_AddResetRenderStateCallback(draw_list: DrawList) void;
 };
+
+fn Vector(comptime T: type) type {
+    return extern struct {
+        len: c_int,
+        capacity: c_int,
+        items: [*]T,
+    };
+}
 
 test {
     const testing = std.testing;

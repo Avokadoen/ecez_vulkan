@@ -140,18 +140,18 @@ pub fn overrideWidgetGenerator(comptime Component: type) ?type {
                 var euler_angles = blk: {
                     const angles = zm.quatToRollPitchYaw(rotation.quat);
                     break :blk [_]f32{
-                        std.math.radiansToDegrees(f32, angles[0]),
-                        std.math.radiansToDegrees(f32, angles[1]),
-                        std.math.radiansToDegrees(f32, angles[2]),
+                        std.math.radiansToDegrees(angles[0]),
+                        std.math.radiansToDegrees(angles[1]),
+                        std.math.radiansToDegrees(angles[2]),
                     };
                 };
 
                 zgui.text("Angles: ", .{});
                 zgui.sameLine(.{});
                 if (zgui.dragFloat3("##euler_angles", .{ .v = &euler_angles })) {
-                    const x_rad = std.math.degreesToRadians(f32, euler_angles[0]);
-                    const y_rad = std.math.degreesToRadians(f32, euler_angles[1]);
-                    const z_rad = std.math.degreesToRadians(f32, euler_angles[2]);
+                    const x_rad = std.math.degreesToRadians(euler_angles[0]);
+                    const y_rad = std.math.degreesToRadians(euler_angles[1]);
+                    const z_rad = std.math.degreesToRadians(euler_angles[2]);
 
                     rotation.quat = zm.quatFromRollPitchYaw(x_rad, y_rad, z_rad);
                     return true;
