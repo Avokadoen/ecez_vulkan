@@ -1071,7 +1071,7 @@ pub fn createTestScene(self: *Editor) !void {
     // camera init
     {
         const CameraArch = struct {
-            b: game.components.Position = .{ .vec = zm.f32x4(0, 0, 4, 0) },
+            b: game.components.Position = .{ .vec = zm.f32x4(0, 0, -4, 0) },
             c: game.components.MoveSpeed = .{ .vec = @splat(20) },
             d: game.components.Velocity = .{ .vec = @splat(0) },
             e: game.components.Camera = .{ .turn_rate = 0.0005 },
@@ -1238,6 +1238,8 @@ pub fn setCameraInput(window: glfw.Window) void {
                     .a => camera_velocity_ptr.vec[0] -= axist_value,
                     .s => camera_velocity_ptr.vec[2] -= axist_value,
                     .d => camera_velocity_ptr.vec[0] += axist_value,
+                    .space => camera_velocity_ptr.vec[1] += axist_value,
+                    .left_control => camera_velocity_ptr.vec[1] -= axist_value,
                     // exit camera mode
                     .escape => {
                         camera_velocity_ptr.vec = @splat(0);
