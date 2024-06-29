@@ -55,7 +55,7 @@ const UiState = struct {
 
     const AddComponentModal = struct {
         selected_component_index: usize = all_components.len,
-        component_bytes: [biggest_component_size]u8 = undefined,
+        component_bytes: []u8,
         is_active: bool = false,
     };
 
@@ -166,13 +166,16 @@ pub fn init(
             .import_editor_file_modal_popen = false,
             .export_game_file_modal_popen = false,
             .export_import_file_name = undefined,
-            .add_component_modal = .{},
+            .add_component_modal = .{
+                .component_bytes = try allocator.alloc(u8, 1), // allocate stub memory which will be freed later
+            },
         };
 
         ui.setExportImportFileName("test.ezby");
 
         break :ui_state_init_blk ui;
     };
+    errdefer allocator.free(ui_state.add_component_modal.component_bytes);
 
     // Color scheme
     const StyleCol = zgui.StyleCol;
@@ -252,6 +255,8 @@ pub fn deinit(self: *Editor) void {
     self.resize_nesw.destroy();
     self.resize_nwse.destroy();
     self.not_allowed.destroy();
+
+    self.allocator.free(self.ui_state.add_component_modal.component_bytes);
 
     self.render_context.deinit(self.allocator);
     self.storage.deinit();
@@ -884,7 +889,12 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                                     .flags = .{ .dont_close_popups = true },
                                 })) {
                                     self.ui_state.add_component_modal.selected_component_index = comp_index;
-                                    @memset(&self.ui_state.add_component_modal.component_bytes, 0);
+
+                                    self.allocator.free(self.ui_state.add_component_modal.component_bytes);
+
+                                    const new_bytes = try self.allocator.alignedAlloc(u8, @alignOf(Component), @sizeOf(Component));
+                                    self.ui_state.add_component_modal.component_bytes = @alignCast(new_bytes);
+                                    @memset(self.ui_state.add_component_modal.component_bytes, 0);
                                 }
                             }
                         }
@@ -901,7 +911,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                                     zgui.text("{s}:", .{@typeName(Component)});
 
                                     const component_ptr: *Component = blk: {
-                                        const ptr = std.mem.bytesAsValue(Component, self.ui_state.add_component_modal.component_bytes[0..@sizeOf(Component)]);
+                                        const ptr = std.mem.bytesAsValue(Component, self.ui_state.add_component_modal.component_bytes);
                                         break :blk @alignCast(ptr);
                                     };
 
