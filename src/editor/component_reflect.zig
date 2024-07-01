@@ -35,7 +35,9 @@ pub const object_metadata_index = blk: {
 
 pub const biggest_component_size = blk: {
     var size = 0;
-    for (game.components.all ++ editor_components.all) |Component| {
+    for (all_components) |Component| {
+        if (Component == EntityMetadata) continue;
+
         if (@sizeOf(Component) > size) {
             size = @sizeOf(Component);
         }

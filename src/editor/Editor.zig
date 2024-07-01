@@ -55,7 +55,7 @@ const UiState = struct {
 
     const AddComponentModal = struct {
         selected_component_index: usize = all_components.len,
-        component_bytes: []u8,
+        component_bytes: [biggest_component_size * biggest_component_size]u8 = undefined,
         is_active: bool = false,
     };
 
@@ -166,16 +166,13 @@ pub fn init(
             .import_editor_file_modal_popen = false,
             .export_game_file_modal_popen = false,
             .export_import_file_name = undefined,
-            .add_component_modal = .{
-                .component_bytes = try allocator.alloc(u8, 1), // allocate stub memory which will be freed later
-            },
+            .add_component_modal = .{},
         };
 
         ui.setExportImportFileName("test.ezby");
 
         break :ui_state_init_blk ui;
     };
-    errdefer allocator.free(ui_state.add_component_modal.component_bytes);
 
     // Color scheme
     const StyleCol = zgui.StyleCol;
@@ -255,8 +252,6 @@ pub fn deinit(self: *Editor) void {
     self.resize_nesw.destroy();
     self.resize_nwse.destroy();
     self.not_allowed.destroy();
-
-    self.allocator.free(self.ui_state.add_component_modal.component_bytes);
 
     self.render_context.deinit(self.allocator);
     self.storage.deinit();
@@ -890,11 +885,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                                 })) {
                                     self.ui_state.add_component_modal.selected_component_index = comp_index;
 
-                                    self.allocator.free(self.ui_state.add_component_modal.component_bytes);
-
-                                    const new_bytes = try self.allocator.alignedAlloc(u8, @alignOf(Component), @sizeOf(Component));
-                                    self.ui_state.add_component_modal.component_bytes = @alignCast(new_bytes);
-                                    @memset(self.ui_state.add_component_modal.component_bytes, 0);
+                                    @memset(&self.ui_state.add_component_modal.component_bytes, 0);
                                 }
                             }
                         }
@@ -911,8 +902,9 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                                     zgui.text("{s}:", .{@typeName(Component)});
 
                                     const component_ptr: *Component = blk: {
-                                        const ptr = std.mem.bytesAsValue(Component, self.ui_state.add_component_modal.component_bytes);
-                                        break :blk @alignCast(ptr);
+                                        const aligned_ptr = std.mem.alignPointer(self.ui_state.add_component_modal.component_bytes[0..].ptr, @alignOf(Component));
+                                        const ptr_value = std.mem.bytesAsValue(Component, aligned_ptr.?);
+                                        break :blk @alignCast(ptr_value);
                                     };
 
                                     // if component has specialized widget
@@ -934,13 +926,14 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                                 if (Component == EntityMetadata) continue;
 
                                 if (comp_index == self.ui_state.add_component_modal.selected_component_index) {
-                                    const component = @as(
-                                        *Component,
-                                        @ptrCast(@alignCast(&self.ui_state.add_component_modal.component_bytes)),
-                                    );
+                                    const component_ptr: *Component = blk: {
+                                        const aligned_ptr = std.mem.alignPointer(self.ui_state.add_component_modal.component_bytes[0..].ptr, @alignOf(Component));
+                                        const ptr_value = std.mem.bytesAsValue(Component, aligned_ptr.?);
+                                        break :blk @alignCast(ptr_value);
+                                    };
 
                                     if (component_reflect.specializedAddHandle(Component)) |add_handle| {
-                                        try add_handle.add(self, component);
+                                        try add_handle.add(self, component_ptr);
                                     } else {
 
                                         // Undo logic
@@ -954,7 +947,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                                             self.undo_stack.pushSetComponent(selected_entity, prev_component);
                                         }
 
-                                        try self.storage.setComponent(selected_entity, component.*);
+                                        try self.storage.setComponent(selected_entity, component_ptr.*);
                                     }
                                 }
                             }
