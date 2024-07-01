@@ -1,2 +1,2 @@
 pub const components = @import("game/components.zig");
-pub const transform_systems = @import("game/transform_systems.zig");
+pub const scene_graph = @import("game/scene_graph.zig");

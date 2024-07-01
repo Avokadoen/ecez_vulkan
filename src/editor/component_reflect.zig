@@ -21,6 +21,7 @@ const Editor = @import("Editor.zig");
 const tracy = @import("ztracy");
 const zgui = @import("zgui");
 const zm = @import("zmath");
+const ecez = @import("ecez");
 
 pub const all_components = editor_components.all ++ game.components.all ++ render.components.all;
 pub const all_components_tuple = componentTypeArrayToTuple(&all_components);
@@ -157,6 +158,27 @@ pub fn overrideWidgetGenerator(comptime Component: type) ?type {
 
                     rotation.quat = zm.quatFromRollPitchYaw(x_rad, y_rad, z_rad);
                     return true;
+                }
+
+                return false;
+            }
+        },
+        game.scene_graph.Level => struct {
+            pub fn widget(editor: *Editor, level: *game.scene_graph.Level) bool {
+                _ = editor;
+                const zone = tracy.ZoneN(@src(), @src().fn_name);
+                defer zone.End();
+
+                if (zgui.beginCombo("Level", .{ .preview_value = @tagName(level.value) })) {
+                    defer zgui.endCombo();
+
+                    inline for (@typeInfo(game.scene_graph.LevelValue).Enum.fields) |enum_field| {
+                        if (zgui.selectable(std.fmt.comptimePrint("{s}", .{enum_field.name}), .{
+                            .selected = @intFromEnum(level.value) == enum_field.value,
+                        })) {
+                            level.value = @enumFromInt(enum_field.value);
+                        }
+                    }
                 }
 
                 return false;
@@ -403,7 +425,19 @@ pub fn fieldWidget(comptime Component: type, comptime T: type, comptime id_mod: 
             _ = ptr_info;
             std.debug.panic("todo", .{});
         },
-        else => std.debug.panic("unimplemented type of {s}", .{@typeName(field.type)}),
+        else => {
+            if (ecez.Entity == T) {
+                const IdType = @typeInfo(T).Struct.fields[0].type;
+
+                var value = @as(i32, @intCast(field.id));
+                if (zgui.inputInt(c_id, .{ .v = &value })) {
+                    field.id = @as(IdType, @intCast(value));
+                    field_changed = true;
+                }
+            } else {
+                std.debug.panic("unimplemented type of {s}", .{@typeName(T)});
+            }
+        },
     }
 
     return field_changed;

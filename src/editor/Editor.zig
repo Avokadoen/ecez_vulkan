@@ -30,6 +30,7 @@ const game = @import("../game.zig");
 const Position = game.components.Position;
 const Rotation = game.components.Rotation;
 const Scale = game.components.Scale;
+const SceneGraph = game.scene_graph.SceneGraphSystems(EditorStorage);
 
 const component_reflect = @import("component_reflect.zig");
 const all_components = component_reflect.all_components;
@@ -94,11 +95,18 @@ const EditorStorage = ecez.CreateStorage(component_reflect.all_components_tuple)
 const Scheduler = ecez.CreateScheduler(EditorStorage, .{
     // event to apply all transformation and update render buffers as needed
     ecez.Event("transform_update", .{
-        game.transform_systems.TransformResetSystem,
-        ecez.DependOn(game.transform_systems.TransformApplyScaleSystem, .{game.transform_systems.TransformResetSystem}),
-        ecez.DependOn(game.transform_systems.TransformApplyRotationSystem, .{game.transform_systems.TransformApplyScaleSystem}),
-        ecez.DependOn(game.transform_systems.TransformApplyPositionSystem, .{game.transform_systems.TransformApplyRotationSystem}),
-    }, RenderContext),
+        SceneGraph.TransformResetSystem,
+        ecez.DependOn(SceneGraph.TransformApplyScaleSystem, .{SceneGraph.TransformResetSystem}),
+        ecez.DependOn(SceneGraph.TransformApplyRotationSystem, .{SceneGraph.TransformApplyScaleSystem}),
+        ecez.DependOn(SceneGraph.TransformApplyPositionSystem, .{SceneGraph.TransformApplyRotationSystem}),
+        ecez.DependOn(SceneGraph.L1PropagateSystem, .{SceneGraph.TransformApplyPositionSystem}),
+        ecez.DependOn(SceneGraph.L2PropagateSystem, .{SceneGraph.L1PropagateSystem}),
+        ecez.DependOn(SceneGraph.L3PropagateSystem, .{SceneGraph.L2PropagateSystem}),
+        ecez.DependOn(SceneGraph.L4PropagateSystem, .{SceneGraph.L3PropagateSystem}),
+        ecez.DependOn(SceneGraph.L5PropagateSystem, .{SceneGraph.L4PropagateSystem}),
+        ecez.DependOn(SceneGraph.L6PropagateSystem, .{SceneGraph.L5PropagateSystem}),
+        ecez.DependOn(SceneGraph.L7PropagateSystem, .{SceneGraph.L6PropagateSystem}),
+    }, SceneGraph.EventArgument),
 });
 
 // TODO: editor should not be part of renderer
@@ -785,30 +793,34 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
             defer zgui.end();
 
             if (self.ui_state.selected_entity) |selected_entity| {
-                zgui.text("Name: ", .{});
-                zgui.sameLine(.{});
-                if (zgui.inputText("##object_inspector_rename", .{
-                    .buf = &self.ui_state.object_inspector.name_buffer,
-                    .flags = .{ .enter_returns_true = true },
-                })) {
-                    const new_len = std.mem.indexOf(u8, &self.ui_state.object_inspector.name_buffer, &[_]u8{0}).?;
+                // entity metadata
+                {
+                    zgui.text("Id: {d}", selected_entity);
+                    zgui.text("Name: ", .{});
+                    zgui.sameLine(.{});
+                    if (zgui.inputText("##object_inspector_rename", .{
+                        .buf = &self.ui_state.object_inspector.name_buffer,
+                        .flags = .{ .enter_returns_true = true },
+                    })) {
+                        const new_len = std.mem.indexOf(u8, &self.ui_state.object_inspector.name_buffer, &[_]u8{0}).?;
 
-                    if (new_len > 0) {
-                        var metadata = try self.storage.getComponent(selected_entity, EntityMetadata);
-                        metadata.rename(self.ui_state.object_inspector.name_buffer[0..new_len]);
+                        if (new_len > 0) {
+                            var metadata = try self.storage.getComponent(selected_entity, EntityMetadata);
+                            metadata.rename(self.ui_state.object_inspector.name_buffer[0..new_len]);
 
-                        // Undo logic
-                        undo_blk: {
-                            const prev_component = self.storage.getComponent(selected_entity, EntityMetadata) catch |err| {
-                                std.debug.assert(err == error.ComponentMissing);
-                                self.undo_stack.pushRemoveComponent(selected_entity, EntityMetadata);
-                                // if get failed, dont store in undo stack
-                                break :undo_blk;
-                            };
-                            self.undo_stack.pushSetComponent(selected_entity, prev_component);
+                            // Undo logic
+                            undo_blk: {
+                                const prev_component = self.storage.getComponent(selected_entity, EntityMetadata) catch |err| {
+                                    std.debug.assert(err == error.ComponentMissing);
+                                    self.undo_stack.pushRemoveComponent(selected_entity, EntityMetadata);
+                                    // if get failed, dont store in undo stack
+                                    break :undo_blk;
+                                };
+                                self.undo_stack.pushSetComponent(selected_entity, prev_component);
+                            }
+
+                            try self.storage.setComponent(selected_entity, metadata);
                         }
-
-                        try self.storage.setComponent(selected_entity, metadata);
                     }
                 }
 
@@ -1380,13 +1392,21 @@ pub fn createNewVisbleObject(
     if (config.scale) |scale| {
         try self.storage.setComponent(new_entity, scale);
     }
+
+    try self.storage.setComponent(new_entity, game.scene_graph.Level{ .value = .L0 });
+    try self.storage.setComponent(new_entity, game.scene_graph.L0{});
 }
 
 pub fn forceFlush(self: *Editor) !void {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
-    self.scheduler.dispatchEvent(&self.storage, .transform_update, &self.render_context, .{});
+    self.scheduler.dispatchEvent(
+        &self.storage,
+        .transform_update,
+        SceneGraph.EventArgument{ .read_storage = self.storage, .render_context = &self.render_context },
+        .{},
+    );
     self.scheduler.waitEvent(.transform_update);
 
     // Currently the renderer is configured to always flush

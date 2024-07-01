@@ -1,5 +1,8 @@
 const zm = @import("zmath");
 
+// Component based scene graph, Max depth of 7 (8 Levels)
+pub const scene_graph = @import("scene_graph.zig");
+
 // TODO: compute this
 pub const all = [_]type{
     Position,
@@ -8,7 +11,7 @@ pub const all = [_]type{
     MoveSpeed,
     Velocity,
     Camera,
-};
+} ++ scene_graph.all;
 
 pub const Position = struct {
     vec: zm.Vec,
