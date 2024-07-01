@@ -139,136 +139,63 @@ pub fn SceneGraphSystems(StorageType: type) type {
             }
         };
 
-        pub const L1PropagateSystem = struct {
-            pub fn l1Propagate(l: L1, instance_handle: InstanceHandle, event_argument: EventArgument) void {
-                const zone = tracy.ZoneN(@src(), @src().fn_name);
-                defer zone.End();
+        fn propagate(l: anytype, instance_handle: InstanceHandle, event_argument: EventArgument) void {
+            const zone = tracy.ZoneN(@src(), @typeName(@TypeOf(l)) ++ @src().fn_name);
+            defer zone.End();
 
-                const parent_transform = fetch_parent_blk: {
-                    const parent_instance = event_argument.read_storage.getComponent(l.parent, InstanceHandle) catch {
-                        // parent does not have tranform in renderer
-                        return;
-                    };
-
-                    break :fetch_parent_blk event_argument.render_context.getInstanceTransform(parent_instance);
+            const parent_transform = fetch_parent_blk: {
+                const parent_instance = event_argument.read_storage.getComponent(l.parent, InstanceHandle) catch {
+                    // parent does not have tranform in renderer
+                    // TODO: fallback to position, rotation, scale
+                    return;
                 };
 
-                const transform = event_argument.render_context.getInstanceTransformPtr(instance_handle);
-                transform.* = zm.mul(transform.*, parent_transform);
+                break :fetch_parent_blk event_argument.render_context.getInstanceTransform(parent_instance);
+            };
+
+            const transform = event_argument.render_context.getInstanceTransformPtr(instance_handle);
+            transform.* = zm.mul(transform.*, parent_transform);
+        }
+
+        pub const L1PropagateSystem = struct {
+            pub fn l1Propagate(l: L1, instance_handle: InstanceHandle, event_argument: EventArgument) void {
+                propagate(l, instance_handle, event_argument);
             }
         };
 
         pub const L2PropagateSystem = struct {
             pub fn l2Propagate(l: L2, instance_handle: InstanceHandle, event_argument: EventArgument) void {
-                const zone = tracy.ZoneN(@src(), @src().fn_name);
-                defer zone.End();
-
-                const parent_transform = fetch_parent_blk: {
-                    const parent_instance = event_argument.read_storage.getComponent(l.parent, InstanceHandle) catch {
-                        // parent does not have tranform in renderer
-                        return;
-                    };
-
-                    break :fetch_parent_blk event_argument.render_context.getInstanceTransform(parent_instance);
-                };
-
-                const transform = event_argument.render_context.getInstanceTransformPtr(instance_handle);
-                transform.* = zm.mul(transform.*, parent_transform);
+                propagate(l, instance_handle, event_argument);
             }
         };
 
         pub const L3PropagateSystem = struct {
             pub fn l3Propagate(l: L3, instance_handle: InstanceHandle, event_argument: EventArgument) void {
-                const zone = tracy.ZoneN(@src(), @src().fn_name);
-                defer zone.End();
-
-                const parent_transform = fetch_parent_blk: {
-                    const parent_instance = event_argument.read_storage.getComponent(l.parent, InstanceHandle) catch {
-                        // parent does not have tranform in renderer
-                        return;
-                    };
-
-                    break :fetch_parent_blk event_argument.render_context.getInstanceTransform(parent_instance);
-                };
-
-                const transform = event_argument.render_context.getInstanceTransformPtr(instance_handle);
-                transform.* = zm.mul(transform.*, parent_transform);
+                propagate(l, instance_handle, event_argument);
             }
         };
 
         pub const L4PropagateSystem = struct {
             pub fn l4Propagate(l: L4, instance_handle: InstanceHandle, event_argument: EventArgument) void {
-                const zone = tracy.ZoneN(@src(), @src().fn_name);
-                defer zone.End();
-
-                const parent_transform = fetch_parent_blk: {
-                    const parent_instance = event_argument.read_storage.getComponent(l.parent, InstanceHandle) catch {
-                        // parent does not have tranform in renderer
-                        return;
-                    };
-
-                    break :fetch_parent_blk event_argument.render_context.getInstanceTransform(parent_instance);
-                };
-
-                const transform = event_argument.render_context.getInstanceTransformPtr(instance_handle);
-                transform.* = zm.mul(transform.*, parent_transform);
+                propagate(l, instance_handle, event_argument);
             }
         };
 
         pub const L5PropagateSystem = struct {
             pub fn l5Propagate(l: L5, instance_handle: InstanceHandle, event_argument: EventArgument) void {
-                const zone = tracy.ZoneN(@src(), @src().fn_name);
-                defer zone.End();
-
-                const parent_transform = fetch_parent_blk: {
-                    const parent_instance = event_argument.read_storage.getComponent(l.parent, InstanceHandle) catch {
-                        // parent does not have tranform in renderer
-                        return;
-                    };
-
-                    break :fetch_parent_blk event_argument.render_context.getInstanceTransform(parent_instance);
-                };
-
-                const transform = event_argument.render_context.getInstanceTransformPtr(instance_handle);
-                transform.* = zm.mul(transform.*, parent_transform);
+                propagate(l, instance_handle, event_argument);
             }
         };
 
         pub const L6PropagateSystem = struct {
             pub fn l6Propagate(l: L6, instance_handle: InstanceHandle, event_argument: EventArgument) void {
-                const zone = tracy.ZoneN(@src(), @src().fn_name);
-                defer zone.End();
-
-                const parent_transform = fetch_parent_blk: {
-                    const parent_instance = event_argument.read_storage.getComponent(l.parent, InstanceHandle) catch {
-                        // parent does not have tranform in renderer
-                        return;
-                    };
-
-                    break :fetch_parent_blk event_argument.render_context.getInstanceTransform(parent_instance);
-                };
-
-                const transform = event_argument.render_context.getInstanceTransformPtr(instance_handle);
-                transform.* = zm.mul(transform.*, parent_transform);
+                propagate(l, instance_handle, event_argument);
             }
         };
 
         pub const L7PropagateSystem = struct {
             pub fn l7Propagate(l: L7, instance_handle: InstanceHandle, event_argument: EventArgument) void {
-                const zone = tracy.ZoneN(@src(), @src().fn_name);
-                defer zone.End();
-
-                const parent_transform = fetch_parent_blk: {
-                    const parent_instance = event_argument.read_storage.getComponent(l.parent, InstanceHandle) catch {
-                        // parent does not have tranform in renderer
-                        return;
-                    };
-
-                    break :fetch_parent_blk event_argument.render_context.getInstanceTransform(parent_instance);
-                };
-
-                const transform = event_argument.render_context.getInstanceTransformPtr(instance_handle);
-                transform.* = zm.mul(transform.*, parent_transform);
+                propagate(l, instance_handle, event_argument);
             }
         };
     };
