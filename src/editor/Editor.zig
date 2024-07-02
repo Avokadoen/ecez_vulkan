@@ -690,12 +690,29 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
             defer zgui.end();
 
             {
-                // TODO: only have this if none of the selectables are hovered
-                //       also have object related popup with actions: delete, copy, more? ... ?
-                if (zgui.beginPopupContextWindow()) {
-                    defer zgui.endPopup();
+                if (self.icons.button(.new_object, "new_object_button##01", "create a new entity", EditorIcons.icon_size, EditorIcons.icon_size, .{})) {
+                    _ = try self.newSceneEntity("empty entity");
+                }
+                zgui.sameLine(.{});
+                if (self.icons.button(.copy_object, "copy_object_button##00", "copy selected entity", EditorIcons.icon_size, EditorIcons.icon_size, .{})) {
+                    if (self.ui_state.selected_entity) |*selected_entity| {
+                        const new_entity = try self.storage.cloneEntity(selected_entity.*);
+                        defer selected_entity.* = new_entity;
 
-                    try self.createNewEntityMenu();
+                        // TODO: this is probably logic we want for undo/redo as well?
+                        // EntityMetadata
+                        {
+                            const metadata = self.storage.getComponent(new_entity, *EntityMetadata) catch unreachable;
+                            metadata.* = EntityMetadata.init(metadata.getDisplayName(), new_entity);
+                        }
+
+                        // InstanceHandle
+                        if (self.storage.hasComponent(new_entity, InstanceHandle)) {
+                            const instance_handle = self.storage.getComponent(new_entity, InstanceHandle) catch unreachable;
+                            self.storage.removeComponent(new_entity, InstanceHandle) catch unreachable;
+                            try self.assignEntityMeshInstance(new_entity, instance_handle.mesh_handle);
+                        }
+                    }
                 }
 
                 const ObjectListQuery = EditorStorage.Query(

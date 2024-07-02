@@ -25,6 +25,7 @@ pub const Icon = enum(u32) {
     new_object,
     play,
     debug_play,
+    copy_object,
 };
 
 pub const icon_size = 18;

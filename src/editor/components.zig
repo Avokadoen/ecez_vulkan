@@ -7,7 +7,7 @@ pub const all = [_]type{
 };
 
 pub const EntityMetadata = struct {
-    const buffer_len = 127;
+    const buffer_len = 128;
     const hash_len = "##".len + @sizeOf(ecez.Entity);
 
     id_len: u8,
