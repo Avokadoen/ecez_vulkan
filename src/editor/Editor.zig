@@ -95,9 +95,10 @@ const EditorStorage = ecez.CreateStorage(component_reflect.all_components_tuple)
 const Scheduler = ecez.CreateScheduler(EditorStorage, .{
     // event to apply all transformation and update render buffers as needed
     ecez.Event("transform_update", .{
+        game.camera.ApplyCameraRotationSystem,
         SceneGraph.TransformResetSystem,
         ecez.DependOn(SceneGraph.TransformApplyScaleSystem, .{SceneGraph.TransformResetSystem}),
-        ecez.DependOn(SceneGraph.TransformApplyRotationSystem, .{SceneGraph.TransformApplyScaleSystem}),
+        ecez.DependOn(SceneGraph.TransformApplyRotationSystem, .{ SceneGraph.TransformApplyScaleSystem, game.camera.ApplyCameraRotationSystem }),
         ecez.DependOn(SceneGraph.TransformApplyPositionSystem, .{SceneGraph.TransformApplyRotationSystem}),
         ecez.DependOn(SceneGraph.L1PropagateSystem, .{SceneGraph.TransformApplyPositionSystem}),
         ecez.DependOn(SceneGraph.L2PropagateSystem, .{SceneGraph.L1PropagateSystem}),
@@ -388,10 +389,7 @@ pub fn update(self: *Editor, delta_time: f32) void {
             // calculate the current camera orientation
             const orientation = orientation_calc_blk: {
                 const camera_state = self.storage.getComponent(active_camera, game.components.Camera) catch unreachable;
-
-                const yaw_quat = zm.quatFromAxisAngle(zm.f32x4(0.0, 1.0, 0.0, 0.0), @floatCast(camera_state.yaw));
-                const pitch_quat = zm.quatFromAxisAngle(zm.f32x4(1.0, 0.0, 0.0, 0.0), @floatCast(camera_state.pitch));
-                break :orientation_calc_blk zm.qmul(yaw_quat, pitch_quat);
+                break :orientation_calc_blk camera_state.toQuat();
             };
 
             // fetch the camera position pointer and calculate the position delta
