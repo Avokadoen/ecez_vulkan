@@ -14,6 +14,8 @@ const core = @import("../core.zig");
 const EditorIcons = @import("EditorIcons.zig");
 const Icons = EditorIcons.Icon;
 
+const GlfwCursors = @import("GlfwCursors.zig");
+
 const undo_redo_stack = @import("undo_redo_stack.zig");
 const UndoRedoStack = undo_redo_stack.CreateType(&all_components);
 
@@ -117,15 +119,7 @@ const Editor = @This();
 
 allocator: Allocator,
 
-pointing_hand: glfw.Cursor,
-arrow: glfw.Cursor,
-ibeam: glfw.Cursor,
-crosshair: glfw.Cursor,
-resize_ns: glfw.Cursor,
-resize_ew: glfw.Cursor,
-resize_nesw: glfw.Cursor,
-resize_nwse: glfw.Cursor,
-not_allowed: glfw.Cursor,
+cursors: GlfwCursors,
 
 storage: EditorStorage,
 scheduler: Scheduler,
@@ -149,6 +143,12 @@ pub fn init(
 ) !Editor {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
+
+    // initialize our ecs api
+    var storage = try EditorStorage.init(allocator);
+    errdefer storage.deinit();
+
+    const scheduler = try Scheduler.init(allocator, .{});
 
     var render_context = try RenderContext.init(
         allocator,
@@ -192,30 +192,8 @@ pub fn init(
     style.setColor(StyleCol.header, [4]f32{ 0.1, 0.1, 0.1, 0.8 });
     style.setColor(StyleCol.check_mark, [4]f32{ 0, 1, 0, 1 });
 
-    const pointing_hand = glfw.Cursor.createStandard(.pointing_hand) orelse return error.CreateCursorFailed;
-    errdefer pointing_hand.destroy();
-    const arrow = glfw.Cursor.createStandard(.arrow) orelse return error.CreateCursorFailed;
-    errdefer arrow.destroy();
-    const ibeam = glfw.Cursor.createStandard(.ibeam) orelse return error.CreateCursorFailed;
-    errdefer ibeam.destroy();
-    const crosshair = glfw.Cursor.createStandard(.crosshair) orelse return error.CreateCursorFailed;
-    errdefer crosshair.destroy();
-    const resize_ns = glfw.Cursor.createStandard(.resize_ns) orelse return error.CreateCursorFailed;
-    errdefer resize_ns.destroy();
-    const resize_ew = glfw.Cursor.createStandard(.resize_ew) orelse return error.CreateCursorFailed;
-    errdefer resize_ew.destroy();
-    const resize_nesw = glfw.Cursor.createStandard(.resize_nesw) orelse return error.CreateCursorFailed;
-    errdefer resize_nesw.destroy();
-    const resize_nwse = glfw.Cursor.createStandard(.resize_nwse) orelse return error.CreateCursorFailed;
-    errdefer resize_nwse.destroy();
-    const not_allowed = glfw.Cursor.createStandard(.not_allowed) orelse return error.CreateCursorFailed;
-    errdefer not_allowed.destroy();
-
-    // initialize our ecs api
-    var storage = try EditorStorage.init(allocator);
-    errdefer storage.deinit();
-
-    const scheduler = try Scheduler.init(allocator, .{});
+    const cursors = try GlfwCursors.init();
+    errdefer cursors.deinit();
 
     // register input callbacks for the editor
     setEditorInput(window);
@@ -226,15 +204,6 @@ pub fn init(
 
     return Editor{
         .allocator = allocator,
-        .pointing_hand = pointing_hand,
-        .arrow = arrow,
-        .ibeam = ibeam,
-        .crosshair = crosshair,
-        .resize_ns = resize_ns,
-        .resize_ew = resize_ew,
-        .resize_nesw = resize_nesw,
-        .resize_nwse = resize_nwse,
-        .not_allowed = not_allowed,
         .storage = storage,
         .scheduler = scheduler,
         .render_context = render_context,
@@ -243,6 +212,7 @@ pub fn init(
         .icons = EditorIcons.init(render_context.imgui_pipeline.texture_indices),
         .user_pointer = undefined, // assigned by setCameraInput
         .undo_stack = undo_stack,
+        .cursors = cursors,
     };
 }
 
@@ -251,17 +221,7 @@ pub fn deinit(self: *Editor) void {
     defer zone.End();
 
     self.scheduler.waitIdle();
-
-    self.pointing_hand.destroy();
-    self.arrow.destroy();
-    self.ibeam.destroy();
-    self.crosshair.destroy();
-    self.resize_ns.destroy();
-    self.resize_ew.destroy();
-    self.resize_nesw.destroy();
-    self.resize_nwse.destroy();
-    self.not_allowed.destroy();
-
+    self.cursors.deinit();
     self.render_context.deinit(self.allocator);
     self.storage.deinit();
     self.scheduler.deinit();
@@ -425,19 +385,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
         // If we are not controlling the camera, then we should update cursor if needed
         // NOTE: getting cursor must be done before calling zgui.newFrame
         window.setInputModeCursor(.normal);
-        switch (zgui.getMouseCursor()) {
-            .none => window.setInputModeCursor(.hidden),
-            .arrow => window.setCursor(self.arrow),
-            .text_input => window.setCursor(self.ibeam),
-            .resize_all => window.setCursor(self.crosshair),
-            .resize_ns => window.setCursor(self.resize_ns),
-            .resize_ew => window.setCursor(self.resize_ew),
-            .resize_nesw => window.setCursor(self.resize_nesw),
-            .resize_nwse => window.setCursor(self.resize_nwse),
-            .hand => window.setCursor(self.pointing_hand),
-            .not_allowed => window.setCursor(self.not_allowed),
-            .count => window.setCursor(self.ibeam),
-        }
+        self.cursors.handleZguiCursor(window);
     }
 
     const frame_size = window.getFramebufferSize();
