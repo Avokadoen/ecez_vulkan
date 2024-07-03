@@ -125,15 +125,15 @@ storage: EditorStorage,
 scheduler: Scheduler,
 
 render_context: RenderContext,
-ui_state: UiState,
-input_state: InputState,
-
-icons: EditorIcons,
-user_pointer: UserPointer,
-
-undo_stack: UndoRedoStack,
 
 active_camera: ?ecez.Entity = null,
+ui_state: UiState,
+input_state: InputState = InputState{},
+icons: EditorIcons,
+
+user_pointer: UserPointer = undefined, // assigned by setCameraInput
+
+undo_stack: UndoRedoStack,
 
 pub fn init(
     allocator: Allocator,
@@ -208,11 +208,9 @@ pub fn init(
         .scheduler = scheduler,
         .render_context = render_context,
         .ui_state = ui_state,
-        .input_state = InputState{},
         .icons = EditorIcons.init(render_context.imgui_pipeline.texture_indices),
-        .user_pointer = undefined, // assigned by setCameraInput
-        .undo_stack = undo_stack,
         .cursors = cursors,
+        .undo_stack = undo_stack,
     };
 }
 
@@ -645,13 +643,14 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                         const new_entity = try self.storage.cloneEntity(selected_entity.*);
                         defer selected_entity.* = new_entity;
 
-                        // TODO: this is probably logic we want for undo/redo as well?
                         // EntityMetadata
                         {
                             const metadata = self.storage.getComponent(new_entity, *EntityMetadata) catch unreachable;
+                            // TODO postfix with _copy, (N) ... ?
                             metadata.* = EntityMetadata.init(metadata.getDisplayName(), new_entity);
                         }
 
+                        // TODO: this is probably logic we want for undo/redo as well?
                         // InstanceHandle
                         if (self.storage.hasComponent(new_entity, InstanceHandle)) {
                             const instance_handle = self.storage.getComponent(new_entity, InstanceHandle) catch unreachable;
