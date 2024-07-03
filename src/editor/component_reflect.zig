@@ -24,7 +24,7 @@ const zm = @import("zmath");
 const ecez = @import("ecez");
 
 pub const all_components = editor_components.all ++ game.components.all ++ render.components.all;
-pub const all_components_tuple = componentTypeArrayToTuple(&all_components);
+pub const all_components_tuple = @import("../core.zig").component_reflect.componentTypeArrayToTuple(&all_components);
 
 pub const object_metadata_index = blk: {
     for (all_components, 0..) |Component, component_index| {
@@ -45,20 +45,6 @@ pub const biggest_component_size = blk: {
     }
     break :blk size;
 };
-
-pub fn ComponentTypeArrayToTupleType(comptime components: []const type) type {
-    const Tuple = std.meta.Tuple(&[_]type{type} ** components.len);
-    return Tuple;
-}
-
-fn componentTypeArrayToTuple(comptime components: []const type) ComponentTypeArrayToTupleType(components) {
-    const Tuple = ComponentTypeArrayToTupleType(components);
-    comptime var tuple: Tuple = undefined;
-    inline for (components, 0..) |Component, comp_index| {
-        tuple[comp_index] = Component;
-    }
-    return tuple;
-}
 
 pub fn overrideWidgetGenerator(comptime Component: type) ?type {
     return switch (Component) {
