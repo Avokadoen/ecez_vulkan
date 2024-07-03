@@ -29,9 +29,9 @@ pub const Icon = enum(u32) {
 };
 
 pub const icon_size = 18;
-texture_indices: *ImguiPipeline.TextureIndices,
+texture_indices: *const ImguiPipeline.TextureIndices,
 
-pub fn init(texture_indices: *ImguiPipeline.TextureIndices) EditorIcons {
+pub fn init(texture_indices: *const ImguiPipeline.TextureIndices) EditorIcons {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
@@ -72,7 +72,7 @@ pub fn button(
         uv1[1] - ImguiPipeline.uv_stride,
     };
 
-    const press = zgui.imageButton(str_id, &self.texture_indices.icon, .{
+    const press = zgui.imageButton(str_id, @constCast(&self.texture_indices.icon), .{
         .w = width,
         .h = height,
         .uv0 = uv0,
