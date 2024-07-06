@@ -17,9 +17,3 @@ pub const Camera = struct {
         return zm.qmul(yaw_quat, pitch_quat);
     }
 };
-
-pub const ApplyCameraRotationSystem = struct {
-    pub fn applyCameraRotationSystem(rotation: *components.Rotation, camera: Camera) void {
-        rotation.quat = zm.inverse(camera.toQuat());
-    }
-};

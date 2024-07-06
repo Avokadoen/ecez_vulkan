@@ -3,6 +3,8 @@ const Scale = components.Scale;
 const Rotation = components.Rotation;
 const Position = components.Position;
 
+const Camera = @import("camera.zig").Camera;
+
 const render = @import("../render.zig");
 const InstanceHandle = render.components.InstanceHandle;
 const RenderContext = render.Context;
@@ -117,13 +119,32 @@ pub fn SceneGraphSystems(StorageType: type) type {
 
         pub const TransformApplyRotationSystem = struct {
             /// Apply rotation to the transform/
-            pub fn applyRotation(rotation: Rotation, instance_handle: InstanceHandle, event_argument: EventArgument) void {
+            pub fn applyRotation(
+                rotation: Rotation,
+                instance_handle: InstanceHandle,
+                event_argument: EventArgument,
+                exclude: ecez.ExcludeEntityWith(.{Camera}),
+            ) void {
+                _ = exclude;
+
                 const zone = tracy.ZoneN(@src(), @src().fn_name);
                 defer zone.End();
 
                 const transform = event_argument.render_context.getInstanceTransformPtr(instance_handle);
 
                 transform.* = zm.mul(transform.*, zm.quatToMat(rotation.quat));
+            }
+        };
+
+        pub const ApplyCameraRotationSystem = struct {
+            pub fn applyCameraRotationSystem(rotation: *components.Rotation, camera: Camera, instance_handle: InstanceHandle, event_argument: EventArgument) void {
+                const zone = tracy.ZoneN(@src(), @src().fn_name);
+                defer zone.End();
+
+                const transform = event_argument.render_context.getInstanceTransformPtr(instance_handle);
+
+                const full_rotation = zm.inverse(zm.qmul(camera.toQuat(), rotation.quat));
+                transform.* = zm.mul(transform.*, zm.quatToMat(full_rotation));
             }
         };
 

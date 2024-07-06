@@ -96,20 +96,7 @@ const EditorStorage = ecez.CreateStorage(component_reflect.all_components_tuple)
 // TODO: convert on_import to simple queries inline
 const Scheduler = ecez.CreateScheduler(EditorStorage, .{
     // event to apply all transformation and update render buffers as needed
-    ecez.Event("transform_update", .{
-        game.camera.ApplyCameraRotationSystem,
-        SceneGraph.TransformResetSystem,
-        ecez.DependOn(SceneGraph.TransformApplyScaleSystem, .{SceneGraph.TransformResetSystem}),
-        ecez.DependOn(SceneGraph.TransformApplyRotationSystem, .{ SceneGraph.TransformApplyScaleSystem, game.camera.ApplyCameraRotationSystem }),
-        ecez.DependOn(SceneGraph.TransformApplyPositionSystem, .{SceneGraph.TransformApplyRotationSystem}),
-        ecez.DependOn(SceneGraph.L1PropagateSystem, .{SceneGraph.TransformApplyPositionSystem}),
-        ecez.DependOn(SceneGraph.L2PropagateSystem, .{SceneGraph.L1PropagateSystem}),
-        ecez.DependOn(SceneGraph.L3PropagateSystem, .{SceneGraph.L2PropagateSystem}),
-        ecez.DependOn(SceneGraph.L4PropagateSystem, .{SceneGraph.L3PropagateSystem}),
-        ecez.DependOn(SceneGraph.L5PropagateSystem, .{SceneGraph.L4PropagateSystem}),
-        ecez.DependOn(SceneGraph.L6PropagateSystem, .{SceneGraph.L5PropagateSystem}),
-        ecez.DependOn(SceneGraph.L7PropagateSystem, .{SceneGraph.L6PropagateSystem}),
-    }, SceneGraph.EventArgument),
+    game.systems.CreateTransformUpdateEvent("transform_update", SceneGraph),
 });
 
 // TODO: editor should not be part of renderer
@@ -263,7 +250,7 @@ pub fn exportGameSceneToFile(self: *Editor, file_name: []const u8) !void {
         self.allocator.free(ezby_stream);
     }
 
-    // Query all entities with EnttiyMetadat (should be all entities)
+    // Query all entities with EntityMetadata (should be all entities)
     var enity_metadata_query = EditorStorage.Query(
         struct {
             entity: ecez.Entity,
@@ -1367,7 +1354,6 @@ pub fn forceFlush(self: *Editor) !void {
         &self.storage,
         .transform_update,
         SceneGraph.EventArgument{ .read_storage = self.storage, .render_context = &self.render_context },
-        .{},
     );
     self.scheduler.waitEvent(.transform_update);
 
