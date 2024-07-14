@@ -28,7 +28,6 @@ const sync = @import("sync.zig");
 const dmem = @import("device_memory.zig");
 const application_ext_layers = @import("application_ext_layers.zig");
 
-pub const is_debug_build = @import("builtin").mode == .Debug;
 pub const max_frames_in_flight = 2;
 
 const UserPointer = extern struct {
@@ -353,14 +352,14 @@ pub fn init(
         // required extension for VK_EXT_DESCRIPTOR_INDEXING_EXTENSION
         try extensions.append(vk.extensions.khr_get_physical_device_properties_2.name);
 
-        if (is_debug_build) {
+        if (core.build_info.is_debug_build) {
             // add the debug utils extension
             try extensions.append(vk.extensions.ext_debug_utils.name);
         }
 
         const instance_info = vk.InstanceCreateInfo{
             .flags = .{},
-            .p_next = if (is_debug_build) null else &debug_message_info,
+            .p_next = if (core.build_info.is_debug_build) null else &debug_message_info,
             .p_application_info = &application_info,
             .enabled_layer_count = @as(u32, @intCast(validation_layers.len)),
             .pp_enabled_layer_names = validation_layers.ptr,
@@ -386,7 +385,7 @@ pub fn init(
     // register message callback in debug
     const debug_messenger = try setupDebugMessenger(vki, instance);
     errdefer {
-        if (is_debug_build) {
+        if (core.build_info.is_debug_build) {
             vki.destroyDebugUtilsMessengerEXT(instance, debug_messenger.?, null);
         }
     }
@@ -1373,7 +1372,7 @@ pub fn deinit(self: *Render, allocator: Allocator) void {
     self.vki.destroySurfaceKHR(self.instance, self.surface, null);
     self.vkd.destroyDevice(self.device, null);
 
-    if (is_debug_build) {
+    if (core.build_info.is_debug_build) {
         // this is never null in debug builds so we can "safely" unwrap the value
         const debug_messenger = self.debug_messenger.?;
         self.vki.destroyDebugUtilsMessengerEXT(self.instance, debug_messenger, null);
@@ -1730,7 +1729,7 @@ fn selectPhysicalDevice(allocator: Allocator, instance: vk.Instance, vki: Instan
         return error.NoSuitableDevice; // no device has the required feature set
     }
 
-    if (is_debug_build) {
+    if (core.build_info.is_debug_build) {
         std.debug.print("\nselected gpu: {s}\n", .{selected_device_properties.device_name});
     }
 
@@ -2164,7 +2163,7 @@ inline fn createLogicalDevice(
         .flags = .{},
         .queue_create_info_count = if (one_index) 1 else queue_create_info.len,
         .p_queue_create_infos = &queue_create_info,
-        .enabled_layer_count = if (is_debug_build) @as(u32, @intCast(validation_layers.len)) else 0,
+        .enabled_layer_count = if (core.build_info.is_debug_build) @as(u32, @intCast(validation_layers.len)) else 0,
         .pp_enabled_layer_names = validation_layers.ptr,
         .enabled_extension_count = application_ext_layers.required_extensions_cstr.len,
         .pp_enabled_extension_names = &application_ext_layers.required_extensions_cstr,
@@ -2191,7 +2190,7 @@ const debug_message_info = vk.DebugUtilsMessengerCreateInfoEXT{
 
 /// set up debug messenger if we are in a debug build
 inline fn setupDebugMessenger(vki: InstanceDispatch, instance: vk.Instance) !?vk.DebugUtilsMessengerEXT {
-    if (comptime (is_debug_build == false)) {
+    if (comptime (core.build_info.is_debug_build == false)) {
         return null;
     }
 

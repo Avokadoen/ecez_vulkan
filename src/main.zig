@@ -2,15 +2,8 @@ const std = @import("std");
 
 const tracy = @import("ztracy");
 const glfw = @import("glfw");
-const zm = @import("zmath");
-
-const Editor = @import("editor.zig").Editor;
-
-const RenderContext = @import("render.zig").Context;
 
 const core = @import("core.zig");
-
-const game = @import("game.zig");
 
 const config_options = @import("config_options");
 
@@ -18,15 +11,15 @@ pub fn main() !void {
     tracy.SetThreadName("main thread");
 
     // create a gpa with default configuration
-    var alloc = if (RenderContext.is_debug_build) std.heap.GeneralPurposeAllocator(.{}){} else std.heap.c_allocator;
+    var alloc = if (core.build_info.is_debug_build) std.heap.GeneralPurposeAllocator(.{}){} else std.heap.c_allocator;
     defer {
-        if (RenderContext.is_debug_build) {
+        if (core.build_info.is_debug_build) {
             if (alloc.deinit() == .leak) {
                 std.debug.print("leak detected in gpa!", .{});
             }
         }
     }
-    const allocator = if (RenderContext.is_debug_build) alloc.allocator() else alloc;
+    const allocator = if (core.build_info.is_debug_build) alloc.allocator() else alloc;
 
     // init glfw
     if (glfw.init(.{}) == false) {
@@ -53,77 +46,7 @@ pub fn main() !void {
     defer asset_handler.deinit(allocator);
 
     switch (config_options.editor_or_game) {
-        .editor => try editorMain(allocator, asset_handler, window),
-        .game => try gameMain(allocator, asset_handler, window),
+        .editor => try @import("editor.zig").main(allocator, asset_handler, window),
+        .game => try @import("game.zig").main(allocator, asset_handler, window),
     }
-}
-
-fn editorMain(allocator: std.mem.Allocator, asset_handler: core.AssetHandler, window: glfw.Window) !void {
-    var editor: Editor = editor_init_blk: {
-        var mesh_initializers = std.ArrayList(RenderContext.MeshInstancehInitializeContex).init(allocator);
-        defer {
-            for (mesh_initializers.items) |mesh_initializer| {
-                allocator.free(mesh_initializer.cgltf_path);
-            }
-            mesh_initializers.deinit();
-        }
-
-        {
-            const model_path = try asset_handler.getPath(allocator, "models");
-            defer allocator.free(model_path);
-
-            var model_dir = try std.fs.openDirAbsolute(model_path, .{ .iterate = true });
-            defer model_dir.close();
-
-            var model_walker = try model_dir.walk(allocator);
-            defer model_walker.deinit();
-
-            while ((try model_walker.next())) |entry| {
-                if (std.mem.endsWith(u8, entry.basename, ".gltf")) {
-                    const path = try std.fs.path.join(allocator, &[_][]const u8{ "models", entry.path });
-                    try mesh_initializers.append(RenderContext.MeshInstancehInitializeContex{
-                        .cgltf_path = path,
-                        .instance_count = 10_000,
-                    });
-                }
-            }
-        }
-
-        break :editor_init_blk try Editor.init(
-            allocator,
-            window,
-            asset_handler,
-            mesh_initializers.items,
-        );
-    };
-    defer editor.deinit();
-
-    // handle if user resize window
-    editor.handleFramebufferResize(window);
-
-    // create default test scene
-    try editor.createTestScene();
-
-    var then = std.time.microTimestamp();
-    // Wait for the user to close the window.
-    while (!window.shouldClose()) {
-        tracy.FrameMark();
-
-        glfw.pollEvents();
-
-        const now = std.time.microTimestamp();
-        const delta_time = @max(@as(f32, @floatFromInt(now - then)) / std.time.us_per_s, 0.000001);
-        then = now;
-
-        editor.update(delta_time);
-        try editor.newFrame(window, delta_time);
-    }
-}
-
-fn gameMain(allocator: std.mem.Allocator, asset_handler: core.AssetHandler, window: glfw.Window) !void {
-    _ = allocator;
-    _ = asset_handler;
-    _ = window;
-
-    return error.Unimplemented;
 }
