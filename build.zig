@@ -17,10 +17,10 @@ pub fn build(b: *Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const build_product = b.option(BuildProduct, "editor_or_game", "Whether the build is a game executable, or the scene editor") orelse .editor;
+    const build_product = b.option(BuildProduct, "bin_type", "Whether the build is a game executable, or the scene editor") orelse .editor;
     const config_options = build_options_blk: {
         const opts = b.addOptions();
-        opts.addOption(BuildProduct, "editor_or_game", build_product);
+        opts.addOption(BuildProduct, "bin_type", build_product);
 
         break :build_options_blk opts;
     };

@@ -45,7 +45,7 @@ pub fn main() !void {
     const asset_handler = try core.AssetHandler.init(allocator);
     defer asset_handler.deinit(allocator);
 
-    switch (config_options.editor_or_game) {
+    switch (config_options.bin_type) {
         .editor => try @import("editor.zig").main(allocator, asset_handler, window),
         .game => try @import("game.zig").main(allocator, asset_handler, window),
     }
