@@ -149,8 +149,8 @@ pub fn overrideWidgetGenerator(comptime Component: type) ?type {
                 return false;
             }
         },
-        game.scene_graph.Level => struct {
-            pub fn widget(editor: *Editor, level: *game.scene_graph.Level) bool {
+        game.components.SceneGraph.Level => struct {
+            pub fn widget(editor: *Editor, level: *game.components.SceneGraph.Level) bool {
                 _ = editor;
                 const zone = tracy.ZoneN(@src(), @src().fn_name);
                 defer zone.End();
@@ -158,7 +158,7 @@ pub fn overrideWidgetGenerator(comptime Component: type) ?type {
                 if (zgui.beginCombo("Level", .{ .preview_value = @tagName(level.value) })) {
                     defer zgui.endCombo();
 
-                    inline for (@typeInfo(game.scene_graph.LevelValue).Enum.fields) |enum_field| {
+                    inline for (@typeInfo(game.components.SceneGraph.LevelValue).Enum.fields) |enum_field| {
                         if (zgui.selectable(std.fmt.comptimePrint("{s}", .{enum_field.name}), .{
                             .selected = @intFromEnum(level.value) == enum_field.value,
                         })) {

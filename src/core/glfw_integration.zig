@@ -3,6 +3,7 @@ const glfw = @import("glfw");
 pub const UserPointerType = enum(u32) {
     undefined,
     editor,
+    game,
     render,
 };
 

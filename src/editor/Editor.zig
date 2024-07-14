@@ -92,11 +92,12 @@ const InputState = struct {
 };
 
 const EditorStorage = ecez.CreateStorage(component_reflect.all_components_tuple);
+const GameSystems = game.systems.SceneGraphSystems(EditorStorage);
 
 // TODO: convert on_import to simple queries inline
 const Scheduler = ecez.CreateScheduler(EditorStorage, .{
     // event to apply all transformation and update render buffers as needed
-    game.systems.CreateTransformUpdateEvent("transform_update", SceneGraph),
+    GameSystems.TransformUpdateEvent,
 });
 
 // TODO: editor should not be part of renderer
@@ -1342,8 +1343,8 @@ pub fn createNewVisbleObject(
         try self.storage.setComponent(new_entity, scale);
     }
 
-    try self.storage.setComponent(new_entity, game.scene_graph.Level{ .value = .L0 });
-    try self.storage.setComponent(new_entity, game.scene_graph.L0{});
+    try self.storage.setComponent(new_entity, game.components.SceneGraph.Level{ .value = .L0 });
+    try self.storage.setComponent(new_entity, game.components.SceneGraph.L0{});
 }
 
 pub fn forceFlush(self: *Editor) !void {
@@ -1353,7 +1354,7 @@ pub fn forceFlush(self: *Editor) !void {
     self.scheduler.dispatchEvent(
         &self.storage,
         .transform_update,
-        SceneGraph.EventArgument{ .read_storage = self.storage, .render_context = &self.render_context },
+        GameSystems.EventArgument{ .read_storage = self.storage, .render_context = &self.render_context },
     );
     self.scheduler.waitEvent(.transform_update);
 
