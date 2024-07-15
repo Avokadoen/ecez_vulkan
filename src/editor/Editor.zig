@@ -225,7 +225,7 @@ pub fn exportEditorSceneToFile(self: *Editor, file_name: []const u8) !void {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
-    const ezby_stream = try ezby.serialize(EditorStorage, self.allocator, self.storage, .{});
+    const ezby_stream = try ezby.serialize(EditorStorage, self.allocator, self.storage, .{}, .{});
     defer self.allocator.free(ezby_stream);
 
     // TODO: this is an horrible idea since we don't know if the write will be sucessfull
@@ -243,7 +243,7 @@ pub fn exportGameSceneToFile(self: *Editor, file_name: []const u8) !void {
     defer zone.End();
 
     // Serialize current state
-    const ezby_stream = try ezby.serialize(EditorStorage, self.allocator, self.storage, .{});
+    const ezby_stream = try ezby.serialize(EditorStorage, self.allocator, self.storage, .{}, .{});
     // On function exit, restore previous state
     defer {
         // TODO: make sure this can't fail, or progress can be lost
@@ -268,7 +268,7 @@ pub fn exportGameSceneToFile(self: *Editor, file_name: []const u8) !void {
     // Submit edit queue
     try self.storage.flushStorageQueue();
 
-    const game_stream = try ezby.serialize(EditorStorage, self.allocator, self.storage, .{});
+    const game_stream = try ezby.serialize(EditorStorage, self.allocator, self.storage, .{}, .{ .culled_component_types = &editor_components.all });
     defer self.allocator.free(game_stream);
 
     // TODO: this is an horrible idea since we don't know if the write will be sucessfull

@@ -204,25 +204,26 @@ pub fn newFrame(self: *Game, window: glfw.Window, delta_time: f32) !void {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
-    // TODO: Move out of newFrame, into update function instead ...
-    if (false == self.ui_state.camera_control_active) {
-        // If we are not controlling the camera, then we should update cursor if needed
-        // NOTE: getting cursor must be done before calling zgui.newFrame
-        window.setInputModeCursor(.normal);
-        switch (zgui.getMouseCursor()) {
-            .none => window.setInputModeCursor(.hidden),
-            .arrow => window.setCursor(self.arrow),
-            .text_input => window.setCursor(self.ibeam),
-            .resize_all => window.setCursor(self.crosshair),
-            .resize_ns => window.setCursor(self.resize_ns),
-            .resize_ew => window.setCursor(self.resize_ew),
-            .resize_nesw => window.setCursor(self.resize_nesw),
-            .resize_nwse => window.setCursor(self.resize_nwse),
-            .hand => window.setCursor(self.pointing_hand),
-            .not_allowed => window.setCursor(self.not_allowed),
-            .count => window.setCursor(self.ibeam),
-        }
-    }
+    // TODO: needed for dev ui
+    // // TODO: Move out of newFrame, into update function instead ...
+    // if (false == self.ui_state.camera_control_active) {
+    //     // If we are not controlling the camera, then we should update cursor if needed
+    //     // NOTE: getting cursor must be done before calling zgui.newFrame
+    //     window.setInputModeCursor(.normal);
+    //     switch (zgui.getMouseCursor()) {
+    //         .none => window.setInputModeCursor(.hidden),
+    //         .arrow => window.setCursor(self.arrow),
+    //         .text_input => window.setCursor(self.ibeam),
+    //         .resize_all => window.setCursor(self.crosshair),
+    //         .resize_ns => window.setCursor(self.resize_ns),
+    //         .resize_ew => window.setCursor(self.resize_ew),
+    //         .resize_nesw => window.setCursor(self.resize_nesw),
+    //         .resize_nwse => window.setCursor(self.resize_nwse),
+    //         .hand => window.setCursor(self.pointing_hand),
+    //         .not_allowed => window.setCursor(self.not_allowed),
+    //         .count => window.setCursor(self.ibeam),
+    //     }
+    // }
 
     const frame_size = window.getFramebufferSize();
     zgui.io.setDisplaySize(@as(f32, @floatFromInt(frame_size.width)), @as(f32, @floatFromInt(frame_size.height)));
@@ -240,36 +241,6 @@ pub fn newFrame(self: *Game, window: glfw.Window, delta_time: f32) !void {
 
     try self.render_context.drawFrame(window);
     try self.forceFlush();
-}
-
-pub fn createTestScene(self: *Game) !void {
-    // load some test stuff while we are missing a file format for scenes
-    const box_mesh_handle = self.getMeshHandleFromName("BoxTextured").?;
-    try self.createNewVisbleObject("box", box_mesh_handle, .{
-        .rotation = game.components.Rotation{ .quat = zm.quatFromNormAxisAngle(zm.f32x4(0, 0, 1, 0), std.math.pi) },
-        .position = game.components.Position{ .vec = zm.f32x4(-1, 0, 0, 0) },
-        .scale = game.components.Scale{ .vec = zm.f32x4(1, 1, 1, 1) },
-    });
-
-    const helmet_mesh_handle = self.getMeshHandleFromName("SciFiHelmet").?;
-    try self.createNewVisbleObject("helmet", helmet_mesh_handle, .{
-        .rotation = game.components.Rotation{ .quat = zm.quatFromNormAxisAngle(zm.f32x4(0, 1, 0, 0), std.math.pi * 0.5) },
-        .position = game.components.Position{ .vec = zm.f32x4(1, 0, 0, 0) },
-    });
-
-    // camera init
-    {
-        const CameraArch = struct {
-            b: game.components.Position = .{ .vec = zm.f32x4(0, 0, -4, 0) },
-            c: game.components.MoveSpeed = .{ .vec = @splat(20) },
-            d: game.components.Velocity = .{ .vec = @splat(0) },
-            e: game.components.Camera = .{ .turn_rate = 0.0005 },
-        };
-
-        const active_camera = try self.newSceneEntity("default_camera");
-        try self.storage.setComponents(active_camera, CameraArch{});
-        self.active_camera = active_camera;
-    }
 }
 
 pub fn validCameraEntity(self: *Game, entity: ?ecez.Entity) bool {
@@ -312,6 +283,7 @@ pub fn setEditorInput(window: glfw.Window) void {
 
     const EditorCallbacks = struct {
         pub fn key(_window: glfw.Window, input_key: glfw.Key, scancode: i32, action: glfw.Action, mods: glfw.Mods) void {
+            _ = _window;
             _ = scancode;
 
             // apply modifiers
@@ -323,16 +295,6 @@ pub fn setEditorInput(window: glfw.Window) void {
             // zgui.addKeyEvent(zgui.Key.mod_num_lock, mod.num_lock);
 
             zgui.io.addKeyEvent(core.zgui_integration.mapGlfwKeyToImgui(input_key), action == .press);
-
-            const user_pointer = core.glfw_integration.findUserPointer(
-                UserPointer,
-                _window,
-            ) orelse return;
-
-            const undo_action = input_key == .z and (action == .press) and mods.control;
-            if (undo_action) {
-                user_pointer.ptr.popUndoStack();
-            }
         }
 
         pub fn char(_window: glfw.Window, codepoint: u21) void {
@@ -525,39 +487,6 @@ pub fn signalRenderUpdate(self: *Game) void {
     defer zone.End();
 
     self.render_context.signalUpdate();
-}
-
-pub const VisibleObjectConfig = struct {
-    position: ?Game.Position = null,
-    rotation: ?Game.Rotation = null,
-    scale: ?Game.Scale = null,
-};
-/// Create a new entity that should also have a renderable mesh instance tied to the entity.
-/// The function will also send this to the GPU in the event of flush_all_objects = .yes
-pub fn createNewVisbleObject(
-    self: *Game,
-    object_name: []const u8,
-    mesh_handle: RenderContext.MeshHandle,
-    config: VisibleObjectConfig,
-) !void {
-    const zone = tracy.ZoneN(@src(), @src().fn_name);
-    defer zone.End();
-
-    const new_entity = try self.newSceneEntity(object_name);
-    try self.assignEntityMeshInstance(new_entity, mesh_handle);
-
-    if (config.position) |position| {
-        try self.storage.setComponent(new_entity, position);
-    }
-    if (config.rotation) |rotation| {
-        try self.storage.setComponent(new_entity, rotation);
-    }
-    if (config.scale) |scale| {
-        try self.storage.setComponent(new_entity, scale);
-    }
-
-    try self.storage.setComponent(new_entity, game.scene_graph.Level{ .value = .L0 });
-    try self.storage.setComponent(new_entity, game.scene_graph.L0{});
 }
 
 pub fn forceFlush(self: *Game) !void {
