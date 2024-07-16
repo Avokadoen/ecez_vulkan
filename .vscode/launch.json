@@ -29,6 +29,12 @@
             "preLaunchTask": "build release"
         },
         {
+            "name": "(Windows) Attach game Debug",
+            "type": "cppvsdbg",
+            "request": "attach",
+            "processId":"${command:pickProcess}"
+        },
+        {
             "name": "(Linux) Launch Debug",
             "type": "lldb",
             "request": "launch",
@@ -47,6 +53,11 @@
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
             "preLaunchTask": "build release"
+        },
+        {
+            "name": "(Linux) Attach game Debug",
+            "type": "lldb",
+            "request": "attach",
         },
     ]
 }
