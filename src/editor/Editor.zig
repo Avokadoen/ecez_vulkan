@@ -488,7 +488,11 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 }
 
                 if (self.icons.button(.debug_play, "debug_play_game_scene##00", "builds debug game exe, game scene and runs", EditorIcons.icon_size, EditorIcons.icon_size, .{})) {
-                    std.debug.print("unimplemented", .{});
+                    const play_game_config = PlayGameSettings{
+                        .project_src_path = "C:\\repositories\\ecez-vulkan",
+                        .game_compile_flags = &[0][]const u8{},
+                    };
+                    try self.playGame(self.allocator, play_game_config);
                 }
             }
 
@@ -1385,5 +1389,47 @@ inline fn createNewEntityMenu(self: *Editor) !void {
                 try self.createNewVisbleObject(c_name.*, mesh_handle, .{});
             }
         }
+    }
+}
+
+const PlayGameSettings = struct {
+    project_src_path: []const u8,
+    game_compile_flags: []const []const u8,
+};
+
+fn playGame(self: *Editor, allocator: Allocator, settings: PlayGameSettings) !void {
+    {
+        const argv = [_][]const u8{ "zig", "build", "-Dbin_type=game" };
+
+        // Spawn zig compiler and begin compiling game
+        var compile_game_process = std.process.Child.init(&argv, allocator);
+        compile_game_process.cwd = settings.project_src_path;
+        try compile_game_process.spawn();
+
+        // Export current scene as scene to play
+        try self.exportGameSceneToFile("scene.game.ezby");
+
+        // wait
+        switch (try compile_game_process.wait()) {
+            .Exited => |exit_code| {
+                if (0 != exit_code) {
+                    std.debug.print("failed to compile game", .{});
+                    return;
+                }
+            },
+            else => {
+                // TODO: unreachable?
+                std.debug.print("failed to compile game", .{});
+            },
+        }
+    }
+
+    {
+        const argv = [_][]const u8{"zig-out/bin/game"};
+        var run_game_process = std.process.Child.init(&argv, allocator);
+        run_game_process.cwd = settings.project_src_path;
+        try run_game_process.spawn();
+
+        _ = try run_game_process.wait();
     }
 }
