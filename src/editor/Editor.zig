@@ -12,6 +12,8 @@ const zm = @import("zmath");
 const core = @import("../core.zig");
 const marker = core.zgui_integration.marker;
 
+const config_options = @import("config_options");
+
 const EditorIcons = @import("EditorIcons.zig");
 const Icons = EditorIcons.Icon;
 
@@ -489,7 +491,7 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
 
                 if (self.icons.button(.debug_play, "debug_play_game_scene##00", "builds debug game exe, game scene and runs", EditorIcons.icon_size, EditorIcons.icon_size, .{})) {
                     const play_game_config = PlayGameSettings{
-                        .project_src_path = "C:\\repositories\\ecez-vulkan",
+                        .project_src_path = config_options.build_script_path,
                         .game_compile_flags = &[0][]const u8{},
                     };
                     try self.playGame(self.allocator, play_game_config);

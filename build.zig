@@ -21,6 +21,7 @@ pub fn build(b: *Build) void {
     const config_options = build_options_blk: {
         const opts = b.addOptions();
         opts.addOption(BuildProduct, "bin_type", build_product);
+        opts.addOption([]const u8, "build_script_path", thisDir());
 
         break :build_options_blk opts;
     };
