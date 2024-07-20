@@ -49,7 +49,7 @@ pub fn main(allocator: std.mem.Allocator, asset_handler: core.AssetHandler, wind
     defer editor.deinit();
 
     // handle if user resize window
-    editor.handleFramebufferResize(window);
+    core.glfw_integration.handleFramebufferResize(Editor, &editor, window);
 
     // create default test scene
     try editor.createTestScene();

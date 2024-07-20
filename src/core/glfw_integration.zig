@@ -53,3 +53,15 @@ inline fn getUserPointerTypeValue(comptime UserPointerT: type) UserPointerType {
         return @as(*const UserPointerType, @ptrCast(@alignCast(default_value))).*;
     }
 }
+
+/// handle frame buffer resize and register self.user_pointer
+pub fn handleFramebufferResize(comptime Self: type, self: *Self, window: glfw.Window) void {
+    self.render_context.handleFramebufferResize(window, false);
+
+    self.user_pointer = Self.UserPointer{
+        .ptr = self,
+        .next = @ptrCast(&self.render_context.user_pointer),
+    };
+
+    window.setUserPointer(&self.user_pointer);
+}

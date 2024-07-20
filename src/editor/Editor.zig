@@ -39,7 +39,7 @@ const component_reflect = @import("component_reflect.zig");
 const all_components = component_reflect.all_components;
 const biggest_component_size = component_reflect.biggest_component_size;
 
-const UserPointer = extern struct {
+pub const UserPointer = extern struct {
     type: core.glfw_integration.UserPointerType = .editor,
     next: ?*UserPointer,
     ptr: *Editor,
@@ -1072,20 +1072,6 @@ pub fn validCameraEntity(self: *Editor, entity: ?ecez.Entity) bool {
     return true;
 }
 
-pub fn handleFramebufferResize(self: *Editor, window: glfw.Window) void {
-    const zone = tracy.ZoneN(@src(), @src().fn_name);
-    defer zone.End();
-
-    self.render_context.handleFramebufferResize(window, false);
-
-    self.user_pointer = UserPointer{
-        .ptr = self,
-        .next = @ptrCast(&self.render_context.user_pointer),
-    };
-
-    window.setUserPointer(&self.user_pointer);
-}
-
 /// register input so only editor handles glfw input
 pub fn setEditorInput(window: glfw.Window) void {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
@@ -1312,13 +1298,6 @@ pub fn assignEntityMeshInstance(self: *Editor, entity: ecez.Entity, mesh_handle:
     try self.storage.setComponent(entity, new_instance);
 }
 
-pub fn signalRenderUpdate(self: *Editor) void {
-    const zone = tracy.ZoneN(@src(), @src().fn_name);
-    defer zone.End();
-
-    self.render_context.signalUpdate();
-}
-
 pub const VisibleObjectConfig = struct {
     position: ?Editor.Position = null,
     rotation: ?Editor.Rotation = null,
@@ -1364,7 +1343,7 @@ pub fn forceFlush(self: *Editor) !void {
     self.scheduler.waitEvent(.transform_update);
 
     // Currently the renderer is configured to always flush
-    // self.signalRenderUpdate();
+    // self.render_context.signalUpdate();
 }
 
 /// Display imgui menu with a list of options for a new entity

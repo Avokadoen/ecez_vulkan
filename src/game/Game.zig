@@ -27,7 +27,7 @@ const systems = game.systems.SceneGraphSystems(GameStorage);
 pub const all_components = game.components.all ++ render.components.all;
 pub const all_components_tuple = @import("../core.zig").component_reflect.componentTypeArrayToTuple(&all_components);
 
-const UserPointer = extern struct {
+pub const UserPointer = extern struct {
     type: core.glfw_integration.UserPointerType = .game,
     next: ?*UserPointer,
     ptr: *Game,
@@ -85,7 +85,7 @@ pub fn init(
     const scheduler = try Scheduler.init(allocator, .{});
 
     // register input callbacks for the game
-    setEditorInput(window);
+    setCameraInput(window);
 
     // TODO: imgui not present in release build
     // Color scheme
@@ -262,101 +262,6 @@ pub fn validCameraEntity(self: *Game, entity: ?ecez.Entity) bool {
     return true;
 }
 
-pub fn handleFramebufferResize(self: *Game, window: glfw.Window) void {
-    const zone = tracy.ZoneN(@src(), @src().fn_name);
-    defer zone.End();
-
-    self.render_context.handleFramebufferResize(window, false);
-
-    self.user_pointer = UserPointer{
-        .ptr = self,
-        .next = @ptrCast(&self.render_context.user_pointer),
-    };
-
-    window.setUserPointer(&self.user_pointer);
-}
-
-/// register input so only game handles glfw input
-pub fn setEditorInput(window: glfw.Window) void {
-    const zone = tracy.ZoneN(@src(), @src().fn_name);
-    defer zone.End();
-
-    const EditorCallbacks = struct {
-        pub fn key(_window: glfw.Window, input_key: glfw.Key, scancode: i32, action: glfw.Action, mods: glfw.Mods) void {
-            _ = _window;
-            _ = scancode;
-
-            // apply modifiers
-            zgui.io.addKeyEvent(zgui.Key.mod_shift, mods.shift);
-            zgui.io.addKeyEvent(zgui.Key.mod_ctrl, mods.control);
-            zgui.io.addKeyEvent(zgui.Key.mod_alt, mods.alt);
-            zgui.io.addKeyEvent(zgui.Key.mod_super, mods.super);
-            // zgui.addKeyEvent(zgui.Key.mod_caps_lock, mod.caps_lock);
-            // zgui.addKeyEvent(zgui.Key.mod_num_lock, mod.num_lock);
-
-            zgui.io.addKeyEvent(core.zgui_integration.mapGlfwKeyToImgui(input_key), action == .press);
-        }
-
-        pub fn char(_window: glfw.Window, codepoint: u21) void {
-            _ = _window;
-
-            var buffer: [8]u8 = undefined;
-            const len = std.unicode.utf8Encode(codepoint, buffer[0..]) catch return;
-            const cstr = buffer[0 .. len + 1];
-            cstr[len] = 0; // null terminator
-            zgui.io.addInputCharactersUTF8(@as([*:0]const u8, @ptrCast(cstr.ptr)));
-        }
-
-        pub fn mouseButton(_window: glfw.Window, button: glfw.MouseButton, action: glfw.Action, mods: glfw.Mods) void {
-            _ = _window;
-
-            if (switch (button) {
-                .left => zgui.MouseButton.left,
-                .right => zgui.MouseButton.right,
-                .middle => zgui.MouseButton.middle,
-                .four, .five, .six, .seven, .eight => null,
-            }) |zgui_button| {
-                // apply modifiers
-                zgui.io.addKeyEvent(zgui.Key.mod_shift, mods.shift);
-                zgui.io.addKeyEvent(zgui.Key.mod_ctrl, mods.control);
-                zgui.io.addKeyEvent(zgui.Key.mod_alt, mods.alt);
-                zgui.io.addKeyEvent(zgui.Key.mod_super, mods.super);
-
-                zgui.io.addMouseButtonEvent(zgui_button, action == .press);
-            }
-        }
-
-        pub fn cursorPos(_window: glfw.Window, xpos: f64, ypos: f64) void {
-            const user_pointer = core.glfw_integration.findUserPointer(
-                UserPointer,
-                _window,
-            ) orelse return;
-
-            defer {
-                user_pointer.ptr.input_state.previous_cursor_xpos = xpos;
-                user_pointer.ptr.input_state.previous_cursor_ypos = ypos;
-            }
-
-            zgui.io.addMousePositionEvent(@as(f32, @floatCast(xpos)), @as(f32, @floatCast(ypos)));
-        }
-
-        pub fn scroll(_window: glfw.Window, xoffset: f64, yoffset: f64) void {
-            _ = _window;
-
-            zgui.io.addMouseWheelEvent(@as(f32, @floatCast(xoffset)), @as(f32, @floatCast(yoffset)));
-        }
-    };
-
-    // enable normal system cursor behaviour
-    window.setInputModeCursor(.normal);
-
-    _ = window.setKeyCallback(EditorCallbacks.key);
-    _ = window.setCharCallback(EditorCallbacks.char);
-    _ = window.setMouseButtonCallback(EditorCallbacks.mouseButton);
-    _ = window.setCursorPosCallback(EditorCallbacks.cursorPos);
-    _ = window.setScrollCallback(EditorCallbacks.scroll);
-}
-
 /// register input so camera handles glfw input
 pub fn setCameraInput(window: glfw.Window) void {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
@@ -391,11 +296,8 @@ pub fn setCameraInput(window: glfw.Window) void {
                     .d => camera_velocity_ptr.vec[0] += axist_value,
                     .space => camera_velocity_ptr.vec[1] += axist_value,
                     .left_control => camera_velocity_ptr.vec[1] -= axist_value,
-                    // exit camera mode
-                    .escape => {
-                        camera_velocity_ptr.vec = @splat(0);
-                        game_ptr.ui_state.camera_control_active = false;
-                        setEditorInput(_window);
+                    .esc => {
+                        // TODO: shutdown for now
                     },
                     else => {},
                 }
@@ -458,13 +360,6 @@ pub fn setCameraInput(window: glfw.Window) void {
     _ = window.setScrollCallback(CameraCallbacks.scroll);
 }
 
-pub fn getMeshHandleFromName(self: *Game, name: []const u8) ?MeshHandle {
-    const zone = tracy.ZoneN(@src(), @src().fn_name);
-    defer zone.End();
-
-    return self.render_context.getMeshHandleFromName(name);
-}
-
 /// This function retrieves a instance handle from the renderer and assigns it to the argument entity
 pub fn assignEntityMeshInstance(self: *Game, entity: ecez.Entity, mesh_handle: MeshHandle) !void {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
@@ -482,13 +377,6 @@ pub fn assignEntityMeshInstance(self: *Game, entity: ecez.Entity, mesh_handle: M
     try self.storage.setComponent(entity, new_instance);
 }
 
-pub fn signalRenderUpdate(self: *Game) void {
-    const zone = tracy.ZoneN(@src(), @src().fn_name);
-    defer zone.End();
-
-    self.render_context.signalUpdate();
-}
-
 pub fn forceFlush(self: *Game) !void {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
@@ -501,5 +389,5 @@ pub fn forceFlush(self: *Game) !void {
     self.scheduler.waitEvent(.transform_update);
 
     // Currently the renderer is configured to always flush
-    // self.signalRenderUpdate();
+    // self.render_context.signalUpdate();
 }

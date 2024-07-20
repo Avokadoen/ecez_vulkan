@@ -1,5 +1,6 @@
-const components = @import("components.zig");
 const zm = @import("zmath");
+
+const components = @import("components.zig");
 
 pub const all = [_]type{
     Camera,

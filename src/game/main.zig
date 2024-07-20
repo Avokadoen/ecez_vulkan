@@ -48,7 +48,7 @@ pub fn main(allocator: std.mem.Allocator, asset_handler: core.AssetHandler, wind
     defer game.deinit();
 
     // handle if user resize window
-    game.handleFramebufferResize(window);
+    core.glfw_integration.handleFramebufferResize(Game, &game, window);
 
     // TODO: for now we always try to load this file, panic if not present
     try game.importGameSceneFromFile("scene.game.ezby");
