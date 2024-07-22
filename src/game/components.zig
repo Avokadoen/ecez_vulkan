@@ -11,6 +11,7 @@ pub const all = [_]type{
     Scale,
     MoveSpeed,
     Velocity,
+    PlayerTag,
 } ++ camera.all ++ SceneGraph.all;
 
 pub const Camera = camera.Camera;
@@ -34,6 +35,8 @@ pub const MoveSpeed = struct {
 pub const Velocity = struct {
     vec: zm.Vec,
 };
+
+pub const PlayerTag = struct {};
 
 pub const SceneGraph = struct {
     pub const all = [_]type{
