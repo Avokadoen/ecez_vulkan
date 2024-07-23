@@ -12,9 +12,8 @@ const editor_components = @import("components.zig");
 const EntityMetadata = editor_components.EntityMetadata;
 
 const game = @import("../game.zig");
-const Position = game.components.Position;
-const Rotation = game.components.Rotation;
-const Scale = game.components.Scale;
+
+const physics = @import("../physics.zig");
 
 const Editor = @import("Editor.zig");
 
@@ -23,7 +22,7 @@ const zgui = @import("zgui");
 const zm = @import("zmath");
 const ecez = @import("ecez");
 
-pub const all_components = editor_components.all ++ game.components.all ++ render.components.all;
+pub const all_components = editor_components.all ++ game.components.all ++ physics.components.all ++ render.components.all;
 pub const all_components_tuple = @import("../core.zig").component_reflect.componentTypeArrayToTuple(&all_components);
 
 pub const object_metadata_index = blk: {
@@ -120,8 +119,8 @@ pub fn overrideWidgetGenerator(comptime Component: type) ?type {
                 return false;
             }
         },
-        Rotation => struct {
-            pub fn widget(editor: *Editor, rotation: *Rotation) bool {
+        physics.components.Rotation => struct {
+            pub fn widget(editor: *Editor, rotation: *physics.components.Rotation) bool {
                 const zone = tracy.ZoneN(@src(), @src().fn_name);
                 defer zone.End();
                 _ = editor;
@@ -222,7 +221,7 @@ pub fn specializedRemoveHandle(comptime Component: type) ?type {
                 try editor.forceFlush();
             }
         },
-        Position, Rotation, Scale => struct {
+        physics.components.Position, physics.components.Rotation, physics.components.Scale => struct {
             pub fn remove(editor: *Editor) !void {
                 const selected_entity = editor.ui_state.selected_entity.?;
 

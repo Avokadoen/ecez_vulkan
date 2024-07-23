@@ -22,9 +22,11 @@ const Position = game.components.Position;
 const Rotation = game.components.Rotation;
 const Scale = game.components.Scale;
 
+const physics = @import("../physics.zig");
+
 const systems = game.systems.SceneGraphSystems(GameStorage);
 
-pub const all_components = game.components.all ++ render.components.all;
+pub const all_components = game.components.all ++ physics.components.all ++ render.components.all;
 pub const all_components_tuple = @import("../core.zig").component_reflect.componentTypeArrayToTuple(&all_components);
 
 pub const UserPointer = extern struct {

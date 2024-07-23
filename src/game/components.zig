@@ -6,33 +6,13 @@ const camera = @import("camera.zig");
 
 // TODO: compute this
 pub const all = [_]type{
-    Position,
-    Rotation,
-    Scale,
     MoveSpeed,
-    Velocity,
     PlayerTag,
 } ++ camera.all ++ SceneGraph.all;
 
 pub const Camera = camera.Camera;
 
-pub const Position = struct {
-    vec: zm.Vec,
-};
-
-pub const Rotation = struct {
-    quat: zm.Quat,
-};
-
-pub const Scale = struct {
-    vec: zm.Vec,
-};
-
 pub const MoveSpeed = struct {
-    vec: zm.Vec,
-};
-
-pub const Velocity = struct {
     vec: zm.Vec,
 };
 

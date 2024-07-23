@@ -1,7 +1,5 @@
 const components = @import("components.zig");
-const Scale = components.Scale;
-const Rotation = components.Rotation;
-const Position = components.Position;
+const physics = @import("../physics.zig");
 
 const Camera = @import("camera.zig").Camera;
 
@@ -50,7 +48,7 @@ pub fn SceneGraphSystems(StorageType: type) type {
 
         pub const TransformApplyScaleSystem = struct {
             /// Apply scale to the transform/
-            pub fn applyScale(scale: Scale, instance_handle: InstanceHandle, event_argument: EventArgument) void {
+            pub fn applyScale(scale: physics.components.Scale, instance_handle: InstanceHandle, event_argument: EventArgument) void {
                 const zone = tracy.ZoneN(@src(), @src().fn_name);
                 defer zone.End();
 
@@ -65,7 +63,7 @@ pub fn SceneGraphSystems(StorageType: type) type {
         pub const TransformApplyRotationSystem = struct {
             /// Apply rotation to the transform/
             pub fn applyRotation(
-                rotation: Rotation,
+                rotation: physics.components.Rotation,
                 instance_handle: InstanceHandle,
                 event_argument: EventArgument,
                 exclude: ecez.ExcludeEntityWith(.{Camera}),
@@ -82,7 +80,7 @@ pub fn SceneGraphSystems(StorageType: type) type {
         };
 
         pub const ApplyCameraRotationSystem = struct {
-            pub fn applyCameraRotationSystem(rotation: *components.Rotation, camera: Camera, instance_handle: InstanceHandle, event_argument: EventArgument) void {
+            pub fn applyCameraRotationSystem(camera: Camera, rotation: *physics.components.Rotation, instance_handle: InstanceHandle, event_argument: EventArgument) void {
                 const zone = tracy.ZoneN(@src(), @src().fn_name);
                 defer zone.End();
 
@@ -95,7 +93,7 @@ pub fn SceneGraphSystems(StorageType: type) type {
 
         pub const TransformApplyPositionSystem = struct {
             /// Apply position to the transform
-            pub fn applyPosition(position: Position, instance_handle: InstanceHandle, event_argument: EventArgument) void {
+            pub fn applyPosition(position: physics.components.Position, instance_handle: InstanceHandle, event_argument: EventArgument) void {
                 const zone = tracy.ZoneN(@src(), @src().fn_name);
                 defer zone.End();
 

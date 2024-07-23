@@ -32,10 +32,9 @@ const editor_components = @import("components.zig");
 const EntityMetadata = editor_components.EntityMetadata;
 
 const game = @import("../game.zig");
-const Position = game.components.Position;
-const Rotation = game.components.Rotation;
-const Scale = game.components.Scale;
 const SceneGraph = game.scene_graph.SceneGraphSystems(EditorStorage);
+
+const physics = @import("../physics.zig");
 
 const component_reflect = @import("component_reflect.zig");
 const all_components = component_reflect.all_components;
@@ -342,9 +341,9 @@ pub fn update(self: *Editor, delta_time: f32) void {
             };
 
             // fetch the camera position pointer and calculate the position delta
-            const camera_position_ptr = self.storage.getComponent(active_camera, *game.components.Position) catch unreachable;
+            const camera_position_ptr = self.storage.getComponent(active_camera, *physics.components.Position) catch unreachable;
             camera_position_ptr.vec += calc_position_delta_blk: {
-                const camera_velocity = self.storage.getComponent(active_camera, game.components.Velocity) catch unreachable;
+                const camera_velocity = self.storage.getComponent(active_camera, physics.components.Velocity) catch unreachable;
                 const camera_movespeed = self.storage.getComponent(active_camera, game.components.MoveSpeed) catch unreachable;
                 const is_movement_vector_set = @reduce(.Min, camera_velocity.vec) != 0 or @reduce(.Max, camera_velocity.vec) != 0;
                 if (is_movement_vector_set) {
@@ -1029,24 +1028,24 @@ pub fn createTestScene(self: *Editor) !void {
     // load some test stuff while we are missing a file format for scenes
     const box_mesh_handle = self.getMeshHandleFromName("BoxTextured").?;
     try self.createNewVisbleObject("box", box_mesh_handle, .{
-        .rotation = game.components.Rotation{ .quat = zm.quatFromNormAxisAngle(zm.f32x4(0, 0, 1, 0), std.math.pi) },
-        .position = game.components.Position{ .vec = zm.f32x4(-1, 0, 0, 0) },
-        .scale = game.components.Scale{ .vec = zm.f32x4(1, 1, 1, 1) },
+        .rotation = physics.components.Rotation{ .quat = zm.quatFromNormAxisAngle(zm.f32x4(0, 0, 1, 0), std.math.pi) },
+        .position = physics.components.Position{ .vec = zm.f32x4(-1, 0, 0, 0) },
+        .scale = physics.components.Scale{ .vec = zm.f32x4(1, 1, 1, 1) },
     });
 
     const helmet_mesh_handle = self.getMeshHandleFromName("SciFiHelmet").?;
     try self.createNewVisbleObject("helmet", helmet_mesh_handle, .{
-        .rotation = game.components.Rotation{ .quat = zm.quatFromNormAxisAngle(zm.f32x4(0, 1, 0, 0), std.math.pi * 0.5) },
-        .position = game.components.Position{ .vec = zm.f32x4(1, 0, 0, 0) },
+        .rotation = physics.components.Rotation{ .quat = zm.quatFromNormAxisAngle(zm.f32x4(0, 1, 0, 0), std.math.pi * 0.5) },
+        .position = physics.components.Position{ .vec = zm.f32x4(1, 0, 0, 0) },
     });
 
     // camera init
     {
         const CameraArch = struct {
-            b: game.components.Position = .{ .vec = zm.f32x4(0, 0, -4, 0) },
-            c: game.components.MoveSpeed = .{ .vec = @splat(20) },
-            d: game.components.Velocity = .{ .vec = @splat(0) },
-            e: game.components.Camera = .{ .turn_rate = 0.0005 },
+            a: game.components.MoveSpeed = .{ .vec = @splat(20) },
+            b: game.components.Camera = .{ .turn_rate = 0.0005 },
+            c: physics.components.Position = .{ .vec = zm.f32x4(0, 0, -4, 0) },
+            d: physics.components.Velocity = .{ .vec = @splat(0) },
         };
 
         const active_camera = try self.newSceneEntity("default_camera");
@@ -1059,10 +1058,10 @@ pub fn validCameraEntity(self: *Editor, entity: ?ecez.Entity) bool {
     const camera_entity = entity orelse return false;
 
     const expected_camera_components = [_]type{
-        game.components.Position,
         game.components.MoveSpeed,
-        game.components.Velocity,
         game.components.Camera,
+        physics.components.Position,
+        physics.components.Velocity,
     };
 
     inline for (expected_camera_components) |Component| {
@@ -1189,7 +1188,7 @@ pub fn setCameraInput(window: glfw.Window) void {
 
             if (editor_ptr.validCameraEntity(editor_ptr.active_camera)) {
                 const camera_entity = editor_ptr.active_camera.?;
-                const camera_velocity_ptr = editor_ptr.storage.getComponent(camera_entity, *game.components.Velocity) catch unreachable;
+                const camera_velocity_ptr = editor_ptr.storage.getComponent(camera_entity, *physics.components.Velocity) catch unreachable;
 
                 switch (input_key) {
                     .w => camera_velocity_ptr.vec[2] += axist_value,
@@ -1301,9 +1300,9 @@ pub fn assignEntityMeshInstance(self: *Editor, entity: ecez.Entity, mesh_handle:
 }
 
 pub const VisibleObjectConfig = struct {
-    position: ?Editor.Position = null,
-    rotation: ?Editor.Rotation = null,
-    scale: ?Editor.Scale = null,
+    position: ?physics.components.Position = null,
+    rotation: ?physics.components.Rotation = null,
+    scale: ?physics.components.Scale = null,
 };
 /// Create a new entity that should also have a renderable mesh instance tied to the entity.
 /// The function will also send this to the GPU in the event of flush_all_objects = .yes
