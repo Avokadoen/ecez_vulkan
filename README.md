@@ -12,4 +12,4 @@ It also features:
 
  ![scene editor](/assets/images/scene_editor_160524.png)
 
-Tested on zig 0.13.0-dev.351+64ef45eb0
+Tested on zig 0.13.0
