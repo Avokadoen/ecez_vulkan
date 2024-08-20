@@ -65,7 +65,7 @@ player_entity: ecez.Entity,
 
 pub fn init(
     allocator: Allocator,
-    window: glfw.Window,
+    window: *glfw.Window,
     asset_handler: core.AssetHandler,
     mesh_instance_initalizers: []const MeshInstancehInitializeContex,
 ) !Game {
@@ -221,7 +221,7 @@ pub fn update(self: *Game, delta_time: f32) void {
     }
 }
 
-pub fn newFrame(self: *Game, window: glfw.Window, delta_time: f32) !void {
+pub fn newFrame(self: *Game, window: *glfw.Window, delta_time: f32) !void {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
@@ -230,9 +230,9 @@ pub fn newFrame(self: *Game, window: glfw.Window, delta_time: f32) !void {
     // if (false == self.ui_state.camera_control_active) {
     //     // If we are not controlling the camera, then we should update cursor if needed
     //     // NOTE: getting cursor must be done before calling zgui.newFrame
-    //     window.setInputModeCursor(.normal);
+    //     window.setInputMode(.cursor, .normal);
     //     switch (zgui.getMouseCursor()) {
-    //         .none => window.setInputModeCursor(.hidden),
+    //         .none => window.setInputMode(.cursor, .hidden),
     //         .arrow => window.setCursor(self.arrow),
     //         .text_input => window.setCursor(self.ibeam),
     //         .resize_all => window.setCursor(self.crosshair),
@@ -282,12 +282,12 @@ fn validPlayerEntity(self: *Game) bool {
 }
 
 /// register input so camera handles glfw input
-pub fn setCameraInput(window: glfw.Window) void {
+pub fn setCameraInput(window: *glfw.Window) void {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
     const CameraCallbacks = struct {
-        pub fn key(_window: glfw.Window, input_key: glfw.Key, scancode: i32, action: glfw.Action, mods: glfw.Mods) void {
+        pub fn key(_window: *glfw.Window, input_key: glfw.Key, scancode: i32, action: glfw.Action, mods: glfw.Mods) void {
             _ = mods;
             _ = scancode;
 
@@ -321,19 +321,19 @@ pub fn setCameraInput(window: glfw.Window) void {
             }
         }
 
-        pub fn char(_window: glfw.Window, codepoint: u21) void {
+        pub fn char(_window: *glfw.Window, codepoint: u21) void {
             _ = codepoint;
             _ = _window;
         }
 
-        pub fn mouseButton(_window: glfw.Window, button: glfw.MouseButton, action: glfw.Action, mods: glfw.Mods) void {
+        pub fn mouseButton(_window: *glfw.Window, button: glfw.MouseButton, action: glfw.Action, mods: glfw.Mods) void {
             _ = mods;
             _ = action;
             _ = button;
             _ = _window;
         }
 
-        pub fn cursorPos(_window: glfw.Window, xpos: f64, ypos: f64) void {
+        pub fn cursorPos(_window: *glfw.Window, xpos: f64, ypos: f64) void {
             const user_pointer = core.glfw_integration.findUserPointer(
                 UserPointer,
                 _window,
@@ -355,7 +355,7 @@ pub fn setCameraInput(window: glfw.Window) void {
             camera_ptr.pitch -= y_delta * camera_ptr.turn_rate;
         }
 
-        pub fn scroll(_window: glfw.Window, xoffset: f64, yoffset: f64) void {
+        pub fn scroll(_window: *glfw.Window, xoffset: f64, yoffset: f64) void {
             _ = yoffset;
             _ = xoffset;
             _ = _window;
@@ -363,7 +363,7 @@ pub fn setCameraInput(window: glfw.Window) void {
     };
 
     // disable cursor, lock it to center
-    window.setInputModeCursor(.disabled);
+    window.setInputMode(.cursor, .disabled);
 
     _ = window.setKeyCallback(CameraCallbacks.key);
     _ = window.setCharCallback(CameraCallbacks.char);

@@ -5,7 +5,7 @@ const ecez = @import("ecez");
 const ezby = ecez.ezby;
 
 const zgui = @import("zgui");
-const glfw = @import("glfw");
+const glfw = @import("zglfw");
 const tracy = @import("ztracy");
 const zm = @import("zmath");
 
@@ -127,7 +127,7 @@ undo_stack: UndoRedoStack,
 
 pub fn init(
     allocator: Allocator,
-    window: glfw.Window,
+    window: *glfw.Window,
     asset_handler: core.AssetHandler,
     mesh_instance_initalizers: []const MeshInstancehInitializeContex,
 ) !Editor {
@@ -364,7 +364,7 @@ pub fn update(self: *Editor, delta_time: f32) void {
     }
 }
 
-pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
+pub fn newFrame(self: *Editor, window: *glfw.Window, delta_time: f32) !void {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
@@ -372,12 +372,15 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
     if (false == self.ui_state.camera_control_active) {
         // If we are not controlling the camera, then we should update cursor if needed
         // NOTE: getting cursor must be done before calling zgui.newFrame
-        window.setInputModeCursor(.normal);
+        window.setInputMode(.cursor, .normal);
         self.cursors.handleZguiCursor(window);
     }
 
     const frame_size = window.getFramebufferSize();
-    zgui.io.setDisplaySize(@as(f32, @floatFromInt(frame_size.width)), @as(f32, @floatFromInt(frame_size.height)));
+    zgui.io.setDisplaySize(
+        @as(f32, @floatFromInt(frame_size[0])),
+        @as(f32, @floatFromInt(frame_size[1])),
+    );
     zgui.io.setDisplayFramebufferScale(1.0, 1.0);
 
     zgui.newFrame();
@@ -609,10 +612,18 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 break :object_list_blk;
             }
 
-            const width = @as(f32, @floatFromInt(frame_size.width)) / 6;
+            const width = @as(f32, @floatFromInt(frame_size[0])) / 6;
 
-            zgui.setNextWindowSize(.{ .w = width, .h = @as(f32, @floatFromInt(frame_size.height)), .cond = .always });
-            zgui.setNextWindowPos(.{ .x = 0, .y = header_height, .cond = .always });
+            zgui.setNextWindowSize(.{
+                .w = width,
+                .h = @as(f32, @floatFromInt(frame_size[1])),
+                .cond = .always,
+            });
+            zgui.setNextWindowPos(.{
+                .x = 0,
+                .y = header_height,
+                .cond = .always,
+            });
 
             if (zgui.begin("Object List", .{ .popen = null, .flags = .{
                 .menu_bar = false,
@@ -732,10 +743,10 @@ pub fn newFrame(self: *Editor, window: glfw.Window, delta_time: f32) !void {
                 break :object_inspector_blk;
             }
 
-            const width = @as(f32, @floatFromInt(frame_size.width)) / 6;
+            const width = @as(f32, @floatFromInt(frame_size[0])) / 6;
 
-            zgui.setNextWindowSize(.{ .w = width, .h = @as(f32, @floatFromInt(frame_size.height)), .cond = .always });
-            zgui.setNextWindowPos(.{ .x = @as(f32, @floatFromInt(frame_size.width)) - width, .y = header_height, .cond = .always });
+            zgui.setNextWindowSize(.{ .w = width, .h = @as(f32, @floatFromInt(frame_size[1])), .cond = .always });
+            zgui.setNextWindowPos(.{ .x = @as(f32, @floatFromInt(frame_size[0])) - width, .y = header_height, .cond = .always });
             if (zgui.begin("Object Inspector", .{ .popen = null, .flags = .{
                 .menu_bar = false,
                 .no_move = true,
@@ -1074,12 +1085,12 @@ pub fn validCameraEntity(self: *Editor, entity: ?ecez.Entity) bool {
 }
 
 /// register input so only editor handles glfw input
-pub fn setEditorInput(window: glfw.Window) void {
+pub fn setEditorInput(window: *glfw.Window) void {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
     const EditorCallbacks = struct {
-        pub fn key(_window: glfw.Window, input_key: glfw.Key, scancode: i32, action: glfw.Action, mods: glfw.Mods) void {
+        pub fn key(_window: *glfw.Window, input_key: glfw.Key, scancode: i32, action: glfw.Action, mods: glfw.Mods) callconv(.C) void {
             _ = scancode;
 
             // apply modifiers
@@ -1103,17 +1114,17 @@ pub fn setEditorInput(window: glfw.Window) void {
             }
         }
 
-        pub fn char(_window: glfw.Window, codepoint: u21) void {
+        pub fn char(_window: *glfw.Window, codepoint: u32) callconv(.C) void {
             _ = _window;
 
             var buffer: [8]u8 = undefined;
-            const len = std.unicode.utf8Encode(codepoint, buffer[0..]) catch return;
+            const len = std.unicode.utf8Encode(@intCast(codepoint), buffer[0..]) catch return;
             const cstr = buffer[0 .. len + 1];
             cstr[len] = 0; // null terminator
             zgui.io.addInputCharactersUTF8(@as([*:0]const u8, @ptrCast(cstr.ptr)));
         }
 
-        pub fn mouseButton(_window: glfw.Window, button: glfw.MouseButton, action: glfw.Action, mods: glfw.Mods) void {
+        pub fn mouseButton(_window: *glfw.Window, button: glfw.MouseButton, action: glfw.Action, mods: glfw.Mods) callconv(.C) void {
             _ = _window;
 
             if (switch (button) {
@@ -1132,7 +1143,7 @@ pub fn setEditorInput(window: glfw.Window) void {
             }
         }
 
-        pub fn cursorPos(_window: glfw.Window, xpos: f64, ypos: f64) void {
+        pub fn cursorPos(_window: *glfw.Window, xpos: f64, ypos: f64) callconv(.C) void {
             const user_pointer = core.glfw_integration.findUserPointer(
                 UserPointer,
                 _window,
@@ -1146,7 +1157,7 @@ pub fn setEditorInput(window: glfw.Window) void {
             zgui.io.addMousePositionEvent(@as(f32, @floatCast(xpos)), @as(f32, @floatCast(ypos)));
         }
 
-        pub fn scroll(_window: glfw.Window, xoffset: f64, yoffset: f64) void {
+        pub fn scroll(_window: *glfw.Window, xoffset: f64, yoffset: f64) callconv(.C) void {
             _ = _window;
 
             zgui.io.addMouseWheelEvent(@as(f32, @floatCast(xoffset)), @as(f32, @floatCast(yoffset)));
@@ -1154,7 +1165,7 @@ pub fn setEditorInput(window: glfw.Window) void {
     };
 
     // enable normal system cursor behaviour
-    window.setInputModeCursor(.normal);
+    window.setInputMode(.cursor, .normal);
 
     _ = window.setKeyCallback(EditorCallbacks.key);
     _ = window.setCharCallback(EditorCallbacks.char);
@@ -1164,12 +1175,12 @@ pub fn setEditorInput(window: glfw.Window) void {
 }
 
 /// register input so camera handles glfw input
-pub fn setCameraInput(window: glfw.Window) void {
+pub fn setCameraInput(window: *glfw.Window) void {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
     const CameraCallbacks = struct {
-        pub fn key(_window: glfw.Window, input_key: glfw.Key, scancode: i32, action: glfw.Action, mods: glfw.Mods) void {
+        pub fn key(_window: *glfw.Window, input_key: glfw.Key, scancode: i32, action: glfw.Action, mods: glfw.Mods) callconv(.C) void {
             _ = mods;
             _ = scancode;
 
@@ -1208,19 +1219,19 @@ pub fn setCameraInput(window: glfw.Window) void {
             }
         }
 
-        pub fn char(_window: glfw.Window, codepoint: u21) void {
+        pub fn char(_window: *glfw.Window, codepoint: u32) callconv(.C) void {
             _ = codepoint;
             _ = _window;
         }
 
-        pub fn mouseButton(_window: glfw.Window, button: glfw.MouseButton, action: glfw.Action, mods: glfw.Mods) void {
+        pub fn mouseButton(_window: *glfw.Window, button: glfw.MouseButton, action: glfw.Action, mods: glfw.Mods) callconv(.C) void {
             _ = mods;
             _ = action;
             _ = button;
             _ = _window;
         }
 
-        pub fn cursorPos(_window: glfw.Window, xpos: f64, ypos: f64) void {
+        pub fn cursorPos(_window: *glfw.Window, xpos: f64, ypos: f64) callconv(.C) void {
             const user_pointer = core.glfw_integration.findUserPointer(
                 UserPointer,
                 _window,
@@ -1247,7 +1258,7 @@ pub fn setCameraInput(window: glfw.Window) void {
             }
         }
 
-        pub fn scroll(_window: glfw.Window, xoffset: f64, yoffset: f64) void {
+        pub fn scroll(_window: *glfw.Window, xoffset: f64, yoffset: f64) callconv(.C) void {
             _ = yoffset;
             _ = xoffset;
             _ = _window;
@@ -1255,7 +1266,7 @@ pub fn setCameraInput(window: glfw.Window) void {
     };
 
     // disable cursor, lock it to center
-    window.setInputModeCursor(.disabled);
+    window.setInputMode(.cursor, .disabled);
 
     _ = window.setKeyCallback(CameraCallbacks.key);
     _ = window.setCharCallback(CameraCallbacks.char);

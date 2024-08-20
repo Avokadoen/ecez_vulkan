@@ -1,4 +1,4 @@
-const glfw = @import("glfw");
+const glfw = @import("zglfw");
 
 pub const UserPointerType = enum(u32) {
     undefined,
@@ -14,7 +14,7 @@ const UserPointer = extern struct {
 };
 
 /// Find next user pointer of a given type
-pub fn findUserPointer(comptime UserPointerT: type, window: glfw.Window) ?*UserPointerT {
+pub fn findUserPointer(comptime UserPointerT: type, window: *glfw.Window) ?*UserPointerT {
     const type_value = comptime getUserPointerTypeValue(UserPointerT);
 
     var user_ptr = window.getUserPointer(UserPointer) orelse return null;
@@ -55,7 +55,7 @@ inline fn getUserPointerTypeValue(comptime UserPointerT: type) UserPointerType {
 }
 
 /// handle frame buffer resize and register self.user_pointer
-pub fn handleFramebufferResize(comptime Self: type, self: *Self, window: glfw.Window) void {
+pub fn handleFramebufferResize(comptime Self: type, self: *Self, window: *glfw.Window) void {
     self.render_context.handleFramebufferResize(window, false);
 
     self.user_pointer = Self.UserPointer{

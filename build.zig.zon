@@ -8,15 +8,15 @@
         },
 
         // zig-gamedev deps
-        .ztracy = .{ .path = "deps/ztracy" },
+        .zglfw = .{ .path = "deps/zglfw" },
+        // Required for building glfw
+        .system_sdk = .{ .path = "deps/system-sdk" },
+
         .zgui = .{ .path = "deps/zgui" },
         .zmath = .{ .path = "deps/zmath" },
         .zmesh = .{ .path = "deps/zmesh" },
+        .ztracy = .{ .path = "deps/ztracy" },
 
-        .mach_glfw = .{
-            .url = "https://pkg.machengine.org/mach-glfw/8da44b719e345097664ff2e0a7620474eb11db5f.tar.gz",
-            .hash = "1220e5343c2fe2a490aa90dc52d92fd34ebfd7d0ffc7d246dd4720bb5c339ead4d7b",
-        },
         .zigimg = .{
             .url = "https://github.com/zigimg/zigimg/archive/588f11f24cdc3b12f46082217dc830436b7f325e.tar.gz",
             .hash = "1220dc313944ea71a87b4f54f26b1427ad2992a721a221cb42f7f80b8eee4e4944b7",

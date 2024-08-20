@@ -2,7 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const vk = @import("vulkan");
-const glfw = @import("glfw");
+const glfw = @import("zglfw");
 const zm = @import("zmath");
 const zigimg = @import("zigimg");
 const zmesh = @import("zmesh");
@@ -27,6 +27,9 @@ const QueueFamilyIndices = @import("QueueFamilyIndices.zig");
 const sync = @import("sync.zig");
 const dmem = @import("device_memory.zig");
 const application_ext_layers = @import("application_ext_layers.zig");
+
+pub extern fn glfwGetInstanceProcAddress(vk.Instance, [*:0]const u8) vk.PfnGetInstanceProcAddr;
+pub extern fn glfwCreateWindowSurface(vk.Instance, *glfw.Window, ?*vk.AllocationCallbacks, *vk.SurfaceKHR) vk.Result;
 
 pub const max_frames_in_flight = 2;
 
@@ -310,7 +313,7 @@ user_pointer: UserPointer,
 // TODO: rename allocator to gpa to indicate gpa is recommended
 pub fn init(
     allocator: Allocator,
-    window: glfw.Window,
+    window: *glfw.Window,
     asset_handler: core.AssetHandler,
     mesh_instance_initalizers: []const MeshInstancehInitializeContex,
     config: Config,
@@ -324,7 +327,7 @@ pub fn init(
     // bind the glfw instance proc pointer
     const vk_proc = @as(
         *const fn (instance: vk.Instance, procname: [*:0]const u8) callconv(.C) vk.PfnVoidFunction,
-        @ptrCast(&glfw.getInstanceProcAddress),
+        @ptrCast(&glfwGetInstanceProcAddress),
     );
     const vkb = try BaseDispatch.load(vk_proc);
 
@@ -346,7 +349,7 @@ pub fn init(
         defer extensions.deinit();
 
         // append glfw extensions, function can not fail since glfw.vulkanSupported should already have been called
-        const glfw_extensions = glfw.getRequiredInstanceExtensions() orelse unreachable;
+        const glfw_extensions = try glfw.getRequiredInstanceExtensions();
         try extensions.appendSlice(glfw_extensions);
 
         // required extension for VK_EXT_DESCRIPTOR_INDEXING_EXTENSION
@@ -373,7 +376,7 @@ pub fn init(
 
     const surface = blk: {
         var s: vk.SurfaceKHR = undefined;
-        const result = @as(vk.Result, @enumFromInt(glfw.createWindowSurface(instance, window, null, &s)));
+        const result = glfwCreateWindowSurface(instance, window, null, &s);
         if (result != .success) {
             return error.FailedToCreateSurface;
         }
@@ -1180,7 +1183,7 @@ pub fn init(
     };
 }
 
-pub fn recreatePresentResources(self: *Render, window: glfw.Window) !void {
+pub fn recreatePresentResources(self: *Render, window: *glfw.Window) !void {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
@@ -1386,7 +1389,7 @@ pub inline fn signalUpdate(self: *Render) void {
     self.missing_updated_frames = max_frames_in_flight;
 }
 
-pub fn drawFrame(self: *Render, window: glfw.Window) !void {
+pub fn drawFrame(self: *Render, window: *glfw.Window) !void {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
@@ -1909,12 +1912,12 @@ pub inline fn isMinimized(self: Render) bool {
 }
 
 /// Ensure render context handle resizing.
-pub fn handleFramebufferResize(self: *Render, window: glfw.Window, set_window_user_pointer: bool) void {
+pub fn handleFramebufferResize(self: *Render, window: *glfw.Window, set_window_user_pointer: bool) void {
     const zone = tracy.ZoneN(@src(), @src().fn_name);
     defer zone.End();
 
     const callback = struct {
-        pub fn func(_window: glfw.Window, width: u32, height: u32) void {
+        pub fn func(_window: *glfw.Window, width: i32, height: i32) callconv(.C) void {
             _ = width;
             _ = height;
 
@@ -1935,7 +1938,7 @@ pub fn handleFramebufferResize(self: *Render, window: glfw.Window, set_window_us
         window.setUserPointer(&self.user_pointer);
     }
 
-    window.setFramebufferSizeCallback(callback);
+    _ = window.setFramebufferSizeCallback(callback);
 }
 
 pub inline fn nonCoherentAtomSize(self: Render) vk.DeviceSize {
@@ -2045,7 +2048,7 @@ pub const SwapchainSupportDetails = struct {
         return self.formats[self.preferred_format_index];
     }
 
-    pub inline fn chooseExtent(self: SwapchainSupportDetails, window: glfw.Window) !vk.Extent2D {
+    pub inline fn chooseExtent(self: SwapchainSupportDetails, window: *glfw.Window) !vk.Extent2D {
         const zone = tracy.ZoneN(@src(), @src().fn_name);
         defer zone.End();
 
@@ -2056,8 +2059,8 @@ pub const SwapchainSupportDetails = struct {
         const frame_buffer_size = window.getFramebufferSize();
 
         var actual_extent = vk.Extent2D{
-            .width = frame_buffer_size.width,
-            .height = frame_buffer_size.height,
+            .width = @intCast(frame_buffer_size[0]),
+            .height = @intCast(frame_buffer_size[1]),
         };
 
         actual_extent.width = std.math.clamp(
@@ -2080,7 +2083,7 @@ inline fn createSwapchain(
     swapchain_support_details: SwapchainSupportDetails,
     surface: vk.SurfaceKHR,
     device: vk.Device,
-    window: glfw.Window,
+    window: *glfw.Window,
     old_swapchain: ?vk.SwapchainKHR,
 ) !vk.SwapchainKHR {
     const zone = tracy.ZoneN(@src(), @src().fn_name);

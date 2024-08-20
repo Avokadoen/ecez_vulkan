@@ -1,5 +1,5 @@
 const std = @import("std");
-const glfw = @import("glfw");
+const glfw = @import("zglfw");
 const tracy = @import("ztracy");
 
 const core = @import("../core.zig");
@@ -8,7 +8,7 @@ const render = @import("../render.zig");
 
 const Editor = @import("Editor.zig");
 
-pub fn main(allocator: std.mem.Allocator, asset_handler: core.AssetHandler, window: glfw.Window) !void {
+pub fn main(allocator: std.mem.Allocator, asset_handler: core.AssetHandler, window: *glfw.Window) !void {
     var editor: Editor = editor_init_blk: {
         var mesh_initializers = std.ArrayList(render.Context.MeshInstancehInitializeContex).init(allocator);
         defer {

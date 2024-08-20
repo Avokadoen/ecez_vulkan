@@ -1,4 +1,4 @@
-const glfw = @import("glfw");
+const glfw = @import("zglfw");
 const zgui = @import("zgui");
 const tracy = @import("ztracy");
 

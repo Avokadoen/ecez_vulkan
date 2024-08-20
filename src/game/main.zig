@@ -7,7 +7,7 @@ const core = @import("../core.zig");
 const render = @import("../render.zig");
 const Game = @import("Game.zig");
 
-pub fn main(allocator: std.mem.Allocator, asset_handler: core.AssetHandler, window: glfw.Window) !void {
+pub fn main(allocator: std.mem.Allocator, asset_handler: core.AssetHandler, window: *glfw.Window) !void {
     var game: Game = game_init_blk: {
         var mesh_initializers = std.ArrayList(render.Context.MeshInstancehInitializeContex).init(allocator);
         defer {

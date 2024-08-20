@@ -57,13 +57,13 @@ pub fn build(b: *Build) void {
         }
     }
 
-    // Use mach-glfw
+    // Use zglfw
     {
-        const glfw_dep = b.dependency("mach_glfw", .{
-            .target = target,
-            .optimize = optimize,
-        });
-        exe.root_module.addImport("glfw", glfw_dep.module("mach-glfw"));
+        const zglfw = b.dependency("zglfw", .{});
+        exe.root_module.addImport("zglfw", zglfw.module("root"));
+        exe.linkLibrary(zglfw.artifact("glfw"));
+
+        @import("system_sdk").addLibraryPathsTo(exe);
     }
 
     // link zmath

@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const tracy = @import("ztracy");
-const glfw = @import("glfw");
+const glfw = @import("zglfw");
 
 const core = @import("core.zig");
 
@@ -22,24 +22,19 @@ pub fn main() !void {
     const allocator = if (core.build_info.is_debug_build) alloc.allocator() else alloc;
 
     // init glfw
-    if (glfw.init(.{}) == false) {
-        return error.GlfwFailedToInitialize;
-    }
+    try glfw.init();
     defer glfw.terminate();
 
-    if (glfw.vulkanSupported() == false) {
+    if (glfw.isVulkanSupported() == false) {
         @panic("device does not seem to support vulkan");
     }
 
     const primary_monitor = null; // glfw.Monitor.getPrimary();
 
     // Create our window
-    const window = glfw.Window.create(640, 480, "ecez-vulkan", primary_monitor, null, .{
-        .client_api = .no_api,
-        .resizable = true,
-    }) orelse {
-        return error.GlfwCreateWindowFailed;
-    };
+    glfw.windowHintTyped(.client_api, .no_api);
+    glfw.windowHintTyped(.resizable, true);
+    const window = try glfw.Window.create(640, 480, "ecez-vulkan", primary_monitor);
     defer window.destroy();
 
     const asset_handler = try core.AssetHandler.init(allocator);
